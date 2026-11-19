@@ -11,6 +11,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float ContainerScale = 4f;
     private const float ContainerGap = 40f;
     private const float ScreenPadding = 40f;
+    private const float CollisionStep = 2f;
+    private const float PivotSwitchHysteresis = 2f;
 
     private Image handImage;
     private HandAlphaGradient handAlphaGradient;
@@ -19,14 +21,17 @@ internal sealed class LiquidTransferMinigame : Minigame
     private ContainerVisual receivingContainer;
     private ContainerVisual sourceContainer;
     private RectTransform heldContainer;
+    private ContainerVisual heldVisual;
     private Vector2 heldOffset;
     private ArcRotationHandle activeRotationHandle;
     private ContainerVisual activeRotationContainer;
+    private bool rotatingWithRightMouse;
     private float rotationAngle;
     private Vector2 rotationStartPointer;
     private Vector2 rotationStartCenter;
     private Vector2 rotationPivotPosition;
     private float rotationLastPointerAngle;
+    private int rotationVerticalSector;
     private bool rotationTrackingStarted;
     private float fitScale;
 
@@ -100,7 +105,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         if (game.handStartedClicking)
         {
             heldContainer = null;
+            heldVisual = null;
             activeRotationHandle = null;
+            rotatingWithRightMouse = false;
             foreach (var uiCast in uiCasts)
             {
                 if (uiCast.gameObject == receivingContainer.RotationHandle.gameObject)
@@ -122,34 +129,78 @@ internal sealed class LiquidTransferMinigame : Minigame
                 {
                     if (uiCast.gameObject == receivingContainer.Transform.gameObject)
                     {
-                        StartDragging(receivingContainer.Transform, game.handPos);
+                        StartDragging(receivingContainer, game.handPos);
                         break;
                     }
 
                     if (uiCast.gameObject == sourceContainer.Transform.gameObject)
                     {
-                        StartDragging(sourceContainer.Transform, game.handPos);
+                        StartDragging(sourceContainer, game.handPos);
                         break;
                     }
                 }
             }
         }
 
-        if (game.handStoppedClicking)
+        if (Input.GetMouseButtonDown(1))
+        {
+            var container = GetContainerUnderPointer(uiCasts);
+            if (container != null)
+            {
+                heldContainer = null;
+                heldVisual = null;
+                StartRotating(container, game.handPos);
+                rotatingWithRightMouse = true;
+            }
+        }
+
+        if (Input.GetMouseButtonUp(1) && rotatingWithRightMouse)
+        {
+            activeRotationHandle = null;
+            activeRotationContainer = null;
+            rotatingWithRightMouse = false;
+        }
+
+        if (game.handStoppedClicking && !rotatingWithRightMouse)
         {
             heldContainer = null;
+            heldVisual = null;
             activeRotationHandle = null;
         }
 
-        if (activeRotationHandle && game.handClicking)
+        if (activeRotationHandle
+            && (game.handClicking || (rotatingWithRightMouse && Input.GetMouseButton(1))))
         {
             RotateContainer(game.handPos);
         }
         else if (heldContainer && game.handClicking)
         {
+            var previousPosition = heldContainer.anchoredPosition;
             heldContainer.anchoredPosition = game.handPos / fitScale + heldOffset;
-            ClampToScreen(heldContainer);
+            var targetPosition = heldContainer.anchoredPosition;
+            heldContainer.anchoredPosition = previousPosition;
+            MoveContainer(heldVisual, targetPosition);
         }
+    }
+
+    private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)
+    {
+        foreach (var uiCast in uiCasts)
+        {
+            if (uiCast.gameObject == receivingContainer.Transform.gameObject
+                || uiCast.gameObject == receivingContainer.RotationHandle.gameObject)
+            {
+                return receivingContainer;
+            }
+
+            if (uiCast.gameObject == sourceContainer.Transform.gameObject
+                || uiCast.gameObject == sourceContainer.RotationHandle.gameObject)
+            {
+                return sourceContainer;
+            }
+        }
+
+        return null;
     }
 
     internal void RestoreHand()
@@ -199,6 +250,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var hasOpening = ModSprites.TryFindOpening(sprite, out var openingPosition, out var openingWidth);
         var openingLeft = Vector2.zero;
         var openingRight = Vector2.zero;
+        var outlinePoints = System.Array.Empty<Vector2>();
         if (!hasOpening)
         {
             Plugin.LogSource.LogWarning($"Could not detect the open rim of container sprite '{sprite.name}'.");
@@ -207,7 +259,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             openingLeft = openingPosition - new Vector2(openingWidth * 0.5f, 0f);
             openingRight = openingPosition + new Vector2(openingWidth * 0.5f, 0f);
-            if (ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out var outlinePoints))
+            if (ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out outlinePoints))
             {
                 var outline = new GameObject(
                     $"{name}OutlineDebugLine",
@@ -266,13 +318,15 @@ internal sealed class LiquidTransferMinigame : Minigame
             openingPosition,
             openingLeft,
             openingRight,
-            hasOpening);
+            hasOpening,
+            outlinePoints);
     }
 
-    private void StartDragging(RectTransform container, Vector2 handPosition)
+    private void StartDragging(ContainerVisual container, Vector2 handPosition)
     {
-        heldContainer = container;
-        heldOffset = container.anchoredPosition - handPosition / fitScale;
+        heldVisual = container;
+        heldContainer = container.Transform;
+        heldOffset = container.Transform.anchoredPosition - handPosition / fitScale;
     }
 
     private void StartRotating(ContainerVisual container, Vector2 handPosition)
@@ -283,8 +337,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         rotationStartPointer = handPosition / fitScale;
         rotationStartCenter = container.Transform.anchoredPosition;
         rotationTrackingStarted = false;
+        rotationVerticalSector = Mathf.FloorToInt(rotationAngle / 180f);
 
-        if (container.HasRotationPivot)
+        if (container.HasRotationPivot && !IsAtVerticalPosition(rotationAngle))
         {
             StartPivotTracking(rotationStartPointer);
         }
@@ -305,6 +360,14 @@ internal sealed class LiquidTransferMinigame : Minigame
 
             activeRotationContainer.PivotIsRight = initialDirection < 0f;
             activeRotationContainer.HasRotationPivot = true;
+            if (IsAtVerticalPosition(rotationAngle))
+            {
+                var verticalIndex = Mathf.RoundToInt(rotationAngle / 180f);
+                rotationVerticalSector = initialDirection < 0f
+                    ? verticalIndex - 1
+                    : verticalIndex;
+            }
+
             StartPivotTracking(rotationStartPointer);
         }
 
@@ -323,23 +386,80 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         var visual = activeRotationContainer;
-        var container = visual.Transform;
         var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
-        var pivotPosition = rotationPivotPosition;
-        var previousAngle = rotationAngle;
-        rotationAngle += deltaAngle;
-        container.localRotation = Quaternion.Euler(0f, 0f, rotationAngle);
-        container.anchoredPosition = pivotPosition - TransformOpeningPoint(container, pivotPoint);
-
-        if (CrossedVerticalPosition(previousAngle, rotationAngle))
+        var maxPivotDistance = 0f;
+        foreach (var point in visual.OutlinePoints)
         {
-            visual.PivotIsRight = !visual.PivotIsRight;
-            pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
-            rotationPivotPosition = container.anchoredPosition + TransformOpeningPoint(container, pivotPoint);
-            var rebasedPointer = pointer - rotationPivotPosition;
-            rotationLastPointerAngle = Mathf.Atan2(rebasedPointer.y, rebasedPointer.x) * Mathf.Rad2Deg;
+            maxPivotDistance = Mathf.Max(
+                maxPivotDistance,
+                Vector2.Distance(point, pivotPoint) * visual.Transform.localScale.x);
         }
 
+        var arcDistance = maxPivotDistance * Mathf.Abs(deltaAngle) * Mathf.Deg2Rad;
+        var steps = Mathf.Max(
+            Mathf.CeilToInt(Mathf.Abs(deltaAngle) / 2f),
+            Mathf.CeilToInt(arcDistance / CollisionStep));
+        var angleStep = deltaAngle / Mathf.Max(1, steps);
+        for (var step = 0; step < steps; step++)
+        {
+            var previousAngle = rotationAngle;
+            var candidateAngle = previousAngle + angleStep;
+            ApplyRotationPose(visual, candidateAngle);
+            if (WouldOverlap(visual))
+            {
+                ApplyRotationPose(visual, previousAngle);
+                break;
+            }
+
+            rotationAngle = candidateAngle;
+            if (TrySwitchRotationPivot(visual, previousAngle, rotationAngle, pointer))
+            {
+                break;
+            }
+        }
+
+    }
+
+    private void MoveContainer(ContainerVisual visual, Vector2 targetPosition)
+    {
+        var transform = visual.Transform;
+        var startPosition = transform.anchoredPosition;
+        var distance = Vector2.Distance(startPosition, targetPosition);
+        var steps = Mathf.Max(1, Mathf.CeilToInt(distance / CollisionStep));
+        for (var step = 1; step <= steps; step++)
+        {
+            var candidatePosition = Vector2.Lerp(startPosition, targetPosition, (float)step / steps);
+            transform.anchoredPosition = candidatePosition;
+            if (WouldOverlap(visual))
+            {
+                transform.anchoredPosition = Vector2.Lerp(startPosition, targetPosition, (float)(step - 1) / steps);
+                break;
+            }
+        }
+    }
+
+    private void ApplyRotationPose(ContainerVisual visual, float angle)
+    {
+        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        visual.Transform.localRotation = Quaternion.Euler(0f, 0f, angle);
+        visual.Transform.anchoredPosition = rotationPivotPosition
+            - TransformOpeningPoint(visual.Transform, pivotPoint);
+    }
+
+    private bool WouldOverlap(ContainerVisual moving)
+    {
+        var other = moving == receivingContainer ? sourceContainer : receivingContainer;
+        var movingTransform = moving.Transform;
+        var otherTransform = other.Transform;
+        return ContainerShapeCollision.Overlaps(
+            moving.OutlinePoints,
+            movingTransform.anchoredPosition,
+            movingTransform.localScale.x,
+            movingTransform.localEulerAngles.z,
+            other.OutlinePoints,
+            otherTransform.anchoredPosition,
+            otherTransform.localScale.x,
+            otherTransform.localEulerAngles.z);
     }
 
     private void StartPivotTracking(Vector2 pointer)
@@ -353,45 +473,50 @@ internal sealed class LiquidTransferMinigame : Minigame
         rotationTrackingStarted = true;
     }
 
-    private void ClampToScreen(RectTransform container)
+    private bool TrySwitchRotationPivot(
+        ContainerVisual visual,
+        float previousAngle,
+        float currentAngle,
+        Vector2 pointer)
     {
-        var available = Minigame.game.minigameScreen.rect.size * 0.5f - Vector2.one * ScreenPadding;
-        available /= fitScale;
-        var root = (RectTransform)container.parent;
-        var handle = container == receivingContainer.Transform
-            ? receivingContainer.RotationHandle.rectTransform
-            : sourceContainer.RotationHandle.rectTransform;
-        var minX = float.PositiveInfinity;
-        var maxX = float.NegativeInfinity;
-        var minY = float.PositiveInfinity;
-        var maxY = float.NegativeInfinity;
-        IncludeBounds(root, container, ref minX, ref maxX, ref minY, ref maxY);
-        IncludeBounds(root, handle, ref minX, ref maxX, ref minY, ref maxY);
-
-        var correction = Vector2.zero;
-        if (minX < -available.x)
+        var crossed = false;
+        if (currentAngle > previousAngle)
         {
-            correction.x = maxX > available.x
-                ? -(minX + maxX) * 0.5f
-                : -available.x - minX;
+            var boundary = (rotationVerticalSector + 1) * 180f;
+            if (currentAngle >= boundary + PivotSwitchHysteresis)
+            {
+                rotationVerticalSector++;
+                crossed = true;
+            }
         }
-        else if (maxX > available.x)
+        else if (currentAngle < previousAngle)
         {
-            correction.x = available.x - maxX;
+            var boundary = rotationVerticalSector * 180f;
+            if (currentAngle <= boundary - PivotSwitchHysteresis)
+            {
+                rotationVerticalSector--;
+                crossed = true;
+            }
         }
 
-        if (minY < -available.y)
+        if (!crossed)
         {
-            correction.y = maxY > available.y
-                ? -(minY + maxY) * 0.5f
-                : -available.y - minY;
-        }
-        else if (maxY > available.y)
-        {
-            correction.y = available.y - maxY;
+            return false;
         }
 
-        container.anchoredPosition += correction;
+        visual.PivotIsRight = !visual.PivotIsRight;
+        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        rotationPivotPosition = visual.Transform.anchoredPosition
+            + TransformOpeningPoint(visual.Transform, pivotPoint);
+        var rebasedPointer = pointer - rotationPivotPosition;
+        rotationLastPointerAngle = Mathf.Atan2(rebasedPointer.y, rebasedPointer.x) * Mathf.Rad2Deg;
+        return true;
+    }
+
+    private static bool IsAtVerticalPosition(float angle)
+    {
+        var nearestVerticalAngle = Mathf.Round(angle / 180f) * 180f;
+        return Mathf.Abs(Mathf.DeltaAngle(angle, nearestVerticalAngle)) <= PivotSwitchHysteresis;
     }
 
     private static void PositionContainersSideBySide(
@@ -464,31 +589,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
     }
 
-    private static bool CrossedVerticalPosition(float previousAngle, float currentAngle)
-    {
-        var crossings = 0;
-        if (currentAngle > previousAngle)
-        {
-            var boundary = (Mathf.FloorToInt(previousAngle / 180f) + 1) * 180f;
-            while (boundary <= currentAngle)
-            {
-                crossings++;
-                boundary += 180f;
-            }
-        }
-        else if (currentAngle < previousAngle)
-        {
-            var boundary = (Mathf.CeilToInt(previousAngle / 180f) - 1) * 180f;
-            while (boundary >= currentAngle)
-            {
-                crossings++;
-                boundary -= 180f;
-            }
-        }
-
-        return crossings % 2 != 0;
-    }
-
     private static Vector2 TransformOpeningPoint(RectTransform container, Vector2 point)
     {
         var transformed = container.localRotation * Vector3.Scale(point, container.localScale);
@@ -503,7 +603,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             Vector2 openingCenterPoint,
             Vector2 leftOpeningPoint,
             Vector2 rightOpeningPoint,
-            bool hasOpening)
+            bool hasOpening,
+            Vector2[] outlinePoints)
         {
             Transform = transform;
             RotationHandle = rotationHandle;
@@ -511,6 +612,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             LeftOpeningPoint = leftOpeningPoint;
             RightOpeningPoint = rightOpeningPoint;
             HasOpening = hasOpening;
+            OutlinePoints = outlinePoints;
         }
 
         internal RectTransform Transform { get; }
@@ -519,6 +621,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal Vector2 LeftOpeningPoint { get; }
         internal Vector2 RightOpeningPoint { get; }
         internal bool HasOpening { get; }
+        internal Vector2[] OutlinePoints { get; }
         internal bool HasRotationPivot { get; set; }
         internal bool PivotIsRight { get; set; }
     }

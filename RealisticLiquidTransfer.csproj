@@ -14,6 +14,7 @@
     <Compile Include="HandAlphaGradient.cs" />
     <Compile Include="ArcRotationHandle.cs" />
     <Compile Include="DebugPolylineGraphic.cs" />
+    <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
     <Compile Include="Patches.cs" />
   </ItemGroup>
