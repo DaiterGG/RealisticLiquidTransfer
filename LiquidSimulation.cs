@@ -25,6 +25,8 @@ internal sealed class LiquidSimulation
 
     private readonly RectTransform root;
     private readonly ContainerShape[] containers;
+    private readonly bool[] openingTransitions;
+    private readonly int[] initialContainerDropCounts;
     private Vector2[] positions = new Vector2[MaximumDrops];
     private Vector2[] previousPositions = new Vector2[MaximumDrops];
     private Vector2[] velocities = new Vector2[MaximumDrops];
@@ -108,9 +110,15 @@ internal sealed class LiquidSimulation
             new ContainerShape(root, firstContainer, firstOutline),
             new ContainerShape(root, secondContainer, secondOutline)
         };
+        openingTransitions = new bool[containers.Length];
         CreateGraphics();
         SeedContainer(containers[0], GetInitialDropCount(firstAmount));
         SeedContainer(containers[1], GetInitialDropCount(secondAmount));
+        initialContainerDropCounts = new[]
+        {
+            GetContainerDropCount(0),
+            GetContainerDropCount(1)
+        };
         DebugLog.Write(
             $"Simulation initialized: seeded "
             + $"{GetContainerDropCount(0)} receiver and {GetContainerDropCount(1)} source drops; "
@@ -138,6 +146,42 @@ internal sealed class LiquidSimulation
         }
 
         return assignedCount;
+    }
+
+    internal int GetInitialContainerDropCount(int containerIndex)
+    {
+        if ((uint)containerIndex >= initialContainerDropCounts.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(containerIndex));
+        }
+
+        return initialContainerDropCounts[containerIndex];
+    }
+
+    internal int[] GetFinalContainerDropCounts()
+    {
+        var finalCounts = new int[containers.Length];
+        for (var i = 0; i < count; i++)
+        {
+            var position = positions[i];
+            var inReceiver = containers[0].Contains(position);
+            var inSource = containers[1].Contains(position);
+            if (inReceiver && inSource)
+            {
+                var assignment = containerAssignments[i];
+                finalCounts[assignment == 2 ? 1 : 0]++;
+            }
+            else if (inReceiver)
+            {
+                finalCounts[0]++;
+            }
+            else if (inSource || !IsOutsideScreen(position))
+            {
+                finalCounts[1]++;
+            }
+        }
+
+        return finalCounts;
     }
 
     internal bool IsInsideContainer(Vector2 point)
@@ -405,7 +449,6 @@ internal sealed class LiquidSimulation
             positions[i] += velocities[i] * deltaTime;
         }
         SimulationProfiler.End(SimulationProfileStage.GeometryRefreshAndIntegration, profilingStart);
-
         SolveFluidDensity();
         ResolveDropCollisions();
 
@@ -426,9 +469,6 @@ internal sealed class LiquidSimulation
 
         profilingStart = SimulationProfiler.Begin();
         LogBottomSourceDrop();
-        SimulationProfiler.End(SimulationProfileStage.BottomDropLogging, profilingStart);
-
-        profilingStart = SimulationProfiler.Begin();
         RemoveOffscreenDrops();
         SimulationProfiler.End(SimulationProfileStage.OffscreenCleanup, profilingStart);
     }
@@ -446,10 +486,7 @@ internal sealed class LiquidSimulation
         for (var i = 0; i < count;)
         {
             var position = positions[i];
-            var fullyOutsideScreen = position.x < minimumScreenX - DropRadius
-                || position.x > maximumScreenX + DropRadius
-                || position.y < minimumScreenY - DropRadius
-                || position.y > maximumScreenY + DropRadius;
+            var fullyOutsideScreen = IsOutsideScreen(position);
             if (!fullyOutsideScreen || IsInsideContainer(position))
             {
                 i++;
@@ -464,6 +501,14 @@ internal sealed class LiquidSimulation
             containerAssignments[i] = containerAssignments[count];
             offscreenDeleted++;
         }
+    }
+
+    private bool IsOutsideScreen(Vector2 position)
+    {
+        return position.x < minimumScreenX - DropRadius
+            || position.x > maximumScreenX + DropRadius
+            || position.y < minimumScreenY - DropRadius
+            || position.y > maximumScreenY + DropRadius;
     }
 
     private void LogBottomSourceDrop()
@@ -520,22 +565,22 @@ internal sealed class LiquidSimulation
             var previousPosition = previousPositions[i];
             var velocity = velocities[i];
             var assignment = containerAssignments[i];
-            var openingTransition = false;
+            var anyOpeningTransition = false;
             for (var containerIndex = 0; containerIndex < containers.Length; containerIndex++)
             {
                 var container = containers[containerIndex];
-                if (!container.CrossesOpening(previousPosition, position)
-                    && !container.IsNearOpening(previousPosition, DropRadius * 2f)
-                    && !container.IsNearOpening(position, DropRadius * 2f))
-                {
-                    continue;
-                }
-
-                openingTransition = true;
-                break;
+                openingTransitions[containerIndex] =
+                    container.CrossesOpening(previousPosition, position)
+                    || container.IsNearOpening(previousPosition, DropRadius * 2f)
+                    || container.IsNearOpening(position, DropRadius * 2f);
+                anyOpeningTransition |= openingTransitions[containerIndex];
             }
 
-            if (openingTransition)
+            var assignedContainerOpeningTransition =
+                assignment > 0
+                && assignment <= containers.Length
+                && openingTransitions[assignment - 1];
+            if ((assignment == 0 && anyOpeningTransition) || assignedContainerOpeningTransition)
             {
                 assignment = GetContainerAssignment(position);
             }
@@ -543,7 +588,7 @@ internal sealed class LiquidSimulation
             for (var containerIndex = 0; containerIndex < containers.Length; containerIndex++)
             {
                 var container = containers[containerIndex];
-                if (openingTransition)
+                if (openingTransitions[containerIndex])
                 {
                     continue;
                 }
@@ -555,6 +600,11 @@ internal sealed class LiquidSimulation
                 }
 
                 var classification = container.Classify(position);
+                if (container.IsNearOpenRimEndpoint(classification, DropRadius))
+                {
+                    continue;
+                }
+
                 var isInside = classification.IsInside;
                 if (isInside != shouldBeInside)
                 {
@@ -1172,7 +1222,6 @@ internal sealed class LiquidSimulation
 
      internal bool CrossesOpening(Vector2 start, Vector2 end)
      {
-         const float OpeningEndpointTolerance = 0.001f;
          if (Outline.Length < 2)
          {
              return false;
@@ -1191,8 +1240,8 @@ internal sealed class LiquidSimulation
          var openingAmount = Cross(offset, movement) / denominator;
          return movementAmount >= 0f
              && movementAmount <= 1f
-             && openingAmount >= -OpeningEndpointTolerance
-             && openingAmount <= 1f + OpeningEndpointTolerance;
+             && openingAmount > 0f
+             && openingAmount < 1f;
      }
 
      internal bool IsNearOpening(Vector2 point, float margin)
@@ -1224,19 +1273,20 @@ internal sealed class LiquidSimulation
          }
 
          var isInside = signedDistance >= 0f;
+         var distance = Mathf.Abs(signedDistance) * rootUnitsPerLocalUnit;
+         if (distance < DropRadius + DistanceFieldCellSize * rootUnitsPerLocalUnit)
+         {
+             return ClassifyExact(point);
+         }
+
          if (gradient.sqrMagnitude <= 0.0001f)
          {
-             var distance = Mathf.Abs(signedDistance) * rootUnitsPerLocalUnit;
-             if (distance < DropRadius + DistanceFieldCellSize * rootUnitsPerLocalUnit)
-             {
-                 return ClassifyExact(point);
-             }
-
              return new PointClassification(
                  isInside,
                  point,
                  Vector2.up,
-                 distance * distance);
+                 distance * distance,
+                 -1);
          }
 
          var localNormal = gradient.normalized;
@@ -1254,7 +1304,8 @@ internal sealed class LiquidSimulation
              isInside,
              nearestPoint,
              interiorNormal,
-             distanceSquared);
+             distanceSquared,
+             -1);
      }
 
      private PointClassification ClassifyExact(Vector2 point)
@@ -1263,8 +1314,10 @@ internal sealed class LiquidSimulation
          var nearestDistanceSquared = float.PositiveInfinity;
          var nearestPoint = Vector2.zero;
          var nearestNormal = Vector2.up;
-         foreach (var boundary in boundaries)
+         var nearestBoundaryIndex = -1;
+         for (var boundaryIndex = 0; boundaryIndex < boundaries.Length; boundaryIndex++)
          {
+             var boundary = boundaries[boundaryIndex];
              var segment = boundary.End - boundary.Start;
              var lengthSquared = segment.sqrMagnitude;
              if (lengthSquared <= Mathf.Epsilon)
@@ -1280,6 +1333,7 @@ internal sealed class LiquidSimulation
                  nearestDistanceSquared = distanceSquared;
                  nearestPoint = candidate;
                  nearestNormal = boundary.InteriorNormal;
+                 nearestBoundaryIndex = boundaryIndex;
              }
          }
 
@@ -1287,7 +1341,25 @@ internal sealed class LiquidSimulation
              inside,
              nearestPoint,
              nearestNormal,
-             nearestDistanceSquared);
+             nearestDistanceSquared,
+             nearestBoundaryIndex);
+     }
+
+     internal bool IsNearOpenRimEndpoint(PointClassification classification, float margin)
+     {
+         if (boundaries.Length == 0 || classification.BoundaryIndex < 0)
+         {
+             return false;
+         }
+
+         if (classification.BoundaryIndex == 0
+             && (classification.NearestPoint - openingStart).sqrMagnitude <= margin * margin)
+         {
+             return true;
+         }
+
+         return classification.BoundaryIndex == boundaries.Length - 1
+             && (classification.NearestPoint - openingEnd).sqrMagnitude <= margin * margin;
      }
 
      private bool TrySampleDistanceField(
@@ -1583,18 +1655,21 @@ internal sealed class LiquidSimulation
          bool isInside,
          Vector2 nearestPoint,
          Vector2 interiorNormal,
-         float distanceSquared)
+         float distanceSquared,
+         int boundaryIndex)
      {
          IsInside = isInside;
          NearestPoint = nearestPoint;
          InteriorNormal = interiorNormal;
          DistanceSquared = distanceSquared;
+         BoundaryIndex = boundaryIndex;
      }
 
      internal bool IsInside { get; }
      internal Vector2 NearestPoint { get; }
      internal Vector2 InteriorNormal { get; }
      internal float DistanceSquared { get; }
+     internal int BoundaryIndex { get; }
     }
 
     private readonly struct BoundarySegment

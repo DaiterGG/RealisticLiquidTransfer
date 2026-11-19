@@ -1,4 +1,5 @@
 using HarmonyLib;
+using System;
 using UnityEngine;
 
 namespace RealisticLiquidTransfer;
@@ -29,9 +30,11 @@ internal static class StartLiquidTransferPatch
         var secondAmount = GetContainerAmount(wat2, "second");
         MinigameBase.main.StartMinigame(
             new LiquidTransferMinigame(
+                wat1,
                 firstSpriteName,
                 firstCapacity,
                 firstAmount,
+                wat2,
                 secondSpriteName,
                 secondCapacity,
                 secondAmount),
@@ -93,8 +96,18 @@ internal static class LiquidTransferEscapePatch
     {
         if (Input.GetKeyDown(KeyCode.Escape)
             && MinigameBase.main
-            && MinigameBase.main.currentMinigame is LiquidTransferMinigame)
+            && MinigameBase.main.currentMinigame is LiquidTransferMinigame minigame)
         {
+            try
+            {
+                minigame.CommitTransfer();
+            }
+            catch (Exception exception)
+            {
+                Plugin.LogError($"Could not commit the liquid-transfer minigame: {exception}");
+                DebugLog.Write($"Could not commit the liquid-transfer minigame: {exception}");
+            }
+
             MinigameBase.main.EndMinigame();
             return false;
         }

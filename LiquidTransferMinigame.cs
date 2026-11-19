@@ -20,6 +20,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
 
+    private readonly WaterContainerItem receivingGameContainer;
+    private readonly WaterContainerItem sourceGameContainer;
     private readonly string firstOriginalContainerSpriteName;
     private readonly string secondOriginalContainerSpriteName;
     private readonly float firstOriginalContainerCapacity;
@@ -48,18 +50,23 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float rotationLastPointerAngle;
     private int rotationVerticalSector;
     private bool rotationTrackingStarted;
+    private bool transferCommitted;
     private float fitScale;
     private float controlsUpdateTimer;
     private int displayedDropCount = -1;
 
     internal LiquidTransferMinigame(
+        WaterContainerItem receivingGameContainer,
         string firstOriginalContainerSpriteName,
         float firstOriginalContainerCapacity,
         float firstOriginalContainerAmount,
+        WaterContainerItem sourceGameContainer,
         string secondOriginalContainerSpriteName,
         float secondOriginalContainerCapacity,
         float secondOriginalContainerAmount)
     {
+        this.receivingGameContainer = receivingGameContainer;
+        this.sourceGameContainer = sourceGameContainer;
         this.firstOriginalContainerSpriteName = firstOriginalContainerSpriteName;
         this.firstOriginalContainerCapacity = firstOriginalContainerCapacity;
         this.firstOriginalContainerAmount = firstOriginalContainerAmount;
@@ -443,6 +450,299 @@ internal sealed class LiquidTransferMinigame : Minigame
         handImage.preserveAspect = originalPreserveAspect;
         handImage.SetVerticesDirty();
         Minigame.game.UpdateHandSprite(reset: true);
+    }
+
+    internal void CommitTransfer()
+    {
+        if (transferCommitted)
+        {
+            return;
+        }
+
+        if (!receivingGameContainer || !sourceGameContainer)
+        {
+            throw new System.InvalidOperationException(
+                "Cannot commit liquid transfer because one or both game containers are unavailable.");
+        }
+
+        var receiverAmount = receivingGameContainer.CurrentTotal;
+        var sourceAmount = sourceGameContainer.CurrentTotal;
+        var receiverCapacity = receivingGameContainer.Capacity;
+        var sourceCapacity = sourceGameContainer.Capacity;
+        ValidateAmount(receiverAmount, "receiver amount");
+        ValidateAmount(sourceAmount, "source amount");
+        ValidateCapacity(receiverCapacity, "receiver capacity");
+        ValidateCapacity(sourceCapacity, "source capacity");
+
+        var finalDropCounts = liquidSimulation.GetFinalContainerDropCounts();
+        var targetReceiverAmount = receiverAmount
+            + finalDropCounts[0]
+            - liquidSimulation.GetInitialContainerDropCount(0);
+        var targetSourceAmount = sourceAmount
+            + finalDropCounts[1]
+            - liquidSimulation.GetInitialContainerDropCount(1);
+        var discardedOverflow = RouteCapacityOverflow(
+            ref targetReceiverAmount,
+            receiverCapacity,
+            ref targetSourceAmount,
+            sourceCapacity);
+
+        ApplyLiquidAmounts(
+            receivingGameContainer,
+            sourceGameContainer,
+            targetReceiverAmount,
+            targetSourceAmount);
+        transferCommitted = true;
+        DebugLog.Write(
+            $"Committed liquid transfer: drops receiver={finalDropCounts[0]}, source={finalDropCounts[1]}; "
+            + $"amounts receiver={receivingGameContainer.CurrentTotal:F2}, "
+            + $"source={sourceGameContainer.CurrentTotal:F2}, "
+            + $"capacity overflow discarded={discardedOverflow:F2} ml.");
+    }
+
+    private static void ApplyLiquidAmounts(
+        WaterContainerItem receiver,
+        WaterContainerItem source,
+        float targetReceiverAmount,
+        float targetSourceAmount)
+    {
+        const float AmountTolerance = 0.001f;
+        var receiverAmount = receiver.CurrentTotal;
+        var sourceAmount = source.CurrentTotal;
+        var receiverChange = targetReceiverAmount - receiverAmount;
+        var sourceChange = targetSourceAmount - sourceAmount;
+        var transferToReceiver = receiverChange > 0f && sourceChange < 0f
+            ? Mathf.Min(receiverChange, -sourceChange)
+            : 0f;
+        var transferToSource = sourceChange > 0f && receiverChange < 0f
+            ? Mathf.Min(sourceChange, -receiverChange)
+            : 0f;
+        var receiverAddition = Mathf.Max(0f, receiverChange - transferToReceiver);
+        var sourceAddition = Mathf.Max(0f, sourceChange - transferToSource);
+        var sourceComposition = GetLiquidComposition(source);
+        var receiverComposition = GetLiquidComposition(receiver);
+        var addedLiquidComposition = sourceComposition.Count > 0
+            ? sourceComposition
+            : receiverComposition;
+
+        if (addedLiquidComposition.Count == 0
+            && (receiverAddition > AmountTolerance || sourceAddition > AmountTolerance))
+        {
+            throw new System.InvalidOperationException(
+                "Cannot add simulated liquid because neither game container has a liquid type to use.");
+        }
+
+        if (transferToReceiver > AmountTolerance)
+        {
+            TransferLiquid(source, receiver, transferToReceiver);
+        }
+
+        if (transferToSource > AmountTolerance)
+        {
+            TransferLiquid(receiver, source, transferToSource);
+        }
+
+        var excessReceiver = receiver.CurrentTotal - targetReceiverAmount;
+        if (excessReceiver > AmountTolerance)
+        {
+            DrainLiquid(receiver, excessReceiver);
+        }
+
+        var excessSource = source.CurrentTotal - targetSourceAmount;
+        if (excessSource > AmountTolerance)
+        {
+            DrainLiquid(source, excessSource);
+        }
+
+        var missingReceiver = targetReceiverAmount - receiver.CurrentTotal;
+        if (missingReceiver > AmountTolerance)
+        {
+            AddLiquid(receiver, addedLiquidComposition, missingReceiver);
+        }
+
+        var missingSource = targetSourceAmount - source.CurrentTotal;
+        if (missingSource > AmountTolerance)
+        {
+            AddLiquid(source, addedLiquidComposition, missingSource);
+        }
+    }
+
+    private static List<LiquidPortion> GetLiquidComposition(WaterContainerItem container)
+    {
+        var composition = new List<LiquidPortion>(container.stack.Count);
+        foreach (var stack in container.stack)
+        {
+            if (stack != null
+                && !string.IsNullOrEmpty(stack.liquidId)
+                && stack.amount > 0f
+                && !float.IsNaN(stack.amount)
+                && !float.IsInfinity(stack.amount))
+            {
+                composition.Add(new LiquidPortion(stack.liquidId, stack.amount));
+            }
+        }
+
+        return composition;
+    }
+
+    private static void TransferLiquid(
+        WaterContainerItem donor,
+        WaterContainerItem receiver,
+        float amount)
+    {
+        var liquidIds = new List<string>(donor.stack.Count);
+        foreach (var stack in donor.stack)
+        {
+            liquidIds.Add(stack?.liquidId);
+        }
+
+        var drainedAmounts = donor.CalculateDrain(amount);
+        if (drainedAmounts.Count != liquidIds.Count)
+        {
+            throw new System.InvalidOperationException(
+                "The game's liquid stack changed while calculating the transfer.");
+        }
+
+        var drainedTotal = Sum(drainedAmounts);
+        donor.Drain(drainedAmounts);
+        for (var i = 0; i < drainedAmounts.Count; i++)
+        {
+            var drained = drainedAmounts[i];
+            if (drained <= 0f)
+            {
+                continue;
+            }
+
+            var added = receiver.AddLiquid(liquidIds[i], drained);
+            if (Mathf.Abs(added - drained) > 0.001f)
+            {
+                throw new System.InvalidOperationException(
+                    $"The receiver accepted {added:F3} of {drained:F3} ml of liquid '{liquidIds[i]}'.");
+            }
+        }
+
+        if (Mathf.Abs(drainedTotal - amount) > 0.001f)
+        {
+            throw new System.InvalidOperationException(
+                $"The donor could provide {drainedTotal:F3} of {amount:F3} ml for transfer.");
+        }
+    }
+
+    private static void DrainLiquid(WaterContainerItem container, float amount)
+    {
+        var drainedAmounts = container.CalculateDrain(amount);
+        var drainedTotal = Sum(drainedAmounts);
+        container.Drain(drainedAmounts);
+        if (Mathf.Abs(drainedTotal - amount) > 0.001f)
+        {
+            throw new System.InvalidOperationException(
+                $"The container could drain {drainedTotal:F3} of {amount:F3} ml.");
+        }
+    }
+
+    private static void AddLiquid(
+        WaterContainerItem container,
+        List<LiquidPortion> composition,
+        float amount)
+    {
+        const float AmountTolerance = 0.001f;
+        var totalComposition = 0f;
+        foreach (var portion in composition)
+        {
+            totalComposition += portion.Amount;
+        }
+
+        if (totalComposition <= 0f)
+        {
+            throw new System.InvalidOperationException("The selected liquid composition is empty.");
+        }
+
+        var remaining = amount;
+        for (var i = 0; i < composition.Count && remaining > AmountTolerance; i++)
+        {
+            var portionAmount = i == composition.Count - 1
+                ? remaining
+                : amount * (composition[i].Amount / totalComposition);
+            portionAmount = Mathf.Min(portionAmount, remaining);
+            var added = container.AddLiquid(composition[i].LiquidId, portionAmount);
+            remaining -= added;
+        }
+
+        if (remaining > AmountTolerance)
+        {
+            throw new System.InvalidOperationException(
+                $"The container could not accept {remaining:F3} ml of simulated liquid.");
+        }
+    }
+
+    private static float RouteCapacityOverflow(
+        ref float receiverAmount,
+        float receiverCapacity,
+        ref float sourceAmount,
+        float sourceCapacity)
+    {
+        receiverAmount = Mathf.Max(0f, receiverAmount);
+        sourceAmount = Mathf.Max(0f, sourceAmount);
+        var discarded = 0f;
+
+        if (receiverAmount > receiverCapacity)
+        {
+            var overflow = receiverAmount - receiverCapacity;
+            receiverAmount = receiverCapacity;
+            var accepted = Mathf.Min(overflow, Mathf.Max(0f, sourceCapacity - sourceAmount));
+            sourceAmount += accepted;
+            discarded += overflow - accepted;
+        }
+
+        if (sourceAmount > sourceCapacity)
+        {
+            var overflow = sourceAmount - sourceCapacity;
+            sourceAmount = sourceCapacity;
+            var accepted = Mathf.Min(overflow, Mathf.Max(0f, receiverCapacity - receiverAmount));
+            receiverAmount += accepted;
+            discarded += overflow - accepted;
+        }
+
+        return discarded;
+    }
+
+    private static float Sum(List<float> amounts)
+    {
+        var total = 0f;
+        foreach (var amount in amounts)
+        {
+            total += amount;
+        }
+
+        return total;
+    }
+
+    private static void ValidateAmount(float amount, string label)
+    {
+        if (amount < 0f || float.IsNaN(amount) || float.IsInfinity(amount))
+        {
+            throw new System.InvalidOperationException($"The game reported an invalid {label}: {amount}.");
+        }
+    }
+
+    private static void ValidateCapacity(float capacity, string label)
+    {
+        if (capacity < 0f || float.IsNaN(capacity) || float.IsInfinity(capacity))
+        {
+            throw new System.InvalidOperationException($"The game reported an invalid {label}: {capacity}.");
+        }
+    }
+
+    private readonly struct LiquidPortion
+    {
+        internal LiquidPortion(string liquidId, float amount)
+        {
+            LiquidId = liquidId;
+            Amount = amount;
+        }
+
+        internal string LiquidId { get; }
+        internal float Amount { get; }
     }
 
     private static ContainerVisual CreateContainer(
