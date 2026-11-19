@@ -1,0 +1,525 @@
+using System.Collections.Generic;
+using UnityEngine.EventSystems;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace RealisticLiquidTransfer;
+
+internal sealed class LiquidTransferMinigame : Minigame
+{
+    private const float HandScale = 0.85f;
+    private const float ContainerScale = 4f;
+    private const float ContainerGap = 40f;
+    private const float ScreenPadding = 40f;
+
+    private Image handImage;
+    private HandAlphaGradient handAlphaGradient;
+    private Vector2 originalHandSize;
+    private bool originalPreserveAspect;
+    private ContainerVisual receivingContainer;
+    private ContainerVisual sourceContainer;
+    private RectTransform heldContainer;
+    private Vector2 heldOffset;
+    private ArcRotationHandle activeRotationHandle;
+    private ContainerVisual activeRotationContainer;
+    private float rotationAngle;
+    private Vector2 rotationStartPointer;
+    private Vector2 rotationStartCenter;
+    private Vector2 rotationPivotPosition;
+    private float rotationLastPointerAngle;
+    private bool rotationTrackingStarted;
+    private float fitScale;
+
+    public override HandSpriteType HandType()
+    {
+        return HandSpriteType.Grasp;
+    }
+
+    public override float HandRotOffset()
+    {
+        return Minigame.game.handPos.x * 0.02f;
+    }
+
+    public override string GuideLocaleString()
+    {
+        return string.Empty;
+    }
+
+    public override bool NeedsItem()
+    {
+        return false;
+    }
+
+    public override bool CanExit()
+    {
+        return false;
+    }
+
+    public override void Start()
+    {
+        var game = Minigame.game;
+        var screenRoot = new GameObject("RealisticLiquidTransferScreen", typeof(RectTransform))
+            .GetComponent<RectTransform>();
+        screenRoot.SetParent(game.minigameScreen, false);
+        screenRoot.anchorMin = new Vector2(0.5f, 0.5f);
+        screenRoot.anchorMax = new Vector2(0.5f, 0.5f);
+        screenRoot.pivot = new Vector2(0.5f, 0.5f);
+        screenRoot.sizeDelta = game.minigameScreen.rect.size;
+        screenRoot.SetSiblingIndex(0);
+        game.spawnedMiniGame = screenRoot;
+
+        receivingContainer = CreateContainer(
+            screenRoot,
+            "ReceivingContainer",
+            ModSprites.ReceivingContainer,
+            Vector2.zero,
+            0f);
+        sourceContainer = CreateContainer(
+            screenRoot,
+            "SourceContainer",
+            ModSprites.SourceContainer,
+            Vector2.zero,
+            0f);
+        PositionContainersSideBySide(receivingContainer, sourceContainer);
+
+        handImage = game.handTransform.GetComponent<Image>();
+        originalHandSize = handImage.rectTransform.sizeDelta;
+        originalPreserveAspect = handImage.preserveAspect;
+
+        fitScale = GetFitScale(game.minigameScreen, screenRoot, receivingContainer, sourceContainer);
+        screenRoot.localScale = Vector3.one * fitScale;
+
+        handImage.preserveAspect = true;
+        handImage.rectTransform.sizeDelta = originalHandSize * (HandScale * fitScale);
+        handAlphaGradient = handImage.gameObject.AddComponent<HandAlphaGradient>();
+    }
+
+    public override void Update(List<RaycastResult> uiCasts)
+    {
+        var game = Minigame.game;
+        if (game.handStartedClicking)
+        {
+            heldContainer = null;
+            activeRotationHandle = null;
+            foreach (var uiCast in uiCasts)
+            {
+                if (uiCast.gameObject == receivingContainer.RotationHandle.gameObject)
+                {
+                    StartRotating(receivingContainer, game.handPos);
+                    break;
+                }
+
+                if (uiCast.gameObject == sourceContainer.RotationHandle.gameObject)
+                {
+                    StartRotating(sourceContainer, game.handPos);
+                    break;
+                }
+            }
+
+            if (!activeRotationHandle)
+            {
+                foreach (var uiCast in uiCasts)
+                {
+                    if (uiCast.gameObject == receivingContainer.Transform.gameObject)
+                    {
+                        StartDragging(receivingContainer.Transform, game.handPos);
+                        break;
+                    }
+
+                    if (uiCast.gameObject == sourceContainer.Transform.gameObject)
+                    {
+                        StartDragging(sourceContainer.Transform, game.handPos);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (game.handStoppedClicking)
+        {
+            heldContainer = null;
+            activeRotationHandle = null;
+        }
+
+        if (activeRotationHandle && game.handClicking)
+        {
+            RotateContainer(game.handPos);
+        }
+        else if (heldContainer && game.handClicking)
+        {
+            heldContainer.anchoredPosition = game.handPos / fitScale + heldOffset;
+            ClampToScreen(heldContainer);
+        }
+    }
+
+    internal void RestoreHand()
+    {
+        if (!handImage)
+        {
+            return;
+        }
+
+        if (handAlphaGradient)
+        {
+            handAlphaGradient.enabled = false;
+            handImage.SetVerticesDirty();
+            Object.Destroy(handAlphaGradient);
+            handAlphaGradient = null;
+        }
+
+        handImage.rectTransform.sizeDelta = originalHandSize;
+        handImage.preserveAspect = originalPreserveAspect;
+        handImage.SetVerticesDirty();
+        Minigame.game.UpdateHandSprite(reset: true);
+    }
+
+    private static ContainerVisual CreateContainer(
+        RectTransform parent,
+        string name,
+        Sprite sprite,
+        Vector2 position,
+        float rotation)
+    {
+        var image = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image))
+            .GetComponent<Image>();
+        var rect = image.rectTransform;
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = new Vector2(sprite.rect.width, sprite.rect.height);
+        rect.localRotation = Quaternion.Euler(0f, 0f, rotation);
+        rect.localScale = Vector3.one * ContainerScale;
+
+        image.sprite = sprite;
+        image.preserveAspect = false;
+        image.raycastTarget = true;
+
+        var hasOpening = ModSprites.TryFindOpening(sprite, out var openingPosition, out var openingWidth);
+        var openingLeft = Vector2.zero;
+        var openingRight = Vector2.zero;
+        if (!hasOpening)
+        {
+            Plugin.LogSource.LogWarning($"Could not detect the open rim of container sprite '{sprite.name}'.");
+        }
+        else
+        {
+            openingLeft = openingPosition - new Vector2(openingWidth * 0.5f, 0f);
+            openingRight = openingPosition + new Vector2(openingWidth * 0.5f, 0f);
+            if (ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out var outlinePoints))
+            {
+                var outline = new GameObject(
+                    $"{name}OutlineDebugLine",
+                    typeof(RectTransform),
+                    typeof(CanvasRenderer),
+                    typeof(DebugPolylineGraphic)).GetComponent<DebugPolylineGraphic>();
+                var outlineRect = outline.rectTransform;
+                outlineRect.SetParent(rect, false);
+                outlineRect.anchorMin = new Vector2(0.5f, 0.5f);
+                outlineRect.anchorMax = new Vector2(0.5f, 0.5f);
+                outlineRect.pivot = new Vector2(0.5f, 0.5f);
+                outlineRect.sizeDelta = rect.sizeDelta;
+                outline.color = Color.blue;
+                outline.raycastTarget = false;
+                outline.SetPoints(outlinePoints);
+            }
+            else
+            {
+                Plugin.LogSource.LogWarning($"Could not trace the outline of container sprite '{sprite.name}'.");
+            }
+
+            var debugLine = new GameObject($"{name}OpeningDebugLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image))
+                .GetComponent<Image>();
+            var lineRect = debugLine.rectTransform;
+            lineRect.SetParent(rect, false);
+            lineRect.anchorMin = new Vector2(0.5f, 0.5f);
+            lineRect.anchorMax = new Vector2(0.5f, 0.5f);
+            lineRect.pivot = new Vector2(0.5f, 0.5f);
+            lineRect.anchoredPosition = openingPosition;
+            lineRect.sizeDelta = new Vector2(openingWidth, 3f);
+            debugLine.color = Color.red;
+            debugLine.raycastTarget = false;
+        }
+
+        var handleObject = new GameObject(
+            $"{name}RotationHandle",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(ArcRotationHandle));
+        var rotationHandle = handleObject.GetComponent<ArcRotationHandle>();
+        var handleRect = rotationHandle.rectTransform;
+        handleRect.SetParent(rect, false);
+        handleRect.anchorMin = new Vector2(0.5f, 0.5f);
+        handleRect.anchorMax = new Vector2(0.5f, 0.5f);
+        handleRect.pivot = new Vector2(0.5f, 0.5f);
+        var handleWidth = sprite.rect.width;
+        var handleHeight = handleWidth * 0.4f;
+        handleRect.anchoredPosition = new Vector2(0f, -sprite.rect.height * 0.5f);
+        handleRect.sizeDelta = new Vector2(handleWidth, handleHeight);
+        rotationHandle.color = Color.white;
+        rotationHandle.raycastTarget = true;
+
+        return new ContainerVisual(
+            rect,
+            rotationHandle,
+            openingPosition,
+            openingLeft,
+            openingRight,
+            hasOpening);
+    }
+
+    private void StartDragging(RectTransform container, Vector2 handPosition)
+    {
+        heldContainer = container;
+        heldOffset = container.anchoredPosition - handPosition / fitScale;
+    }
+
+    private void StartRotating(ContainerVisual container, Vector2 handPosition)
+    {
+        activeRotationContainer = container;
+        activeRotationHandle = container.RotationHandle;
+        rotationAngle = container.Transform.localEulerAngles.z;
+        rotationStartPointer = handPosition / fitScale;
+        rotationStartCenter = container.Transform.anchoredPosition;
+        rotationTrackingStarted = false;
+
+        if (container.HasRotationPivot)
+        {
+            StartPivotTracking(rotationStartPointer);
+        }
+    }
+
+    private void RotateContainer(Vector2 handPosition)
+    {
+        var pointer = handPosition / fitScale;
+        if (!rotationTrackingStarted)
+        {
+            var startVector = rotationStartPointer - rotationStartCenter;
+            var currentVector = pointer - rotationStartCenter;
+            var initialDirection = Vector2.SignedAngle(startVector, currentVector);
+            if (Mathf.Abs(initialDirection) < 0.1f)
+            {
+                return;
+            }
+
+            activeRotationContainer.PivotIsRight = initialDirection < 0f;
+            activeRotationContainer.HasRotationPivot = true;
+            StartPivotTracking(rotationStartPointer);
+        }
+
+        var pointerVector = pointer - rotationPivotPosition;
+        if (pointerVector.sqrMagnitude < 0.01f)
+        {
+            return;
+        }
+
+        var pointerAngle = Mathf.Atan2(pointerVector.y, pointerVector.x) * Mathf.Rad2Deg;
+        var deltaAngle = Mathf.DeltaAngle(rotationLastPointerAngle, pointerAngle);
+        rotationLastPointerAngle = pointerAngle;
+        if (Mathf.Abs(deltaAngle) < 0.01f)
+        {
+            return;
+        }
+
+        var visual = activeRotationContainer;
+        var container = visual.Transform;
+        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        var pivotPosition = rotationPivotPosition;
+        var previousAngle = rotationAngle;
+        rotationAngle += deltaAngle;
+        container.localRotation = Quaternion.Euler(0f, 0f, rotationAngle);
+        container.anchoredPosition = pivotPosition - TransformOpeningPoint(container, pivotPoint);
+
+        if (CrossedVerticalPosition(previousAngle, rotationAngle))
+        {
+            visual.PivotIsRight = !visual.PivotIsRight;
+            pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+            rotationPivotPosition = container.anchoredPosition + TransformOpeningPoint(container, pivotPoint);
+            var rebasedPointer = pointer - rotationPivotPosition;
+            rotationLastPointerAngle = Mathf.Atan2(rebasedPointer.y, rebasedPointer.x) * Mathf.Rad2Deg;
+        }
+
+    }
+
+    private void StartPivotTracking(Vector2 pointer)
+    {
+        var visual = activeRotationContainer;
+        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        rotationPivotPosition = visual.Transform.anchoredPosition
+            + TransformOpeningPoint(visual.Transform, pivotPoint);
+        var pointerVector = pointer - rotationPivotPosition;
+        rotationLastPointerAngle = Mathf.Atan2(pointerVector.y, pointerVector.x) * Mathf.Rad2Deg;
+        rotationTrackingStarted = true;
+    }
+
+    private void ClampToScreen(RectTransform container)
+    {
+        var available = Minigame.game.minigameScreen.rect.size * 0.5f - Vector2.one * ScreenPadding;
+        available /= fitScale;
+        var root = (RectTransform)container.parent;
+        var handle = container == receivingContainer.Transform
+            ? receivingContainer.RotationHandle.rectTransform
+            : sourceContainer.RotationHandle.rectTransform;
+        var minX = float.PositiveInfinity;
+        var maxX = float.NegativeInfinity;
+        var minY = float.PositiveInfinity;
+        var maxY = float.NegativeInfinity;
+        IncludeBounds(root, container, ref minX, ref maxX, ref minY, ref maxY);
+        IncludeBounds(root, handle, ref minX, ref maxX, ref minY, ref maxY);
+
+        var correction = Vector2.zero;
+        if (minX < -available.x)
+        {
+            correction.x = maxX > available.x
+                ? -(minX + maxX) * 0.5f
+                : -available.x - minX;
+        }
+        else if (maxX > available.x)
+        {
+            correction.x = available.x - maxX;
+        }
+
+        if (minY < -available.y)
+        {
+            correction.y = maxY > available.y
+                ? -(minY + maxY) * 0.5f
+                : -available.y - minY;
+        }
+        else if (maxY > available.y)
+        {
+            correction.y = available.y - maxY;
+        }
+
+        container.anchoredPosition += correction;
+    }
+
+    private static void PositionContainersSideBySide(
+        ContainerVisual receiver,
+        ContainerVisual source)
+    {
+        var receiverWidth = receiver.Transform.rect.width * receiver.Transform.localScale.x;
+        var sourceWidth = source.Transform.rect.width * source.Transform.localScale.x;
+        var totalWidth = receiverWidth + ContainerGap + sourceWidth;
+        var receiverX = -totalWidth * 0.5f + receiverWidth * 0.5f;
+        var sourceX = receiverX + receiverWidth * 0.5f + ContainerGap + sourceWidth * 0.5f;
+        var receiverOpeningOffset = TransformOpeningPoint(receiver.Transform, receiver.OpeningCenterPoint);
+        var sourceOpeningOffset = TransformOpeningPoint(source.Transform, source.OpeningCenterPoint);
+
+        receiver.Transform.anchoredPosition = new Vector2(receiverX, -receiverOpeningOffset.y);
+        source.Transform.anchoredPosition = new Vector2(sourceX, -sourceOpeningOffset.y);
+    }
+
+    private static float GetFitScale(
+        RectTransform screen,
+        RectTransform layoutRoot,
+        params ContainerVisual[] containers)
+    {
+        var available = screen.rect.size * 0.5f - Vector2.one * ScreenPadding;
+        var maxX = 0f;
+        var maxY = 0f;
+        foreach (var container in containers)
+        {
+            IncludeExtent(layoutRoot, container.Transform, ref maxX, ref maxY);
+            IncludeExtent(layoutRoot, container.RotationHandle.rectTransform, ref maxX, ref maxY);
+        }
+
+        var scaleX = maxX > 0f ? available.x / maxX : 1f;
+        var scaleY = maxY > 0f ? available.y / maxY : 1f;
+        return Mathf.Clamp(Mathf.Min(scaleX, scaleY), 0.01f, 1f);
+    }
+
+    private static void IncludeExtent(
+        RectTransform reference,
+        RectTransform target,
+        ref float maxX,
+        ref float maxY)
+    {
+        var minX = float.PositiveInfinity;
+        var maxTargetX = float.NegativeInfinity;
+        var minY = float.PositiveInfinity;
+        var maxTargetY = float.NegativeInfinity;
+        IncludeBounds(reference, target, ref minX, ref maxTargetX, ref minY, ref maxTargetY);
+        maxX = Mathf.Max(maxX, Mathf.Abs(minX), Mathf.Abs(maxTargetX));
+        maxY = Mathf.Max(maxY, Mathf.Abs(minY), Mathf.Abs(maxTargetY));
+    }
+
+    private static void IncludeBounds(
+        RectTransform reference,
+        RectTransform target,
+        ref float minX,
+        ref float maxX,
+        ref float minY,
+        ref float maxY)
+    {
+        var corners = new Vector3[4];
+        target.GetWorldCorners(corners);
+        foreach (var corner in corners)
+        {
+            var point = reference.InverseTransformPoint(corner);
+            minX = Mathf.Min(minX, point.x);
+            maxX = Mathf.Max(maxX, point.x);
+            minY = Mathf.Min(minY, point.y);
+            maxY = Mathf.Max(maxY, point.y);
+        }
+    }
+
+    private static bool CrossedVerticalPosition(float previousAngle, float currentAngle)
+    {
+        var crossings = 0;
+        if (currentAngle > previousAngle)
+        {
+            var boundary = (Mathf.FloorToInt(previousAngle / 180f) + 1) * 180f;
+            while (boundary <= currentAngle)
+            {
+                crossings++;
+                boundary += 180f;
+            }
+        }
+        else if (currentAngle < previousAngle)
+        {
+            var boundary = (Mathf.CeilToInt(previousAngle / 180f) - 1) * 180f;
+            while (boundary >= currentAngle)
+            {
+                crossings++;
+                boundary -= 180f;
+            }
+        }
+
+        return crossings % 2 != 0;
+    }
+
+    private static Vector2 TransformOpeningPoint(RectTransform container, Vector2 point)
+    {
+        var transformed = container.localRotation * Vector3.Scale(point, container.localScale);
+        return new Vector2(transformed.x, transformed.y);
+    }
+
+    private sealed class ContainerVisual
+    {
+        internal ContainerVisual(
+            RectTransform transform,
+            ArcRotationHandle rotationHandle,
+            Vector2 openingCenterPoint,
+            Vector2 leftOpeningPoint,
+            Vector2 rightOpeningPoint,
+            bool hasOpening)
+        {
+            Transform = transform;
+            RotationHandle = rotationHandle;
+            OpeningCenterPoint = openingCenterPoint;
+            LeftOpeningPoint = leftOpeningPoint;
+            RightOpeningPoint = rightOpeningPoint;
+            HasOpening = hasOpening;
+        }
+
+        internal RectTransform Transform { get; }
+        internal ArcRotationHandle RotationHandle { get; }
+        internal Vector2 OpeningCenterPoint { get; }
+        internal Vector2 LeftOpeningPoint { get; }
+        internal Vector2 RightOpeningPoint { get; }
+        internal bool HasOpening { get; }
+        internal bool HasRotationPivot { get; set; }
+        internal bool PivotIsRight { get; set; }
+    }
+}
