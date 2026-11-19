@@ -13,8 +13,13 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float ScreenPadding = 40f;
     private const float CollisionStep = 2f;
     private const float PivotSwitchHysteresis = 2f;
+    private const float RotationMovementInfluence = 0.96f;
+    private const float TranslationHorizontalInfluence = 0.96f;
+    private const float TranslationVerticalInfluence = 0.85f;
 
     private Image handImage;
+    private Text controlsText;
+    private LiquidSimulation liquidSimulation;
     private HandAlphaGradient handAlphaGradient;
     private Vector2 originalHandSize;
     private bool originalPreserveAspect;
@@ -33,6 +38,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private int rotationVerticalSector;
     private bool rotationTrackingStarted;
     private float fitScale;
+    private float controlsUpdateTimer;
+    private int displayedDropCount = -1;
 
     public override HandSpriteType HandType()
     {
@@ -71,7 +78,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         screenRoot.sizeDelta = game.minigameScreen.rect.size;
         screenRoot.SetSiblingIndex(0);
         game.spawnedMiniGame = screenRoot;
-        CreateControlsText(game.minigameScreen);
+        controlsText = CreateControlsText(game.minigameScreen);
 
         receivingContainer = CreateContainer(
             screenRoot,
@@ -93,13 +100,23 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         fitScale = GetFitScale(game.minigameScreen, screenRoot, receivingContainer, sourceContainer);
         screenRoot.localScale = Vector3.one * fitScale;
+        liquidSimulation = new LiquidSimulation(
+            screenRoot,
+            receivingContainer.Transform,
+            receivingContainer.OutlinePoints,
+            sourceContainer.Transform,
+            sourceContainer.OutlinePoints);
+        DebugLog.Write(
+            $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
+            + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "
+            + $"initial drops={liquidSimulation.Count}.");
 
         handImage.preserveAspect = true;
         handImage.rectTransform.sizeDelta = originalHandSize * (HandScale * fitScale);
         handAlphaGradient = handImage.gameObject.AddComponent<HandAlphaGradient>();
     }
 
-    private static void CreateControlsText(RectTransform parent)
+    private static Text CreateControlsText(RectTransform parent)
     {
         var textObject = new GameObject("LiquidTransferControls", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
         var controls = textObject.GetComponent<Text>();
@@ -112,16 +129,18 @@ internal sealed class LiquidTransferMinigame : Minigame
         rect.sizeDelta = new Vector2(parent.rect.width - 80f, 32f);
 
         controls.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        controls.fontSize = 18;
+        controls.fontSize = 16;
         controls.alignment = TextAnchor.MiddleCenter;
-        controls.text = "Left-click: move   Right-click: rotate   Esc: exit";
+        controls.text = "Hold left-click outside containers to spawn drops | Right-click and drag to rotate | Esc: exit";
         controls.color = Color.white;
         controls.raycastTarget = false;
+        return controls;
     }
 
     public override void Update(List<RaycastResult> uiCasts)
     {
         var game = Minigame.game;
+        var pointerPosition = game.handPos / fitScale;
         if (game.handStartedClicking)
         {
             heldContainer = null;
@@ -174,18 +193,37 @@ internal sealed class LiquidTransferMinigame : Minigame
             heldContainer.anchoredPosition = previousPosition;
             MoveContainer(heldVisual, targetPosition);
         }
+
+        var spawnDrops = (Input.GetMouseButton(0) || game.handClicking)
+            && heldContainer == null
+            && activeRotationContainer == null
+            && !liquidSimulation.IsInsideContainer(pointerPosition);
+        var deltaTime = Time.unscaledDeltaTime;
+        liquidSimulation.Tick(deltaTime, spawnDrops, pointerPosition);
+        controlsUpdateTimer -= deltaTime;
+        if (controlsUpdateTimer <= 0f && displayedDropCount != liquidSimulation.Count)
+        {
+            displayedDropCount = liquidSimulation.Count;
+            controlsText.text =
+                $"Hold left-click outside containers to spawn drops ({displayedDropCount}/20000) | Right-click and drag to rotate | Esc: exit";
+            controlsUpdateTimer = 0.25f;
+        }
+
     }
 
     private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)
     {
+        var pointerPosition = Minigame.game.handPos / fitScale;
         foreach (var uiCast in uiCasts)
         {
-            if (uiCast.gameObject == receivingContainer.Transform.gameObject)
+            if (uiCast.gameObject == receivingContainer.Transform.gameObject
+                && liquidSimulation.IsInsideContainer(pointerPosition))
             {
                 return receivingContainer;
             }
 
-            if (uiCast.gameObject == sourceContainer.Transform.gameObject)
+            if (uiCast.gameObject == sourceContainer.Transform.gameObject
+                && liquidSimulation.IsInsideContainer(pointerPosition))
             {
                 return sourceContainer;
             }
@@ -244,7 +282,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var outlinePoints = System.Array.Empty<Vector2>();
         if (!hasOpening)
         {
-            Plugin.LogSource.LogWarning($"Could not detect the open rim of container sprite '{sprite.name}'.");
+            Plugin.LogWarning($"Could not detect the open rim of container sprite '{sprite.name}'.");
         }
         else
         {
@@ -269,7 +307,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             }
             else
             {
-                Plugin.LogSource.LogWarning($"Could not trace the outline of container sprite '{sprite.name}'.");
+                Plugin.LogWarning($"Could not trace the outline of container sprite '{sprite.name}'.");
             }
 
             var debugLine = new GameObject($"{name}OpeningDebugLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image))
@@ -371,6 +409,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             Mathf.CeilToInt(Mathf.Abs(deltaAngle) / 2f),
             Mathf.CeilToInt(arcDistance / CollisionStep));
         var angleStep = deltaAngle / Mathf.Max(1, steps);
+        var previousPosition = visual.Transform.anchoredPosition;
+        var startingAngle = visual.Transform.localEulerAngles.z;
         for (var step = 0; step < steps; step++)
         {
             var previousAngle = rotationAngle;
@@ -389,6 +429,13 @@ internal sealed class LiquidTransferMinigame : Minigame
             }
         }
 
+        liquidSimulation.ApplyContainerPoseChange(
+            visual.Transform,
+            previousPosition,
+            startingAngle,
+            visual.Transform.anchoredPosition,
+            visual.Transform.localEulerAngles.z,
+            Vector2.one * RotationMovementInfluence);
     }
 
     private void MoveContainer(ContainerVisual visual, Vector2 targetPosition)
@@ -407,6 +454,13 @@ internal sealed class LiquidTransferMinigame : Minigame
                 break;
             }
         }
+
+        liquidSimulation.TranslateContainerDrops(
+            transform,
+            transform.anchoredPosition - startPosition,
+            new Vector2(
+                TranslationHorizontalInfluence,
+                TranslationVerticalInfluence));
     }
 
     private void ApplyRotationPose(ContainerVisual visual, float angle)

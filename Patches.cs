@@ -11,13 +11,13 @@ internal static class StartLiquidTransferPatch
     {
         if (!MinigameBase.main)
         {
-            Plugin.LogSource.LogError("Cannot open liquid-transfer minigame because MinigameBase is unavailable.");
+            Plugin.LogError("Cannot open liquid-transfer minigame because MinigameBase is unavailable.");
             return false;
         }
 
         if (MinigameBase.main.currentMinigame)
         {
-            Plugin.LogSource.LogWarning("Cannot open liquid-transfer minigame while another minigame is active.");
+            Plugin.LogWarning("Cannot open liquid-transfer minigame while another minigame is active.");
             return false;
         }
 

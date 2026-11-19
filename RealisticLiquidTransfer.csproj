@@ -7,12 +7,19 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
     <GamePath Condition="'$(GamePath)' == ''">D:\SteamLibrary\steamapps\common\Casualties Unknown</GamePath>
+    <EnableDebugLogging Condition="'$(EnableDebugLogging)' == ''">false</EnableDebugLogging>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableDebugLogging)' == 'true'">
+    <DefineConstants>$(DefineConstants);LIQUID_TRANSFER_DEBUG_LOGGING</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Plugin.cs" />
     <Compile Include="LiquidTransferMinigame.cs" />
     <Compile Include="HandAlphaGradient.cs" />
     <Compile Include="DebugPolylineGraphic.cs" />
+    <Compile Include="DebugLog.cs" />
+    <Compile Include="SimulationProfiler.cs" />
+    <Compile Include="LiquidSimulation.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
     <Compile Include="Patches.cs" />

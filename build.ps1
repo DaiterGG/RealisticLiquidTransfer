@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$GamePath = 'D:\SteamLibrary\steamapps\common\Casualties Unknown'
+    [string]$GamePath = 'D:\SteamLibrary\steamapps\common\Casualties Unknown',
+    [bool]$EnableDebugLogging = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,7 +43,9 @@ foreach ($requiredFile in @(
 }
 
 $dotnet = Get-Command 'dotnet' -ErrorAction Stop
-& $dotnet.Source build $projectPath --configuration Release --nologo "-p:GamePath=$resolvedGamePath"
+& $dotnet.Source build $projectPath --configuration Release --nologo `
+    "-p:GamePath=$resolvedGamePath" `
+    "-p:EnableDebugLogging=$($EnableDebugLogging.ToString().ToLowerInvariant())"
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet build failed with exit code $LASTEXITCODE."
 }
@@ -58,3 +61,7 @@ $destination = Join-Path $pluginsDirectory 'RealisticLiquidTransfer.dll'
 Copy-Item -LiteralPath $builtDll -Destination $destination -Force
 
 Write-Output "Built and installed: $destination"
+if ($EnableDebugLogging) {
+    $debugLogPattern = Join-Path $resolvedGamePath 'BepInEx\LogOutput\RealisticLiquidTransfer-debug-*.log'
+    Write-Output "Runtime profiling enabled. Each run creates a timestamped log: $debugLogPattern"
+}
