@@ -12,7 +12,6 @@
     <Compile Include="Plugin.cs" />
     <Compile Include="LiquidTransferMinigame.cs" />
     <Compile Include="HandAlphaGradient.cs" />
-    <Compile Include="ArcRotationHandle.cs" />
     <Compile Include="DebugPolylineGraphic.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />

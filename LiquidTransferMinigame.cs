@@ -23,7 +23,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private RectTransform heldContainer;
     private ContainerVisual heldVisual;
     private Vector2 heldOffset;
-    private ArcRotationHandle activeRotationHandle;
     private ContainerVisual activeRotationContainer;
     private bool rotatingWithRightMouse;
     private float rotationAngle;
@@ -72,6 +71,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         screenRoot.sizeDelta = game.minigameScreen.rect.size;
         screenRoot.SetSiblingIndex(0);
         game.spawnedMiniGame = screenRoot;
+        CreateControlsText(game.minigameScreen);
 
         receivingContainer = CreateContainer(
             screenRoot,
@@ -99,6 +99,26 @@ internal sealed class LiquidTransferMinigame : Minigame
         handAlphaGradient = handImage.gameObject.AddComponent<HandAlphaGradient>();
     }
 
+    private static void CreateControlsText(RectTransform parent)
+    {
+        var textObject = new GameObject("LiquidTransferControls", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var controls = textObject.GetComponent<Text>();
+        var rect = controls.rectTransform;
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0.5f, 0f);
+        rect.anchorMax = new Vector2(0.5f, 0f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = new Vector2(0f, 20f);
+        rect.sizeDelta = new Vector2(parent.rect.width - 80f, 32f);
+
+        controls.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        controls.fontSize = 18;
+        controls.alignment = TextAnchor.MiddleCenter;
+        controls.text = "Left-click: move   Right-click: rotate   Esc: exit";
+        controls.color = Color.white;
+        controls.raycastTarget = false;
+    }
+
     public override void Update(List<RaycastResult> uiCasts)
     {
         var game = Minigame.game;
@@ -106,39 +126,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             heldContainer = null;
             heldVisual = null;
-            activeRotationHandle = null;
+            activeRotationContainer = null;
             rotatingWithRightMouse = false;
-            foreach (var uiCast in uiCasts)
+            var container = GetContainerUnderPointer(uiCasts);
+            if (container != null)
             {
-                if (uiCast.gameObject == receivingContainer.RotationHandle.gameObject)
-                {
-                    StartRotating(receivingContainer, game.handPos);
-                    break;
-                }
-
-                if (uiCast.gameObject == sourceContainer.RotationHandle.gameObject)
-                {
-                    StartRotating(sourceContainer, game.handPos);
-                    break;
-                }
-            }
-
-            if (!activeRotationHandle)
-            {
-                foreach (var uiCast in uiCasts)
-                {
-                    if (uiCast.gameObject == receivingContainer.Transform.gameObject)
-                    {
-                        StartDragging(receivingContainer, game.handPos);
-                        break;
-                    }
-
-                    if (uiCast.gameObject == sourceContainer.Transform.gameObject)
-                    {
-                        StartDragging(sourceContainer, game.handPos);
-                        break;
-                    }
-                }
+                StartDragging(container, game.handPos);
             }
         }
 
@@ -156,7 +149,6 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         if (Input.GetMouseButtonUp(1) && rotatingWithRightMouse)
         {
-            activeRotationHandle = null;
             activeRotationContainer = null;
             rotatingWithRightMouse = false;
         }
@@ -165,11 +157,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             heldContainer = null;
             heldVisual = null;
-            activeRotationHandle = null;
+            activeRotationContainer = null;
         }
 
-        if (activeRotationHandle
-            && (game.handClicking || (rotatingWithRightMouse && Input.GetMouseButton(1))))
+        if (activeRotationContainer != null
+            && rotatingWithRightMouse
+            && Input.GetMouseButton(1))
         {
             RotateContainer(game.handPos);
         }
@@ -187,14 +180,12 @@ internal sealed class LiquidTransferMinigame : Minigame
     {
         foreach (var uiCast in uiCasts)
         {
-            if (uiCast.gameObject == receivingContainer.Transform.gameObject
-                || uiCast.gameObject == receivingContainer.RotationHandle.gameObject)
+            if (uiCast.gameObject == receivingContainer.Transform.gameObject)
             {
                 return receivingContainer;
             }
 
-            if (uiCast.gameObject == sourceContainer.Transform.gameObject
-                || uiCast.gameObject == sourceContainer.RotationHandle.gameObject)
+            if (uiCast.gameObject == sourceContainer.Transform.gameObject)
             {
                 return sourceContainer;
             }
@@ -294,27 +285,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugLine.raycastTarget = false;
         }
 
-        var handleObject = new GameObject(
-            $"{name}RotationHandle",
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(ArcRotationHandle));
-        var rotationHandle = handleObject.GetComponent<ArcRotationHandle>();
-        var handleRect = rotationHandle.rectTransform;
-        handleRect.SetParent(rect, false);
-        handleRect.anchorMin = new Vector2(0.5f, 0.5f);
-        handleRect.anchorMax = new Vector2(0.5f, 0.5f);
-        handleRect.pivot = new Vector2(0.5f, 0.5f);
-        var handleWidth = sprite.rect.width;
-        var handleHeight = handleWidth * 0.4f;
-        handleRect.anchoredPosition = new Vector2(0f, -sprite.rect.height * 0.5f);
-        handleRect.sizeDelta = new Vector2(handleWidth, handleHeight);
-        rotationHandle.color = Color.white;
-        rotationHandle.raycastTarget = true;
-
         return new ContainerVisual(
             rect,
-            rotationHandle,
             openingPosition,
             openingLeft,
             openingRight,
@@ -332,7 +304,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private void StartRotating(ContainerVisual container, Vector2 handPosition)
     {
         activeRotationContainer = container;
-        activeRotationHandle = container.RotationHandle;
         rotationAngle = container.Transform.localEulerAngles.z;
         rotationStartPointer = handPosition / fitScale;
         rotationStartCenter = container.Transform.anchoredPosition;
@@ -546,7 +517,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         foreach (var container in containers)
         {
             IncludeExtent(layoutRoot, container.Transform, ref maxX, ref maxY);
-            IncludeExtent(layoutRoot, container.RotationHandle.rectTransform, ref maxX, ref maxY);
         }
 
         var scaleX = maxX > 0f ? available.x / maxX : 1f;
@@ -599,7 +569,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     {
         internal ContainerVisual(
             RectTransform transform,
-            ArcRotationHandle rotationHandle,
             Vector2 openingCenterPoint,
             Vector2 leftOpeningPoint,
             Vector2 rightOpeningPoint,
@@ -607,7 +576,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             Vector2[] outlinePoints)
         {
             Transform = transform;
-            RotationHandle = rotationHandle;
             OpeningCenterPoint = openingCenterPoint;
             LeftOpeningPoint = leftOpeningPoint;
             RightOpeningPoint = rightOpeningPoint;
@@ -616,7 +584,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         internal RectTransform Transform { get; }
-        internal ArcRotationHandle RotationHandle { get; }
         internal Vector2 OpeningCenterPoint { get; }
         internal Vector2 LeftOpeningPoint { get; }
         internal Vector2 RightOpeningPoint { get; }
