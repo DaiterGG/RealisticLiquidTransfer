@@ -10,9 +10,8 @@ internal sealed class LiquidSimulation
     internal const int CircleSegmentCount = 12;
 
     private const int MaximumDrops = 20000;
-    private const int InitialSourceDrops = 1000;
     private const int DropsPerGraphic = 4096;
-    private const float DropRadius = 12f;
+    private const float DropRadius = 12f * 0.7368063f;
     private const float SpawnRate = 1000f;
     private const float Gravity = 420f;
     private const float DropRestitution = 0.05f;
@@ -20,7 +19,7 @@ internal sealed class LiquidSimulation
     private const float FixedStep = 1f / 30f;
     private const int DropCollisionIterations = 6;
     private const int DensitySolverIterations = 1;
-    private const float FluidSmoothingRadius = 30f;
+    private const float FluidSmoothingRadius = DropRadius * 2.5f;
     private const float DensityCorrectionStrength = 2f;
     private const float MaximumDensityCorrection = DropRadius;
 
@@ -70,7 +69,9 @@ internal sealed class LiquidSimulation
         RectTransform firstContainer,
         Vector2[] firstOutline,
         RectTransform secondContainer,
-        Vector2[] secondOutline)
+        Vector2[] secondOutline,
+        float firstAmount,
+        float secondAmount)
     {
         this.root = root;
         var screen = root.parent as RectTransform;
@@ -108,14 +109,36 @@ internal sealed class LiquidSimulation
             new ContainerShape(root, secondContainer, secondOutline)
         };
         CreateGraphics();
-        SeedContainer(containers[1], InitialSourceDrops);
+        SeedContainer(containers[0], GetInitialDropCount(firstAmount));
+        SeedContainer(containers[1], GetInitialDropCount(secondAmount));
         DebugLog.Write(
-            $"Simulation initialized: seeded {count}/{InitialSourceDrops} drops in source container; "
+            $"Simulation initialized: seeded "
+            + $"{GetContainerDropCount(0)} receiver and {GetContainerDropCount(1)} source drops; "
             + $"drop radius={DropRadius:F1}, screen bounds=({minimumScreenX:F1},{minimumScreenY:F1})"
             + $"-({maximumScreenX:F1},{maximumScreenY:F1}).");
     }
 
     internal int Count => count;
+
+    internal int GetContainerDropCount(int containerIndex)
+    {
+        if ((uint)containerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(containerIndex));
+        }
+
+        var assignment = (byte)(containerIndex + 1);
+        var assignedCount = 0;
+        for (var i = 0; i < count; i++)
+        {
+            if (containerAssignments[i] == assignment)
+            {
+                assignedCount++;
+            }
+        }
+
+        return assignedCount;
+    }
 
     internal bool IsInsideContainer(Vector2 point)
     {
@@ -269,9 +292,14 @@ internal sealed class LiquidSimulation
 
     private void SeedContainer(ContainerShape container, int amount)
     {
+        if (amount <= 0)
+        {
+            return;
+        }
+
         if (container.Outline.Length < 3)
         {
-            DebugLog.Write("Initial source seeding skipped: source container outline is unavailable.");
+            Plugin.LogWarning("Initial liquid seeding skipped: container outline is unavailable.");
             return;
         }
 
@@ -285,29 +313,54 @@ internal sealed class LiquidSimulation
             maximum = Vector2.Max(maximum, point);
         }
 
-        var seeded = 0;
-        var attempts = 0;
-        var maximumAttempts = amount * 100;
-        while (seeded < amount && attempts < maximumAttempts && count < MaximumDrops)
+        var containerIndex = Array.IndexOf(containers, container);
+        if (containerIndex < 0)
         {
-            attempts++;
-            var candidate = new Vector2(
-                Mathf.Lerp(minimum.x, maximum.x, NextRandom()),
-                Mathf.Lerp(minimum.y, maximum.y, NextRandom()));
-            if (!container.Contains(candidate))
-            {
-                continue;
-            }
+            throw new InvalidOperationException("Cannot seed liquid into an unknown container.");
+        }
 
-            AddDrop(candidate, Vector2.zero);
-            seeded++;
+        var seeded = 0;
+        var rowSpacing = DropRadius * 1.7320508f;
+        var minimumDistanceSquared = DropRadius * DropRadius;
+        var row = 0;
+        for (var y = minimum.y + DropRadius;
+            y <= maximum.y - DropRadius && seeded < amount && count < MaximumDrops;
+            y += rowSpacing, row++)
+        {
+            var xOffset = (row & 1) == 0 ? 0f : DropRadius;
+            for (var x = minimum.x + DropRadius + xOffset;
+                x <= maximum.x - DropRadius && seeded < amount && count < MaximumDrops;
+                x += DropRadius * 2f)
+            {
+                var candidate = new Vector2(x, y);
+                var classification = container.Classify(candidate);
+                if (!classification.IsInside || classification.DistanceSquared < minimumDistanceSquared)
+                {
+                    continue;
+                }
+
+                AddDrop(candidate, Vector2.zero, (byte)(containerIndex + 1));
+                seeded++;
+            }
         }
 
         if (seeded < amount)
         {
             Plugin.LogWarning(
-                $"Could only seed {seeded} of {amount} initial drops in the source container.");
+                $"Could only seed {seeded} of {amount} initial drops in container {containerIndex + 1}.");
         }
+    }
+
+    private static int GetInitialDropCount(float amount)
+    {
+        if (float.IsNaN(amount) || float.IsInfinity(amount) || amount <= 0f)
+        {
+            return 0;
+        }
+
+        return amount >= MaximumDrops
+            ? MaximumDrops
+            : Mathf.RoundToInt(amount);
     }
 
     private void Spawn(Vector2 position)
@@ -324,7 +377,7 @@ internal sealed class LiquidSimulation
             (NextRandom() * 2f - 1f) * 12f));
     }
 
-    private void AddDrop(Vector2 position, Vector2 velocity)
+    private void AddDrop(Vector2 position, Vector2 velocity, byte containerAssignment = 0)
     {
         if (count >= MaximumDrops)
         {
@@ -335,7 +388,9 @@ internal sealed class LiquidSimulation
         previousPositions[count] = position;
         velocities[count] = velocity;
         dropIds[count] = nextDropId++;
-        containerAssignments[count] = GetContainerAssignment(position);
+        containerAssignments[count] = containerAssignment == 0
+            ? GetContainerAssignment(position)
+            : containerAssignment;
         count++;
     }
 
@@ -462,11 +517,37 @@ internal sealed class LiquidSimulation
         for (var i = 0; i < count; i++)
         {
             var position = positions[i];
+            var previousPosition = previousPositions[i];
             var velocity = velocities[i];
             var assignment = containerAssignments[i];
+            var openingTransition = false;
             for (var containerIndex = 0; containerIndex < containers.Length; containerIndex++)
             {
                 var container = containers[containerIndex];
+                if (!container.CrossesOpening(previousPosition, position)
+                    && !container.IsNearOpening(previousPosition, DropRadius * 2f)
+                    && !container.IsNearOpening(position, DropRadius * 2f))
+                {
+                    continue;
+                }
+
+                openingTransition = true;
+                break;
+            }
+
+            if (openingTransition)
+            {
+                assignment = GetContainerAssignment(position);
+            }
+
+            for (var containerIndex = 0; containerIndex < containers.Length; containerIndex++)
+            {
+                var container = containers[containerIndex];
+                if (openingTransition)
+                {
+                    continue;
+                }
+
                 var shouldBeInside = assignment == containerIndex + 1;
                 if (!shouldBeInside && !container.IsNear(position, DropRadius))
                 {
@@ -502,6 +583,7 @@ internal sealed class LiquidSimulation
 
             positions[i] = position;
             velocities[i] = velocity;
+            containerAssignments[i] = assignment;
         }
     }
 
@@ -988,6 +1070,10 @@ internal sealed class LiquidSimulation
      private readonly int distanceFieldRows;
      private readonly float[] signedDistanceField;
      private readonly Vector2[] distanceFieldGradients;
+     private Vector2 openingStart;
+     private Vector2 openingEnd;
+     private Vector2 openingSegment;
+     private float openingLengthSquared;
      private float rootUnitsPerLocalUnit = 1f;
 
      internal ContainerShape(RectTransform root, RectTransform transform, Vector2[] outline)
@@ -995,7 +1081,7 @@ internal sealed class LiquidSimulation
          this.root = root;
          this.transform = transform;
          Outline = outline ?? Array.Empty<Vector2>();
-         boundaries = new BoundarySegment[Outline.Length];
+         boundaries = new BoundarySegment[Mathf.Max(0, Outline.Length - 1)];
 
          var area = 0f;
          for (var i = 0; i < Outline.Length; i++)
@@ -1058,14 +1144,22 @@ internal sealed class LiquidSimulation
          rootUnitsPerLocalUnit = Mathf.Max(Mathf.Min(rootUnitsX, rootUnitsY), 0.0001f);
          Minimum = ToRootPoint(Outline[0]);
          Maximum = Minimum;
-         for (var i = 0; i < Outline.Length; i++)
+         openingStart = Minimum;
+         openingEnd = ToRootPoint(Outline[Outline.Length - 1]);
+         openingSegment = openingEnd - openingStart;
+         openingLengthSquared = openingSegment.sqrMagnitude;
+         for (var i = 0; i < boundaries.Length; i++)
          {
              var start = ToRootPoint(Outline[i]);
-             var end = ToRootPoint(Outline[(i + 1) % Outline.Length]);
+             var end = ToRootPoint(Outline[i + 1]);
              Minimum = Vector2.Min(Minimum, start);
              Maximum = Vector2.Max(Maximum, start);
              boundaries[i] = new BoundarySegment(start, end, interiorOrientation);
          }
+
+         var lastPoint = ToRootPoint(Outline[Outline.Length - 1]);
+         Minimum = Vector2.Min(Minimum, lastPoint);
+         Maximum = Vector2.Max(Maximum, lastPoint);
      }
 
      internal bool IsNear(Vector2 point, float margin)
@@ -1074,6 +1168,50 @@ internal sealed class LiquidSimulation
              && point.x <= Maximum.x + margin
              && point.y >= Minimum.y - margin
              && point.y <= Maximum.y + margin;
+     }
+
+     internal bool CrossesOpening(Vector2 start, Vector2 end)
+     {
+         const float OpeningEndpointTolerance = 0.001f;
+         if (Outline.Length < 2)
+         {
+             return false;
+         }
+
+         var movement = end - start;
+         var opening = openingEnd - openingStart;
+         var denominator = Cross(movement, opening);
+         if (Mathf.Abs(denominator) <= Mathf.Epsilon)
+         {
+             return false;
+         }
+
+         var offset = openingStart - start;
+         var movementAmount = Cross(offset, opening) / denominator;
+         var openingAmount = Cross(offset, movement) / denominator;
+         return movementAmount >= 0f
+             && movementAmount <= 1f
+             && openingAmount >= -OpeningEndpointTolerance
+             && openingAmount <= 1f + OpeningEndpointTolerance;
+     }
+
+     internal bool IsNearOpening(Vector2 point, float margin)
+     {
+         if (Outline.Length < 2)
+         {
+             return false;
+         }
+
+         var amount = openingLengthSquared <= Mathf.Epsilon
+             ? 0f
+             : Mathf.Clamp01(Vector2.Dot(point - openingStart, openingSegment) / openingLengthSquared);
+         var nearestPoint = openingStart + openingSegment * amount;
+         return (point - nearestPoint).sqrMagnitude <= margin * margin;
+     }
+
+     private static float Cross(Vector2 first, Vector2 second)
+     {
+         return first.x * second.y - first.y * second.x;
      }
 
      internal PointClassification Classify(Vector2 point)
@@ -1121,21 +1259,12 @@ internal sealed class LiquidSimulation
 
      private PointClassification ClassifyExact(Vector2 point)
      {
-         var inside = false;
+         var inside = Contains(point);
          var nearestDistanceSquared = float.PositiveInfinity;
          var nearestPoint = Vector2.zero;
          var nearestNormal = Vector2.up;
          foreach (var boundary in boundaries)
          {
-             if ((boundary.Start.y > point.y) != (boundary.End.y > point.y)
-                 && point.x < (boundary.End.x - boundary.Start.x)
-                 * (point.y - boundary.Start.y)
-                 / (boundary.End.y - boundary.Start.y)
-                 + boundary.Start.x)
-             {
-                 inside = !inside;
-             }
-
              var segment = boundary.End - boundary.Start;
              var lengthSquared = segment.sqrMagnitude;
              if (lengthSquared <= Mathf.Epsilon)
@@ -1215,6 +1344,11 @@ internal sealed class LiquidSimulation
                          + end.x)
                      {
                          inside = !inside;
+                     }
+
+                     if (i == 0)
+                     {
+                         continue;
                      }
 
                      var segment = end - start;

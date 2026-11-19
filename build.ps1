@@ -19,8 +19,9 @@ $unityImageAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Manage
 $unityUiAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\UnityEngine.UI.dll'
 $unityUiModuleAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\UnityEngine.UIModule.dll'
 $unityTextRenderingAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\UnityEngine.TextRenderingModule.dll'
-$receivingContainerSprite = Join-Path $PSScriptRoot 'resources\coffe cup.png'
-$sourceContainerSprite = Join-Path $PSScriptRoot 'resources\big bottle.png'
+$containerSpriteDirectory = Join-Path $PSScriptRoot 'resources'
+$defaultContainerSprite = Join-Path $containerSpriteDirectory 'default.png'
+$referenceContainerSprite = Join-Path $containerSpriteDirectory 'coffee.png'
 
 foreach ($requiredFile in @(
     $projectPath,
@@ -34,8 +35,8 @@ foreach ($requiredFile in @(
     $unityUiAssembly,
     $unityUiModuleAssembly,
     $unityTextRenderingAssembly,
-    $receivingContainerSprite,
-    $sourceContainerSprite
+    $defaultContainerSprite,
+    $referenceContainerSprite
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required file not found: $requiredFile"

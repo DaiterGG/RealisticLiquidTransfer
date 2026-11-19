@@ -8,22 +8,77 @@ namespace RealisticLiquidTransfer;
 internal static class ModSprites
 {
     private const string ResourcePrefix = "RealisticLiquidTransfer.Resources.";
+    private const string DefaultContainerName = "default";
+    private const string ReferenceSpriteName = "coffee";
+    private static readonly Dictionary<string, Sprite> ContainerSprites =
+        new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
 
-    internal static Sprite ReceivingContainer { get; private set; }
-    internal static Sprite SourceContainer { get; private set; }
+    private static Sprite defaultContainer;
 
     internal static void Load()
     {
-        ReceivingContainer = LoadSprite("coffe cup.png");
-        SourceContainer = LoadSprite("big bottle.png");
+        Unload();
+        try
+        {
+            foreach (var resourceName in typeof(ModSprites).Assembly.GetManifestResourceNames())
+            {
+                if (!resourceName.StartsWith(ResourcePrefix, StringComparison.Ordinal)
+                    || !resourceName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var nameLength = resourceName.Length - ResourcePrefix.Length - ".png".Length;
+                var spriteName = resourceName.Substring(ResourcePrefix.Length, nameLength);
+                var sprite = LoadSprite(resourceName);
+                ContainerSprites.Add(spriteName, sprite);
+                if (string.Equals(spriteName, DefaultContainerName, StringComparison.OrdinalIgnoreCase))
+                {
+                    defaultContainer = sprite;
+                }
+            }
+
+            if (!defaultContainer)
+            {
+                throw new InvalidDataException(
+                    $"Required embedded fallback sprite '{ResourcePrefix}{DefaultContainerName}.png' was not found.");
+            }
+
+            if (!ContainerSprites.ContainsKey(ReferenceSpriteName))
+            {
+                throw new InvalidDataException(
+                    $"Required embedded calibration sprite '{ResourcePrefix}{ReferenceSpriteName}.png' was not found.");
+            }
+        }
+        catch
+        {
+            Unload();
+            throw;
+        }
+    }
+
+    internal static Sprite GetContainer(string originalSpriteName)
+    {
+        if (!string.IsNullOrWhiteSpace(originalSpriteName)
+            && ContainerSprites.TryGetValue(originalSpriteName, out var matchingSprite))
+        {
+            return matchingSprite;
+        }
+
+        Plugin.LogWarning(
+            $"No container sprite resource matched '{originalSpriteName ?? "null"}'; using {DefaultContainerName}.png.");
+        return defaultContainer;
     }
 
     internal static void Unload()
     {
-        DestroySprite(ReceivingContainer);
-        DestroySprite(SourceContainer);
-        ReceivingContainer = null;
-        SourceContainer = null;
+        foreach (var sprite in ContainerSprites.Values)
+        {
+            DestroySprite(sprite);
+        }
+
+        ContainerSprites.Clear();
+        defaultContainer = null;
     }
 
     internal static bool TryFindOpening(Sprite sprite, out Vector2 position, out float width)
@@ -150,9 +205,8 @@ internal static class ModSprites
         return points.Length >= 2;
     }
 
-    private static Sprite LoadSprite(string fileName)
+    private static Sprite LoadSprite(string resourceName)
     {
-        var resourceName = ResourcePrefix + fileName;
         using var resource = typeof(ModSprites).Assembly.GetManifestResourceStream(resourceName);
         if (resource == null)
         {

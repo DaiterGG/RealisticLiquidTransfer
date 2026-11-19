@@ -16,9 +16,20 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float RotationMovementInfluence = 0.96f;
     private const float TranslationHorizontalInfluence = 0.96f;
     private const float TranslationVerticalInfluence = 0.85f;
+    private const string ReferenceSpriteName = "coffee";
+    private const float ReferenceCapacity = 250f;
+    private static float referenceCapacity = ReferenceCapacity;
 
+    private readonly string firstOriginalContainerSpriteName;
+    private readonly string secondOriginalContainerSpriteName;
+    private readonly float firstOriginalContainerCapacity;
+    private readonly float secondOriginalContainerCapacity;
+    private readonly float firstOriginalContainerAmount;
+    private readonly float secondOriginalContainerAmount;
     private Image handImage;
     private Text controlsText;
+    private Text volumeText;
+    private RectTransform debugTextRoot;
     private LiquidSimulation liquidSimulation;
     private HandAlphaGradient handAlphaGradient;
     private Vector2 originalHandSize;
@@ -40,6 +51,39 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float fitScale;
     private float controlsUpdateTimer;
     private int displayedDropCount = -1;
+
+    internal LiquidTransferMinigame(
+        string firstOriginalContainerSpriteName,
+        float firstOriginalContainerCapacity,
+        float firstOriginalContainerAmount,
+        string secondOriginalContainerSpriteName,
+        float secondOriginalContainerCapacity,
+        float secondOriginalContainerAmount)
+    {
+        this.firstOriginalContainerSpriteName = firstOriginalContainerSpriteName;
+        this.firstOriginalContainerCapacity = firstOriginalContainerCapacity;
+        this.firstOriginalContainerAmount = firstOriginalContainerAmount;
+        this.secondOriginalContainerSpriteName = secondOriginalContainerSpriteName;
+        this.secondOriginalContainerCapacity = secondOriginalContainerCapacity;
+        this.secondOriginalContainerAmount = secondOriginalContainerAmount;
+        if (string.Equals(
+                firstOriginalContainerSpriteName,
+                ReferenceSpriteName,
+                System.StringComparison.OrdinalIgnoreCase)
+            && firstOriginalContainerCapacity > 0f)
+        {
+            referenceCapacity = firstOriginalContainerCapacity;
+        }
+
+        if (string.Equals(
+                secondOriginalContainerSpriteName,
+                ReferenceSpriteName,
+                System.StringComparison.OrdinalIgnoreCase)
+            && secondOriginalContainerCapacity > 0f)
+        {
+            referenceCapacity = secondOriginalContainerCapacity;
+        }
+    }
 
     public override HandSpriteType HandType()
     {
@@ -78,20 +122,33 @@ internal sealed class LiquidTransferMinigame : Minigame
         screenRoot.sizeDelta = game.minigameScreen.rect.size;
         screenRoot.SetSiblingIndex(0);
         game.spawnedMiniGame = screenRoot;
-        controlsText = CreateControlsText(game.minigameScreen);
+        debugTextRoot = CreateDebugTextRoot(game.minigameScreen);
+        controlsText = CreateControlsText(debugTextRoot);
+        volumeText = CreateVolumeText(debugTextRoot);
 
         receivingContainer = CreateContainer(
             screenRoot,
             "ReceivingContainer",
-            ModSprites.ReceivingContainer,
+            ModSprites.GetContainer(firstOriginalContainerSpriteName),
             Vector2.zero,
             0f);
         sourceContainer = CreateContainer(
             screenRoot,
             "SourceContainer",
-            ModSprites.SourceContainer,
+            ModSprites.GetContainer(secondOriginalContainerSpriteName),
             Vector2.zero,
             0f);
+        var referenceVolume = EstimateSpriteVolume(ModSprites.GetContainer(ReferenceSpriteName));
+        ApplyVolumeScale(
+            receivingContainer,
+            firstOriginalContainerCapacity,
+            referenceVolume,
+            firstOriginalContainerSpriteName);
+        ApplyVolumeScale(
+            sourceContainer,
+            secondOriginalContainerCapacity,
+            referenceVolume,
+            secondOriginalContainerSpriteName);
         PositionContainersSideBySide(receivingContainer, sourceContainer);
 
         handImage = game.handTransform.GetComponent<Image>();
@@ -105,15 +162,34 @@ internal sealed class LiquidTransferMinigame : Minigame
             receivingContainer.Transform,
             receivingContainer.OutlinePoints,
             sourceContainer.Transform,
-            sourceContainer.OutlinePoints);
+            sourceContainer.OutlinePoints,
+            firstOriginalContainerAmount,
+            secondOriginalContainerAmount);
+        UpdateVolumeReadout();
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
             + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "
-            + $"initial drops={liquidSimulation.Count}.");
+            + $"initial drops={liquidSimulation.Count} "
+            + $"(receiver={liquidSimulation.GetContainerDropCount(0)}, "
+            + $"source={liquidSimulation.GetContainerDropCount(1)}).");
 
         handImage.preserveAspect = true;
         handImage.rectTransform.sizeDelta = originalHandSize * (HandScale * fitScale);
         handAlphaGradient = handImage.gameObject.AddComponent<HandAlphaGradient>();
+    }
+
+    private static RectTransform CreateDebugTextRoot(RectTransform parent)
+    {
+        var root = new GameObject("RealisticLiquidTransferDebugText", typeof(RectTransform))
+            .GetComponent<RectTransform>();
+        root.SetParent(parent, false);
+        root.anchorMin = Vector2.zero;
+        root.anchorMax = Vector2.one;
+        root.pivot = new Vector2(0.5f, 0.5f);
+        root.anchoredPosition = Vector2.zero;
+        root.sizeDelta = Vector2.zero;
+        root.SetAsLastSibling();
+        return root;
     }
 
     private static Text CreateControlsText(RectTransform parent)
@@ -135,6 +211,27 @@ internal sealed class LiquidTransferMinigame : Minigame
         controls.color = Color.white;
         controls.raycastTarget = false;
         return controls;
+    }
+
+    private static Text CreateVolumeText(RectTransform parent)
+    {
+        var textObject = new GameObject("LiquidTransferContainerVolumes", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var text = textObject.GetComponent<Text>();
+        var rect = text.rectTransform;
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0f, 0.5f);
+        rect.anchorMax = new Vector2(0f, 0.5f);
+        rect.pivot = new Vector2(0f, 0.5f);
+        rect.anchoredPosition = new Vector2(24f, 0f);
+        rect.sizeDelta = new Vector2(360f, 220f);
+
+        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        text.fontSize = 14;
+        text.alignment = TextAnchor.MiddleLeft;
+        text.verticalOverflow = VerticalWrapMode.Overflow;
+        text.color = Color.white;
+        text.raycastTarget = false;
+        return text;
     }
 
     public override void Update(List<RaycastResult> uiCasts)
@@ -201,14 +298,101 @@ internal sealed class LiquidTransferMinigame : Minigame
         var deltaTime = Time.unscaledDeltaTime;
         liquidSimulation.Tick(deltaTime, spawnDrops, pointerPosition);
         controlsUpdateTimer -= deltaTime;
-        if (controlsUpdateTimer <= 0f && displayedDropCount != liquidSimulation.Count)
+        if (controlsUpdateTimer <= 0f)
         {
-            displayedDropCount = liquidSimulation.Count;
-            controlsText.text =
-                $"Hold left-click outside containers to spawn drops ({displayedDropCount}/20000) | Right-click and drag to rotate | Esc: exit";
+            if (displayedDropCount != liquidSimulation.Count)
+            {
+                displayedDropCount = liquidSimulation.Count;
+                controlsText.text =
+                    $"Hold left-click outside containers to spawn drops ({displayedDropCount}/20000) | Right-click and drag to rotate | Esc: exit";
+            }
+
+            UpdateVolumeReadout();
             controlsUpdateTimer = 0.25f;
         }
 
+    }
+
+    private void UpdateVolumeReadout()
+    {
+        volumeText.text =
+            "Original container sprites\n"
+            + $"Container 1: {firstOriginalContainerSpriteName}\n"
+            + $"Container 2: {secondOriginalContainerSpriteName}\n\n"
+            + "Liquid amount (1 drop per ml)\n"
+            + $"Receiver: {liquidSimulation.GetContainerDropCount(0):N0} ml\n"
+            + $"Source: {liquidSimulation.GetContainerDropCount(1):N0} ml\n\n"
+            + "Estimated capacity (outline area x width)\n"
+            + $"Receiver: {EstimateVolume(receivingContainer):N0} units^3\n"
+            + $"Source: {EstimateVolume(sourceContainer):N0} units^3";
+    }
+
+    private static double EstimateVolume(ContainerVisual container)
+    {
+        var scale = container.Transform.localScale;
+        var scaleVolume = System.Math.Abs((double)scale.x * scale.y * scale.x);
+        return EstimateOutlineVolume(container.OutlinePoints) * scaleVolume;
+    }
+
+    private static void ApplyVolumeScale(
+        ContainerVisual container,
+        float targetCapacity,
+        double referenceVolume,
+        string originalSpriteName)
+    {
+        var spriteVolume = EstimateOutlineVolume(container.OutlinePoints);
+        if (targetCapacity <= 0f || referenceVolume <= 0d || spriteVolume <= 0d)
+        {
+            Plugin.LogWarning(
+                $"Could not volume-scale container '{originalSpriteName}': capacity={targetCapacity:F2}, "
+                + $"reference volume={referenceVolume:F2}, sprite volume={spriteVolume:F2}; using base scale.");
+            return;
+        }
+
+        var volumeRatio = (targetCapacity / referenceCapacity) * (referenceVolume / spriteVolume);
+        if (volumeRatio <= 0d || double.IsNaN(volumeRatio) || double.IsInfinity(volumeRatio))
+        {
+            Plugin.LogWarning($"Could not calculate a valid volume scale for container '{originalSpriteName}'.");
+            return;
+        }
+
+        var linearScale = (float)System.Math.Pow(volumeRatio, 1d / 3d);
+        container.Transform.localScale = Vector3.one * (ContainerScale * linearScale);
+    }
+
+    private static double EstimateSpriteVolume(Sprite sprite)
+    {
+        if (!sprite
+            || !ModSprites.TryFindOpening(sprite, out var openingPosition, out var openingWidth)
+            || !ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out var outline))
+        {
+            Plugin.LogWarning($"Could not calculate the reference volume from sprite '{ReferenceSpriteName}.png'.");
+            return 0d;
+        }
+
+        return EstimateOutlineVolume(outline);
+    }
+
+    private static double EstimateOutlineVolume(Vector2[] outline)
+    {
+        if (outline.Length < 3)
+        {
+            return 0d;
+        }
+
+        var twiceArea = 0d;
+        var minimumX = outline[0].x;
+        var maximumX = minimumX;
+        for (var i = 0; i < outline.Length; i++)
+        {
+            var current = outline[i];
+            var next = outline[(i + 1) % outline.Length];
+            twiceArea += (double)current.x * next.y - (double)next.x * current.y;
+            minimumX = Mathf.Min(minimumX, current.x);
+            maximumX = Mathf.Max(maximumX, current.x);
+        }
+
+        return System.Math.Abs(twiceArea) * 0.5d * (maximumX - minimumX);
     }
 
     private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)
@@ -234,6 +418,14 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     internal void RestoreHand()
     {
+        if (debugTextRoot)
+        {
+            var root = debugTextRoot.gameObject;
+            root.SetActive(false);
+            Object.Destroy(root);
+            debugTextRoot = null;
+        }
+
         if (!handImage)
         {
             return;

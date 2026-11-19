@@ -7,7 +7,7 @@ namespace RealisticLiquidTransfer;
 internal static class StartLiquidTransferPatch
 {
     [HarmonyPrefix]
-    private static bool Prefix()
+    private static bool Prefix(WaterContainerItem wat1, WaterContainerItem wat2)
     {
         if (!MinigameBase.main)
         {
@@ -21,8 +21,67 @@ internal static class StartLiquidTransferPatch
             return false;
         }
 
-        MinigameBase.main.StartMinigame(new LiquidTransferMinigame(), null);
+        var firstSpriteName = GetContainerSpriteName(wat1, "first");
+        var secondSpriteName = GetContainerSpriteName(wat2, "second");
+        var firstCapacity = GetContainerCapacity(wat1, "first");
+        var secondCapacity = GetContainerCapacity(wat2, "second");
+        var firstAmount = GetContainerAmount(wat1, "first");
+        var secondAmount = GetContainerAmount(wat2, "second");
+        MinigameBase.main.StartMinigame(
+            new LiquidTransferMinigame(
+                firstSpriteName,
+                firstCapacity,
+                firstAmount,
+                secondSpriteName,
+                secondCapacity,
+                secondAmount),
+            null);
         return false;
+    }
+
+    private static float GetContainerAmount(WaterContainerItem container, string containerLabel)
+    {
+        if (!container)
+        {
+            Plugin.LogWarning($"Could not read the {containerLabel} liquid-transfer container amount.");
+            return 0f;
+        }
+
+        return container.CurrentTotal;
+    }
+
+    private static float GetContainerCapacity(WaterContainerItem container, string containerLabel)
+    {
+        if (!container)
+        {
+            Plugin.LogWarning($"Could not read the {containerLabel} liquid-transfer container capacity.");
+            return 0f;
+        }
+
+        return container.Capacity;
+    }
+
+    private static string GetContainerSpriteName(WaterContainerItem container, string containerLabel)
+    {
+        if (!container)
+        {
+            Plugin.LogWarning($"Could not read the {containerLabel} liquid-transfer container sprite: container is unavailable.");
+            return "Unavailable";
+        }
+
+        var spriteRenderer = container.GetComponent<SpriteRenderer>();
+        if (!spriteRenderer || !spriteRenderer.sprite)
+        {
+            spriteRenderer = container.GetComponentInChildren<SpriteRenderer>();
+        }
+
+        if (!spriteRenderer || !spriteRenderer.sprite)
+        {
+            Plugin.LogWarning($"Could not read the {containerLabel} liquid-transfer container sprite.");
+            return "Unavailable";
+        }
+
+        return spriteRenderer.sprite.name;
     }
 }
 

@@ -25,11 +25,8 @@
     <Compile Include="Patches.cs" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="resources\coffe cup.png">
-      <LogicalName>RealisticLiquidTransfer.Resources.coffe cup.png</LogicalName>
-    </EmbeddedResource>
-    <EmbeddedResource Include="resources\big bottle.png">
-      <LogicalName>RealisticLiquidTransfer.Resources.big bottle.png</LogicalName>
+    <EmbeddedResource Include="resources\*.png">
+      <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
