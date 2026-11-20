@@ -34,6 +34,13 @@ internal sealed class LiquidTransferMinigame : Minigame
     private RectTransform screenRoot;
     private Toggle shaderToggle;
     private Toggle spawnToggle;
+    private Slider collisionPassSlider;
+    private Text collisionPassText;
+    private Slider collisionCorrectionSlider;
+    private Text collisionCorrectionText;
+    private Slider velocityContactMarginSlider;
+    private Text velocityContactMarginText;
+    private Slider[] collisionTuningSliders;
     private RectTransform debugTextRoot;
     private LiquidSimulation liquidSimulation;
     private HandAlphaGradient handAlphaGradient;
@@ -148,6 +155,39 @@ internal sealed class LiquidTransferMinigame : Minigame
             "Spawn drops on click",
             new Vector2(rightControlsX, -52f));
         spawnToggle.isOn = false;
+        collisionPassSlider = CreateTuningSlider(
+            debugTextRoot,
+            "CollisionPasses",
+            "Collision passes",
+            new Vector2(rightControlsX, -78f),
+            new Vector2(rightControlsX, -104f),
+            LiquidSimulation.MinimumDropCollisionPasses,
+            LiquidSimulation.MaximumDropCollisionPasses,
+            LiquidSimulation.MinimumDropCollisionPasses,
+            true,
+            out collisionPassText);
+        collisionCorrectionSlider = CreateTuningSlider(
+            debugTextRoot,
+            "CollisionCorrection",
+            "Position correction",
+            new Vector2(rightControlsX, -132f),
+            new Vector2(rightControlsX, -158f),
+            LiquidSimulation.MinimumCollisionCorrectionPercent,
+            LiquidSimulation.MaximumCollisionCorrectionPercent,
+            LiquidSimulation.DefaultCollisionCorrectionPercent,
+            true,
+            out collisionCorrectionText);
+        velocityContactMarginSlider = CreateTuningSlider(
+            debugTextRoot,
+            "VelocityContactMargin",
+            "Velocity contact margin",
+            new Vector2(rightControlsX, -186f),
+            new Vector2(rightControlsX, -212f),
+            LiquidSimulation.MinimumVelocityContactMarginTenths,
+            LiquidSimulation.MaximumVelocityContactMarginTenths,
+            LiquidSimulation.DefaultVelocityContactMarginTenths,
+            true,
+            out velocityContactMarginText);
 
         receivingContainer = CreateContainer(
             screenRoot,
@@ -192,6 +232,18 @@ internal sealed class LiquidTransferMinigame : Minigame
         SetLiquidShaderEnabled(shaderToggle.isOn);
         spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
         SetClickSpawnEnabled(spawnToggle.isOn);
+        collisionTuningSliders = new[]
+        {
+            collisionPassSlider,
+            collisionCorrectionSlider,
+            velocityContactMarginSlider
+        };
+        collisionPassSlider.onValueChanged.AddListener(SetCollisionPasses);
+        SetCollisionPasses(collisionPassSlider.value);
+        collisionCorrectionSlider.onValueChanged.AddListener(SetCollisionCorrection);
+        SetCollisionCorrection(collisionCorrectionSlider.value);
+        velocityContactMarginSlider.onValueChanged.AddListener(SetVelocityContactMargin);
+        SetVelocityContactMargin(velocityContactMarginSlider.value);
         UpdateVolumeReadout();
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
@@ -326,9 +378,144 @@ internal sealed class LiquidTransferMinigame : Minigame
         return toggle;
     }
 
+    private static Text CreateTuningLabel(
+        RectTransform parent,
+        string name,
+        string label,
+        Vector2 position)
+    {
+        var textObject = new GameObject(
+            name,
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Text));
+        var text = textObject.GetComponent<Text>();
+        var rect = text.rectTransform;
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = new Vector2(180f, 20f);
+        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        text.fontSize = 14;
+        text.alignment = TextAnchor.MiddleLeft;
+        text.color = Color.white;
+        text.raycastTarget = false;
+        text.text = label;
+        return text;
+    }
+
+    private static Slider CreateTuningSlider(
+        RectTransform parent,
+        string name,
+        string label,
+        Vector2 labelPosition,
+        Vector2 sliderPosition,
+        float minimum,
+        float maximum,
+        float initialValue,
+        bool wholeNumbers,
+        out Text labelText)
+    {
+        var sliderObject = new GameObject(
+            name,
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image),
+            typeof(Slider));
+        var slider = sliderObject.GetComponent<Slider>();
+        var rect = slider.GetComponent<RectTransform>();
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = sliderPosition;
+        rect.sizeDelta = new Vector2(180f, 18f);
+
+        labelText = CreateTuningLabel(
+            parent,
+            $"{name}Label",
+            label,
+            labelPosition);
+        slider.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.12f, 0.9f);
+
+        var fillArea = new GameObject("FillArea", typeof(RectTransform)).GetComponent<RectTransform>();
+        fillArea.SetParent(rect, false);
+        fillArea.anchorMin = new Vector2(0f, 0.5f);
+        fillArea.anchorMax = new Vector2(1f, 0.5f);
+        fillArea.pivot = new Vector2(0.5f, 0.5f);
+        fillArea.sizeDelta = new Vector2(-18f, 6f);
+
+        var fill = new GameObject(
+            "Fill",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image)).GetComponent<Image>();
+        fill.rectTransform.SetParent(fillArea, false);
+        fill.rectTransform.anchorMin = Vector2.zero;
+        fill.rectTransform.anchorMax = Vector2.one;
+        fill.rectTransform.offsetMin = Vector2.zero;
+        fill.rectTransform.offsetMax = Vector2.zero;
+        fill.color = new Color(0.15f, 0.75f, 0.35f, 1f);
+
+        var handleArea = new GameObject("HandleSlideArea", typeof(RectTransform)).GetComponent<RectTransform>();
+        handleArea.SetParent(rect, false);
+        handleArea.anchorMin = Vector2.zero;
+        handleArea.anchorMax = Vector2.one;
+        handleArea.offsetMin = new Vector2(9f, 0f);
+        handleArea.offsetMax = new Vector2(-9f, 0f);
+
+        var handle = new GameObject(
+            "Handle",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image)).GetComponent<Image>();
+        var handleRect = handle.rectTransform;
+        handleRect.SetParent(handleArea, false);
+        handleRect.anchorMin = new Vector2(0f, 0.5f);
+        handleRect.anchorMax = new Vector2(0f, 0.5f);
+        handleRect.pivot = new Vector2(0.5f, 0.5f);
+        handleRect.sizeDelta = new Vector2(14f, 14f);
+        handle.color = Color.white;
+
+        slider.fillRect = fill.rectTransform;
+        slider.handleRect = handleRect;
+        slider.targetGraphic = handle;
+        slider.minValue = minimum;
+        slider.maxValue = maximum;
+        slider.wholeNumbers = wholeNumbers;
+        slider.value = initialValue;
+        slider.direction = Slider.Direction.LeftToRight;
+        slider.transition = Selectable.Transition.None;
+        return slider;
+    }
+
     private void SetLiquidShaderEnabled(bool enabled)
     {
         liquidSimulation.SetSurfaceShaderEnabled(enabled);
+    }
+
+    private void SetCollisionPasses(float passes)
+    {
+        var passCount = Mathf.RoundToInt(passes);
+        liquidSimulation.SetDropCollisionPasses(passCount);
+        collisionPassText.text = $"Collision passes: {passCount}";
+    }
+
+    private void SetCollisionCorrection(float percent)
+    {
+        var correction = Mathf.RoundToInt(percent);
+        liquidSimulation.SetCollisionCorrectionPercent(correction);
+        collisionCorrectionText.text = $"Position correction: {correction}%";
+    }
+
+    private void SetVelocityContactMargin(float tenths)
+    {
+        var marginTenths = Mathf.RoundToInt(tenths);
+        var margin = marginTenths / 10f;
+        liquidSimulation.SetVelocityContactMarginTenths(marginTenths);
+        velocityContactMarginText.text = $"Velocity contact margin: {margin:F1}px";
     }
 
     private void SetClickSpawnEnabled(bool enabled)
@@ -341,9 +528,18 @@ internal sealed class LiquidTransferMinigame : Minigame
         foreach (var uiCast in uiCasts)
         {
             var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
-            if (selectable == shaderToggle || selectable == spawnToggle)
+            if (selectable == shaderToggle
+                || selectable == spawnToggle)
             {
                 return true;
+            }
+
+            foreach (var slider in collisionTuningSliders)
+            {
+                if (selectable == slider)
+                {
+                    return true;
+                }
             }
         }
 
@@ -359,7 +555,24 @@ internal sealed class LiquidTransferMinigame : Minigame
             || RectTransformUtility.RectangleContainsScreenPoint(
                 spawnToggle.GetComponent<RectTransform>(),
                 pointer,
-                eventCamera);
+                eventCamera)
+            || IsPointerOverTuningSlider(pointer, eventCamera);
+    }
+
+    private bool IsPointerOverTuningSlider(Vector2 pointer, Camera eventCamera)
+    {
+        foreach (var slider in collisionTuningSliders)
+        {
+            if (RectTransformUtility.RectangleContainsScreenPoint(
+                    slider.GetComponent<RectTransform>(),
+                    pointer,
+                    eventCamera))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public override void Update(List<RaycastResult> uiCasts)

@@ -13,7 +13,6 @@ internal enum SimulationProfileStage
     VelocityReconstruction,
     VelocityConstraints,
     AssignmentChecks,
-    BottomDropLogging,
     RenderScheduling,
     MeshGeneration,
     Count
@@ -21,7 +20,7 @@ internal enum SimulationProfileStage
 
 internal static class SimulationProfiler
 {
-#if LIQUID_TRANSFER_DEBUG_LOGGING
+#if LIQUID_TRANSFER_PROFILING
     private static readonly long[] totalTicks = new long[(int)SimulationProfileStage.Count];
     private static readonly long[] maximumTicks = new long[(int)SimulationProfileStage.Count];
     private static readonly int[] sampleCounts = new int[(int)SimulationProfileStage.Count];

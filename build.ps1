@@ -2,6 +2,7 @@
 param(
     [string]$GamePath = 'D:\SteamLibrary\steamapps\common\Casualties Unknown',
     [bool]$EnableDebugLogging = $true,
+    [bool]$EnableProfiling = $false,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )
 
@@ -95,7 +96,8 @@ Copy-Item -LiteralPath $shaderBundlePath -Destination $embeddedShaderBundlePath 
 $dotnet = Get-Command 'dotnet' -ErrorAction Stop
 & $dotnet.Source build $projectPath --configuration Release --nologo `
     "-p:GamePath=$resolvedGamePath" `
-    "-p:EnableDebugLogging=$($EnableDebugLogging.ToString().ToLowerInvariant())"
+    "-p:EnableDebugLogging=$($EnableDebugLogging.ToString().ToLowerInvariant())" `
+    "-p:EnableProfiling=$($EnableProfiling.ToString().ToLowerInvariant())"
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet build failed with exit code $LASTEXITCODE."
 }
@@ -113,5 +115,8 @@ Copy-Item -LiteralPath $builtDll -Destination $destination -Force
 Write-Output "Built and installed: $destination"
 if ($EnableDebugLogging) {
     $debugLogPattern = Join-Path $resolvedGamePath 'BepInEx\LogOutput\RealisticLiquidTransfer-debug-*.log'
-    Write-Output "Runtime profiling enabled. Each run creates a timestamped log: $debugLogPattern"
+    Write-Output "Debug logging enabled. Each run creates a timestamped log: $debugLogPattern"
+}
+if ($EnableProfiling) {
+    Write-Output "Simulation stage profiling enabled."
 }

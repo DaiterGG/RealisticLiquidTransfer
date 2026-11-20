@@ -10,6 +10,8 @@ internal sealed class LiquidSimulation
     private const int MaximumDrops = 20000;
     private const byte AggregateVolume = 7;
     private const float DropRadius = 12f * 0.7368063f;
+    private const float DropCollisionDistance = DropRadius * 2f;
+    private const float DropCollisionDistanceSquared = DropCollisionDistance * DropCollisionDistance;
     private const float AggregateRadius = DropRadius * 2.6457513f;
     private const float DensityTexturePixelsPerUnit = 0.5f;
     private const int MaximumDensityTextureDimension = 1024;
@@ -22,7 +24,14 @@ internal sealed class LiquidSimulation
     private const float Gravity = 420f;
     private const float GravityMultiplier = 2f;
     private const float FixedStep = 1f / 30f;
-    private const int DropCollisionIterations = 6;
+    internal const int MinimumDropCollisionPasses = 2;
+    internal const int MaximumDropCollisionPasses = 6;
+    internal const int MinimumCollisionCorrectionPercent = 25;
+    internal const int MaximumCollisionCorrectionPercent = 100;
+    internal const int DefaultCollisionCorrectionPercent = 100;
+    internal const int MinimumVelocityContactMarginTenths = 0;
+    internal const int MaximumVelocityContactMarginTenths = 20;
+    internal const int DefaultVelocityContactMarginTenths = 5;
     private const float AggregateRingTolerance = DropRadius * 0.45f;
     private const int AggregateMinimumSupport = 3;
     private const int AggregateMinimumSplitSupport = 5;
@@ -73,10 +82,16 @@ internal sealed class LiquidSimulation
     private readonly int[] cellOffsets;
     private readonly int[] cellWriteOffsets;
     private readonly int[] cellParticleIndices;
+    private readonly int[] activeCells;
+    private int activeCellCount;
     private readonly float cellSize = DropRadius * 2f;
     private int count;
     private int totalLiquidUnits;
-    private int simulationStepsUntilSplitCheck = 4;
+    private int dropCollisionPasses = MinimumDropCollisionPasses;
+    private float collisionCorrectionStrength = 1f;
+    private float velocityContactMargin = 0.5f;
+    private float velocityContactDistanceSquared =
+        (DropCollisionDistance + 0.5f) * (DropCollisionDistance + 0.5f);
     private bool graphicsDirty = true;
     private bool surfaceShaderEnabled;
     private int nextDropId = 1;
@@ -134,6 +149,7 @@ internal sealed class LiquidSimulation
         cellOffsets = new int[cellCount + 1];
         cellWriteOffsets = new int[cellCount];
         cellParticleIndices = new int[MaximumDrops];
+        activeCells = new int[cellCount];
         containers = new[]
         {
             new ContainerShape(root, firstContainer, firstOutline),
@@ -158,6 +174,33 @@ internal sealed class LiquidSimulation
     }
 
     internal int Count => totalLiquidUnits;
+
+    internal void SetDropCollisionPasses(int passes)
+    {
+        dropCollisionPasses = Mathf.Clamp(
+            passes,
+            MinimumDropCollisionPasses,
+            MaximumDropCollisionPasses);
+    }
+
+    internal void SetCollisionCorrectionPercent(int percent)
+    {
+        collisionCorrectionStrength = Mathf.Clamp(
+            percent,
+            MinimumCollisionCorrectionPercent,
+            MaximumCollisionCorrectionPercent) / 100f;
+    }
+
+    internal void SetVelocityContactMarginTenths(int tenths)
+    {
+        var margin = Mathf.Clamp(
+            tenths,
+            MinimumVelocityContactMarginTenths,
+            MaximumVelocityContactMarginTenths) / 10f;
+        velocityContactMargin = margin;
+        var contactDistance = DropCollisionDistance + margin;
+        velocityContactDistanceSquared = contactDistance * contactDistance;
+    }
 
     internal void SetSurfaceShaderEnabled(bool enabled)
     {
@@ -363,14 +406,7 @@ internal sealed class LiquidSimulation
         var steps = 0;
         while (simulationTime >= FixedStep && steps < 3)
         {
-            simulationStepsUntilSplitCheck--;
-            var runSplitter = simulationStepsUntilSplitCheck == 0;
-            if (runSplitter)
-            {
-                simulationStepsUntilSplitCheck = 4;
-            }
-
-            Step(FixedStep, ref mergesRemaining, runSplitter);
+            Step(FixedStep, ref mergesRemaining);
             simulationTime -= FixedStep;
             steps++;
         }
@@ -520,7 +556,7 @@ internal sealed class LiquidSimulation
         graphicsDirty = true;
     }
 
-    private void Step(float deltaTime, ref int mergesRemaining, bool runSplitter)
+    private void Step(float deltaTime, ref int mergesRemaining)
     {
         var profilingStart = SimulationProfiler.Begin();
         RefreshContainerGeometry();
@@ -531,7 +567,7 @@ internal sealed class LiquidSimulation
             positions[i] += velocities[i] * deltaTime;
         }
         SimulationProfiler.End(SimulationProfileStage.GeometryRefreshAndIntegration, profilingStart);
-        ResolveDropCollisions(ref mergesRemaining, runSplitter);
+        ResolveDropCollisions(ref mergesRemaining);
 
         profilingStart = SimulationProfiler.Begin();
         for (var i = 0; i < count; i++)
@@ -545,7 +581,6 @@ internal sealed class LiquidSimulation
         SimulationProfiler.End(SimulationProfileStage.VelocityConstraints, profilingStart);
 
         profilingStart = SimulationProfiler.Begin();
-        LogBottomSourceDrop();
         RemoveOffscreenDrops();
         SimulationProfiler.End(SimulationProfileStage.OffscreenCleanup, profilingStart);
         graphicsDirty = true;
@@ -634,38 +669,6 @@ internal sealed class LiquidSimulation
             || position.x > maximumScreenX + radius
             || position.y < minimumScreenY - radius
             || position.y > maximumScreenY + radius;
-    }
-
-    private void LogBottomSourceDrop()
-    {
-        if (!DebugLog.IsFileEnabled || containers.Length < 2)
-        {
-            return;
-        }
-
-        var source = containers[1];
-        var minimumX = source.Minimum.x - DropRadius;
-        var maximumX = source.Maximum.x + DropRadius;
-        var bottomIndex = -1;
-        var bottomY = float.PositiveInfinity;
-        for (var i = 0; i < count; i++)
-        {
-            var position = positions[i];
-            if (position.x < minimumX || position.x > maximumX || position.y >= bottomY)
-            {
-                continue;
-            }
-
-            bottomY = position.y;
-            bottomIndex = i;
-        }
-
-        if (bottomIndex >= 0)
-        {
-            var position = positions[bottomIndex];
-            DebugLog.Write(
-                $"Bottom source drop id={dropIds[bottomIndex]} position=({position.x:F2},{position.y:F2}).");
-        }
     }
 
     private byte GetContainerAssignment(Vector2 position, float radius)
@@ -806,10 +809,15 @@ internal sealed class LiquidSimulation
         }
 
         var particleOffset = 0;
+        activeCellCount = 0;
         for (var cell = 0; cell < cellCounts.Length; cell++)
         {
             cellOffsets[cell] = particleOffset;
             cellWriteOffsets[cell] = particleOffset;
+            if (cellCounts[cell] > 0)
+            {
+                activeCells[activeCellCount++] = cell;
+            }
             particleOffset += cellCounts[cell];
         }
         cellOffsets[cellCounts.Length] = particleOffset;
@@ -1045,12 +1053,6 @@ internal sealed class LiquidSimulation
             {
                 splitAggregatesThisInterval += splitCount;
                 largestSplitBatchThisInterval = Mathf.Max(largestSplitBatchThisInterval, splitCount);
-                if (splitCount >= 25)
-                {
-                    DebugLog.Write(
-                        $"Large aggregate breakup batch: split={splitCount}, "
-                        + $"particles={originalCount}->{count}, liquid units={totalLiquidUnits}.");
-                }
             }
             graphicsDirty = true;
         }
@@ -1174,9 +1176,9 @@ internal sealed class LiquidSimulation
         ResolveSpatialGridPairs(true);
     }
 
-    private void ResolveDropCollisions(ref int mergesRemaining, bool runSplitter)
+    private void ResolveDropCollisions(ref int mergesRemaining)
     {
-        for (var iteration = 0; iteration < DropCollisionIterations; iteration++)
+        for (var iteration = 0; iteration < dropCollisionPasses; iteration++)
         {
             var profilingStart = SimulationProfiler.Begin();
             BuildSpatialGrid();
@@ -1189,7 +1191,7 @@ internal sealed class LiquidSimulation
                     BuildSpatialGrid();
                 }
 
-                var splitCount = runSplitter ? SplitUnsupportedAggregates(int.MaxValue) : 0;
+                var splitCount = SplitUnsupportedAggregates(int.MaxValue);
                 if (splitCount > 0)
                 {
                     BuildSpatialGrid();
@@ -1201,7 +1203,7 @@ internal sealed class LiquidSimulation
             ResolveDropCollisionPass();
             SimulationProfiler.End(SimulationProfileStage.DropCollisions, profilingStart);
 
-            if (iteration == 0 || iteration == DropCollisionIterations - 1)
+            if (iteration == 0 || iteration == dropCollisionPasses - 1)
             {
                 profilingStart = SimulationProfiler.Begin();
                 EnforceContainerAssignments();
@@ -1217,39 +1219,45 @@ internal sealed class LiquidSimulation
 
     private void ResolveSpatialGridPairs(bool velocityOnly)
     {
-        for (var cellY = 0; cellY < gridRows; cellY++)
+        for (var activeCellIndex = 0; activeCellIndex < activeCellCount; activeCellIndex++)
         {
-            for (var cellX = 0; cellX < gridColumns; cellX++)
+            var cell = activeCells[activeCellIndex];
+            var cellX = cell % gridColumns;
+            var cellY = cell / gridColumns;
+            if (cellCounts[cell] > 1)
             {
-                var cell = cellY * gridColumns + cellX;
                 ResolveCellPair(cell, cell, velocityOnly);
+            }
 
-                if (cellX + 1 < gridColumns)
-                {
-                    ResolveCellPair(cell, cell + 1, velocityOnly);
-                }
+            if (cellX + 1 < gridColumns && cellCounts[cell + 1] > 0)
+            {
+                ResolveCellPair(cell, cell + 1, velocityOnly);
+            }
 
-                if (cellY + 1 >= gridRows)
-                {
-                    continue;
-                }
+            if (cellY + 1 >= gridRows)
+            {
+                continue;
+            }
 
-                if (cellX > 0)
-                {
-                    ResolveCellPair(
-                        cell,
-                        cell + gridColumns - 1,
-                        velocityOnly);
-                }
+            if (cellX > 0 && cellCounts[cell + gridColumns - 1] > 0)
+            {
+                ResolveCellPair(
+                    cell,
+                    cell + gridColumns - 1,
+                    velocityOnly);
+            }
 
+            if (cellCounts[cell + gridColumns] > 0)
+            {
                 ResolveCellPair(cell, cell + gridColumns, velocityOnly);
-                if (cellX + 1 < gridColumns)
-                {
-                    ResolveCellPair(
-                        cell,
-                        cell + gridColumns + 1,
-                        velocityOnly);
-                }
+            }
+
+            if (cellX + 1 < gridColumns && cellCounts[cell + gridColumns + 1] > 0)
+            {
+                ResolveCellPair(
+                    cell,
+                    cell + gridColumns + 1,
+                    velocityOnly);
             }
         }
 
@@ -1259,7 +1267,7 @@ internal sealed class LiquidSimulation
     private void ResolveAggregatePairs(bool velocityOnly)
     {
         var cellRadius = Mathf.CeilToInt(
-            (AggregateRadius * 2f + (velocityOnly ? 0.5f : 0f)) / cellSize);
+            (AggregateRadius * 2f + (velocityOnly ? velocityContactMargin : 0f)) / cellSize);
         for (var first = 0; first < count; first++)
         {
             if (dropVolumes[first] != AggregateVolume)
@@ -1290,11 +1298,11 @@ internal sealed class LiquidSimulation
 
                         if (velocityOnly)
                         {
-                            ResolvePairVelocity(first, second);
+                            ResolveAggregatePairVelocity(first, second);
                         }
                         else
                         {
-                            ResolvePair(first, second);
+                            ResolveAggregatePair(first, second);
                         }
                     }
                 }
@@ -1367,11 +1375,68 @@ internal sealed class LiquidSimulation
 
     private void ResolvePair(int first, int second)
     {
+        var firstPosition = positions[first];
+        var secondPosition = positions[second];
+        var differenceX = secondPosition.x - firstPosition.x;
+        var differenceY = secondPosition.y - firstPosition.y;
+        if (Mathf.Abs(differenceX) >= DropCollisionDistance
+            || Mathf.Abs(differenceY) >= DropCollisionDistance)
+        {
+            return;
+        }
+
+        var distanceSquared = differenceX * differenceX + differenceY * differenceY;
+        if (distanceSquared >= DropCollisionDistanceSquared)
+        {
+            return;
+        }
+
+        var distance = Mathf.Sqrt(distanceSquared);
+        var difference = new Vector2(differenceX, differenceY);
+        var normal = distance > 0.0001f
+            ? difference / distance
+            : new Vector2(1f, 0f);
+        var correction = (DropCollisionDistance - distance)
+            * collisionCorrectionStrength
+            * 0.5f;
+        positions[first] = firstPosition - normal * correction;
+        positions[second] = secondPosition + normal * correction;
+    }
+
+    private void ResolvePairVelocity(int first, int second)
+    {
+        var firstPosition = positions[first];
+        var secondPosition = positions[second];
+        var differenceX = secondPosition.x - firstPosition.x;
+        var differenceY = secondPosition.y - firstPosition.y;
+        var distanceSquared = differenceX * differenceX + differenceY * differenceY;
+        if (distanceSquared > velocityContactDistanceSquared)
+        {
+            return;
+        }
+
+        var distance = Mathf.Sqrt(distanceSquared);
+        var difference = new Vector2(differenceX, differenceY);
+        var normal = distance > 0.0001f
+            ? difference / distance
+            : new Vector2(1f, 0f);
+        var relativeVelocity = velocities[second] - velocities[first];
+        var separatingSpeed = Vector2.Dot(relativeVelocity, normal);
+        if (separatingSpeed >= 0f)
+        {
+            return;
+        }
+
+        var impulse = -separatingSpeed * 0.5f;
+        velocities[first] -= normal * impulse;
+        velocities[second] += normal * impulse;
+    }
+
+    private void ResolveAggregatePair(int first, int second)
+    {
         var difference = positions[second] - positions[first];
         var distanceSquared = difference.sqrMagnitude;
-        var firstRadius = GetDropRadius(first);
-        var secondRadius = GetDropRadius(second);
-        var minimumDistance = firstRadius + secondRadius;
+        var minimumDistance = GetDropRadius(first) + GetDropRadius(second);
         var minimumDistanceSquared = minimumDistance * minimumDistance;
         if (distanceSquared >= minimumDistanceSquared)
         {
@@ -1382,19 +1447,20 @@ internal sealed class LiquidSimulation
         var normal = distance > 0.0001f
             ? difference / distance
             : new Vector2(1f, 0f);
-        var overlap = minimumDistance - distance;
+        var correction = (minimumDistance - distance) * collisionCorrectionStrength;
         var firstVolume = dropVolumes[first];
         var secondVolume = dropVolumes[second];
         var totalVolume = firstVolume + secondVolume;
-        positions[first] -= normal * (overlap * secondVolume / totalVolume);
-        positions[second] += normal * (overlap * firstVolume / totalVolume);
+        positions[first] -= normal * (correction * secondVolume / totalVolume);
+        positions[second] += normal * (correction * firstVolume / totalVolume);
     }
 
-    private void ResolvePairVelocity(int first, int second)
+    private void ResolveAggregatePairVelocity(int first, int second)
     {
         var difference = positions[second] - positions[first];
         var distanceSquared = difference.sqrMagnitude;
-        var minimumDistance = GetDropRadius(first) + GetDropRadius(second) + 0.5f;
+        var minimumDistance =
+            GetDropRadius(first) + GetDropRadius(second) + velocityContactMargin;
         var minimumDistanceSquared = minimumDistance * minimumDistance;
         if (distanceSquared > minimumDistanceSquared)
         {
@@ -1653,6 +1719,9 @@ internal sealed class LiquidSimulation
      private readonly RectTransform root;
      private readonly RectTransform transform;
      private readonly BoundarySegment[] boundaries;
+     private readonly BoundaryNode[] boundaryNodes;
+     private readonly int[] boundaryOrder;
+     private readonly int[] boundaryQueryStack;
      private readonly float interiorOrientation;
      private readonly Vector2 interiorFallback;
      private readonly Vector2 distanceFieldMinimum;
@@ -1668,6 +1737,7 @@ internal sealed class LiquidSimulation
      private Vector2 openingSegment;
      private float openingLengthSquared;
      private float rootUnitsPerLocalUnit = 1f;
+     private int boundaryNodeCount;
 
      internal ContainerShape(RectTransform root, RectTransform transform, Vector2[] outline)
      {
@@ -1675,6 +1745,9 @@ internal sealed class LiquidSimulation
          this.transform = transform;
          Outline = outline ?? Array.Empty<Vector2>();
          boundaries = new BoundarySegment[Mathf.Max(0, Outline.Length - 1)];
+         boundaryNodes = new BoundaryNode[Mathf.Max(0, boundaries.Length * 2 - 1)];
+         boundaryOrder = new int[boundaries.Length];
+         boundaryQueryStack = new int[boundaryNodes.Length];
 
          var area = 0f;
          for (var i = 0; i < Outline.Length; i++)
@@ -1713,6 +1786,7 @@ internal sealed class LiquidSimulation
 
          interiorFallback = FindInteriorFallback();
          RefreshBoundaries();
+         BuildBoundaryTree();
      }
 
      internal Vector2[] Outline { get; }
@@ -1762,6 +1836,10 @@ internal sealed class LiquidSimulation
          var lastPoint = ToRootPoint(Outline[Outline.Length - 1]);
          Minimum = Vector2.Min(Minimum, lastPoint);
          Maximum = Vector2.Max(Maximum, lastPoint);
+         if (boundaryNodeCount > 0)
+         {
+             RefitBoundaryTree();
+         }
      }
 
      internal bool IsInsidePaddedRectangle(Vector2 rootPoint)
@@ -1965,25 +2043,59 @@ internal sealed class LiquidSimulation
          var nearestPoint = Vector2.zero;
          var nearestNormal = Vector2.up;
          var nearestBoundaryIndex = -1;
-         for (var boundaryIndex = 0; boundaryIndex < boundaries.Length; boundaryIndex++)
+         if (boundaryNodeCount > 0)
          {
-             var boundary = boundaries[boundaryIndex];
-             var segment = boundary.End - boundary.Start;
-             var lengthSquared = segment.sqrMagnitude;
-             if (lengthSquared <= Mathf.Epsilon)
+             var stackCount = 0;
+             boundaryQueryStack[stackCount++] = 0;
+             while (stackCount > 0)
              {
-                 continue;
-             }
+                 var nodeIndex = boundaryQueryStack[--stackCount];
+                 var node = boundaryNodes[nodeIndex];
+                 if (IsOutsideNearestRange(point, node, nearestDistanceSquared))
+                 {
+                     continue;
+                 }
 
-             var along = Mathf.Clamp01(Vector2.Dot(point - boundary.Start, segment) / lengthSquared);
-             var candidate = boundary.Start + segment * along;
-             var distanceSquared = (point - candidate).sqrMagnitude;
-             if (distanceSquared < nearestDistanceSquared)
-             {
-                 nearestDistanceSquared = distanceSquared;
-                 nearestPoint = candidate;
-                 nearestNormal = boundary.InteriorNormal;
-                 nearestBoundaryIndex = boundaryIndex;
+                 if (node.BoundaryIndex >= 0)
+                 {
+                     var boundaryIndex = node.BoundaryIndex;
+                     var boundary = boundaries[boundaryIndex];
+                     var lengthSquared = boundary.LengthSquared;
+                     if (lengthSquared <= Mathf.Epsilon)
+                     {
+                         continue;
+                     }
+
+                     var along = Mathf.Clamp01(
+                         Vector2.Dot(point - boundary.Start, boundary.Segment) / lengthSquared);
+                     var candidate = boundary.Start + boundary.Segment * along;
+                     var distanceSquared = (point - candidate).sqrMagnitude;
+                     if (distanceSquared < nearestDistanceSquared
+                         || (distanceSquared == nearestDistanceSquared
+                             && boundaryIndex < nearestBoundaryIndex))
+                     {
+                         nearestDistanceSquared = distanceSquared;
+                         nearestPoint = candidate;
+                         nearestNormal = boundary.InteriorNormal;
+                         nearestBoundaryIndex = boundaryIndex;
+                     }
+                     continue;
+                 }
+
+                 var left = node.LeftChild;
+                 var right = node.RightChild;
+                 var leftDistanceSquared = GetBoundaryBoundsDistanceSquared(point, boundaryNodes[left]);
+                 var rightDistanceSquared = GetBoundaryBoundsDistanceSquared(point, boundaryNodes[right]);
+                 if (leftDistanceSquared <= rightDistanceSquared)
+                 {
+                     boundaryQueryStack[stackCount++] = right;
+                     boundaryQueryStack[stackCount++] = left;
+                 }
+                 else
+                 {
+                     boundaryQueryStack[stackCount++] = left;
+                     boundaryQueryStack[stackCount++] = right;
+                 }
              }
          }
 
@@ -2167,8 +2279,8 @@ internal sealed class LiquidSimulation
                          : 0.1f;
              foreach (var boundary in boundaries)
              {
-                 var segment = boundary.End - boundary.Start;
-                 var lengthSquared = segment.sqrMagnitude;
+                 var segment = boundary.Segment;
+                 var lengthSquared = boundary.LengthSquared;
                  if (lengthSquared <= Mathf.Epsilon)
                  {
                      continue;
@@ -2209,6 +2321,145 @@ internal sealed class LiquidSimulation
 
          corrected = Vector2.zero;
          return false;
+     }
+
+     private void BuildBoundaryTree()
+     {
+         if (boundaries.Length == 0)
+         {
+             return;
+         }
+
+         for (var i = 0; i < boundaryOrder.Length; i++)
+         {
+             boundaryOrder[i] = i;
+         }
+
+         boundaryNodeCount = 0;
+         BuildBoundaryTreeNode(0, boundaryOrder.Length);
+         RefitBoundaryTree();
+     }
+
+     private int BuildBoundaryTreeNode(int first, int count)
+     {
+         var nodeIndex = boundaryNodeCount++;
+         if (count == 1)
+         {
+             boundaryNodes[nodeIndex] = new BoundaryNode(-1, -1, boundaryOrder[first]);
+             return nodeIndex;
+         }
+
+         var firstCenter = boundaries[boundaryOrder[first]].Center;
+         var minimumCenter = firstCenter;
+         var maximumCenter = firstCenter;
+         for (var i = first + 1; i < first + count; i++)
+         {
+             var center = boundaries[boundaryOrder[i]].Center;
+             minimumCenter = Vector2.Min(minimumCenter, center);
+             maximumCenter = Vector2.Max(maximumCenter, center);
+         }
+
+         var sortByX = maximumCenter.x - minimumCenter.x >= maximumCenter.y - minimumCenter.y;
+         SortBoundaryOrder(first, count, sortByX);
+         var leftCount = count / 2;
+         var left = BuildBoundaryTreeNode(first, leftCount);
+         var right = BuildBoundaryTreeNode(first + leftCount, count - leftCount);
+         boundaryNodes[nodeIndex] = new BoundaryNode(left, right, -1);
+         return nodeIndex;
+     }
+
+     private void SortBoundaryOrder(int first, int count, bool sortByX)
+     {
+         var end = first + count;
+         for (var i = first + 1; i < end; i++)
+         {
+             var boundaryIndex = boundaryOrder[i];
+             var center = boundaries[boundaryIndex].Center;
+             var coordinate = sortByX ? center.x : center.y;
+             var insertAt = i;
+             while (insertAt > first)
+             {
+                 var previousIndex = boundaryOrder[insertAt - 1];
+                 var previousCenter = boundaries[previousIndex].Center;
+                 var previousCoordinate = sortByX ? previousCenter.x : previousCenter.y;
+                 if (previousCoordinate < coordinate
+                     || (previousCoordinate == coordinate && previousIndex < boundaryIndex))
+                 {
+                     break;
+                 }
+
+                 boundaryOrder[insertAt] = previousIndex;
+                 insertAt--;
+             }
+
+             boundaryOrder[insertAt] = boundaryIndex;
+         }
+     }
+
+     private void RefitBoundaryTree()
+     {
+         for (var nodeIndex = boundaryNodeCount - 1; nodeIndex >= 0; nodeIndex--)
+         {
+             var node = boundaryNodes[nodeIndex];
+             if (node.BoundaryIndex >= 0)
+             {
+                 var boundary = boundaries[node.BoundaryIndex];
+                 node.Minimum = Vector2.Min(boundary.Start, boundary.End);
+                 node.Maximum = Vector2.Max(boundary.Start, boundary.End);
+             }
+             else
+             {
+                 var left = boundaryNodes[node.LeftChild];
+                 var right = boundaryNodes[node.RightChild];
+                 node.Minimum = Vector2.Min(left.Minimum, right.Minimum);
+                 node.Maximum = Vector2.Max(left.Maximum, right.Maximum);
+             }
+
+             boundaryNodes[nodeIndex] = node;
+         }
+     }
+
+     private static bool IsOutsideNearestRange(Vector2 point, BoundaryNode node, float nearestDistanceSquared)
+     {
+         if (float.IsPositiveInfinity(nearestDistanceSquared))
+         {
+             return false;
+         }
+
+         var margin = Mathf.Max(
+             0.001f,
+             Mathf.Max(
+                 Mathf.Max(Mathf.Abs(point.x), Mathf.Abs(point.y)),
+                 Mathf.Max(
+                     Mathf.Max(Mathf.Abs(node.Minimum.x), Mathf.Abs(node.Minimum.y)),
+                     Mathf.Max(Mathf.Abs(node.Maximum.x), Mathf.Abs(node.Maximum.y))))
+             * 0.000001f);
+         var deltaX = point.x < node.Minimum.x
+             ? Mathf.Max(0f, node.Minimum.x - point.x - margin)
+             : point.x > node.Maximum.x
+                 ? Mathf.Max(0f, point.x - node.Maximum.x - margin)
+                 : 0f;
+         var deltaY = point.y < node.Minimum.y
+             ? Mathf.Max(0f, node.Minimum.y - point.y - margin)
+             : point.y > node.Maximum.y
+                 ? Mathf.Max(0f, point.y - node.Maximum.y - margin)
+                 : 0f;
+         return deltaX * deltaX + deltaY * deltaY > nearestDistanceSquared;
+     }
+
+     private static float GetBoundaryBoundsDistanceSquared(Vector2 point, BoundaryNode node)
+     {
+         var deltaX = point.x < node.Minimum.x
+             ? node.Minimum.x - point.x
+             : point.x > node.Maximum.x
+                 ? point.x - node.Maximum.x
+                 : 0f;
+         var deltaY = point.y < node.Minimum.y
+             ? node.Minimum.y - point.y
+             : point.y > node.Maximum.y
+                 ? point.y - node.Maximum.y
+                 : 0f;
+         return deltaX * deltaX + deltaY * deltaY;
      }
 
      internal bool Contains(Vector2 rootPoint)
@@ -2275,11 +2526,12 @@ internal sealed class LiquidSimulation
 
      private bool ContainsLocal(Vector2 point)
      {
+         var outline = Outline;
          var inside = false;
-         for (int i = 0, previous = Outline.Length - 1; i < Outline.Length; previous = i++)
+         for (int i = 0, previous = outline.Length - 1; i < outline.Length; previous = i++)
          {
-             var currentPoint = Outline[i];
-             var previousPoint = Outline[previous];
+             var currentPoint = outline[i];
+             var previousPoint = outline[previous];
              if ((currentPoint.y > point.y) != (previousPoint.y > point.y)
                  && point.x < (previousPoint.x - currentPoint.x)
                  * (point.y - currentPoint.y)
@@ -2323,13 +2575,36 @@ internal sealed class LiquidSimulation
      {
          Start = start;
          End = end;
-         var segment = end - start;
-         InteriorNormal = new Vector2(-segment.y, segment.x).normalized * interiorOrientation;
+         Segment = end - start;
+         LengthSquared = Segment.sqrMagnitude;
+         Center = (start + end) * 0.5f;
+         InteriorNormal = new Vector2(-Segment.y, Segment.x).normalized * interiorOrientation;
      }
 
-     internal Vector2 Start { get; }
-     internal Vector2 End { get; }
-     internal Vector2 InteriorNormal { get; }
+     internal readonly Vector2 Start;
+     internal readonly Vector2 End;
+     internal readonly Vector2 Segment;
+     internal readonly Vector2 Center;
+     internal readonly float LengthSquared;
+     internal readonly Vector2 InteriorNormal;
+    }
+
+    private struct BoundaryNode
+    {
+     internal BoundaryNode(int leftChild, int rightChild, int boundaryIndex)
+     {
+         LeftChild = leftChild;
+         RightChild = rightChild;
+         BoundaryIndex = boundaryIndex;
+         Minimum = Vector2.zero;
+         Maximum = Vector2.zero;
+     }
+
+     internal int LeftChild;
+     internal int RightChild;
+     internal int BoundaryIndex;
+     internal Vector2 Minimum;
+     internal Vector2 Maximum;
     }
 }
 
