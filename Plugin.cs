@@ -27,6 +27,15 @@ public sealed class Plugin : BaseUnityPlugin
 #endif
         DebugLog.Initialize(Logger);
         ModSprites.Load();
+        try
+        {
+            LiquidShaderAssets.Load();
+        }
+        catch (System.Exception exception)
+        {
+            Logger.LogError($"Could not load the liquid shader bundle: {exception}");
+        }
+
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll();
         LogInfo($"{PluginName} {PluginVersion} loaded.");
@@ -41,6 +50,7 @@ public sealed class Plugin : BaseUnityPlugin
         }
 
         _harmony?.UnpatchSelf();
+        LiquidShaderAssets.Unload();
         ModSprites.Unload();
         DebugLog.Close();
 #if LIQUID_TRANSFER_DEBUG_LOGGING

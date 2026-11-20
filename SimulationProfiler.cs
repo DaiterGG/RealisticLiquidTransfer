@@ -9,7 +9,6 @@ internal enum SimulationProfileStage
     GeometryRefreshAndIntegration,
     OffscreenCleanup,
     SpatialGrid,
-    FluidDensitySolver,
     DropCollisions,
     VelocityReconstruction,
     VelocityConstraints,

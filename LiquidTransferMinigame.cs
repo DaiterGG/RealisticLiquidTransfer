@@ -13,9 +13,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float ScreenPadding = 40f;
     private const float CollisionStep = 2f;
     private const float PivotSwitchHysteresis = 2f;
-    private const float RotationMovementInfluence = 0.96f;
-    private const float TranslationHorizontalInfluence = 0.96f;
-    private const float TranslationVerticalInfluence = 0.85f;
+    private const float RotationMovementInfluence = 1f;
+    private const float TranslationHorizontalInfluence = 1f;
+    private const float TranslationVerticalInfluence = 1f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
@@ -31,6 +31,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Image handImage;
     private Text controlsText;
     private Text volumeText;
+    private RectTransform screenRoot;
+    private Toggle shaderToggle;
+    private Toggle spawnToggle;
     private RectTransform debugTextRoot;
     private LiquidSimulation liquidSimulation;
     private HandAlphaGradient handAlphaGradient;
@@ -50,6 +53,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float rotationLastPointerAngle;
     private int rotationVerticalSector;
     private bool rotationTrackingStarted;
+    private bool clickSpawnEnabled;
     private bool transferCommitted;
     private float fitScale;
     private float controlsUpdateTimer;
@@ -120,7 +124,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     public override void Start()
     {
         var game = Minigame.game;
-        var screenRoot = new GameObject("RealisticLiquidTransferScreen", typeof(RectTransform))
+        screenRoot = new GameObject("RealisticLiquidTransferScreen", typeof(RectTransform))
             .GetComponent<RectTransform>();
         screenRoot.SetParent(game.minigameScreen, false);
         screenRoot.anchorMin = new Vector2(0.5f, 0.5f);
@@ -132,6 +136,18 @@ internal sealed class LiquidTransferMinigame : Minigame
         debugTextRoot = CreateDebugTextRoot(game.minigameScreen);
         controlsText = CreateControlsText(debugTextRoot);
         volumeText = CreateVolumeText(debugTextRoot);
+        var rightControlsX = Mathf.Max(24f, debugTextRoot.rect.width - 210f);
+        shaderToggle = CreateToggle(
+            debugTextRoot,
+            "LiquidShaderToggle",
+            "Liquid shader",
+            new Vector2(rightControlsX, -24f));
+        spawnToggle = CreateToggle(
+            debugTextRoot,
+            "ClickSpawnToggle",
+            "Spawn drops on click",
+            new Vector2(rightControlsX, -52f));
+        spawnToggle.isOn = false;
 
         receivingContainer = CreateContainer(
             screenRoot,
@@ -145,16 +161,16 @@ internal sealed class LiquidTransferMinigame : Minigame
             ModSprites.GetContainer(secondOriginalContainerSpriteName),
             Vector2.zero,
             0f);
-        var referenceVolume = EstimateSpriteVolume(ModSprites.GetContainer(ReferenceSpriteName));
-        ApplyVolumeScale(
+        var referenceArea = EstimateSpriteArea(ModSprites.GetContainer(ReferenceSpriteName));
+        ApplyAreaScale(
             receivingContainer,
             firstOriginalContainerCapacity,
-            referenceVolume,
+            referenceArea,
             firstOriginalContainerSpriteName);
-        ApplyVolumeScale(
+        ApplyAreaScale(
             sourceContainer,
             secondOriginalContainerCapacity,
-            referenceVolume,
+            referenceArea,
             secondOriginalContainerSpriteName);
         PositionContainersSideBySide(receivingContainer, sourceContainer);
 
@@ -172,6 +188,10 @@ internal sealed class LiquidTransferMinigame : Minigame
             sourceContainer.OutlinePoints,
             firstOriginalContainerAmount,
             secondOriginalContainerAmount);
+        shaderToggle.onValueChanged.AddListener(SetLiquidShaderEnabled);
+        SetLiquidShaderEnabled(shaderToggle.isOn);
+        spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
+        SetClickSpawnEnabled(spawnToggle.isOn);
         UpdateVolumeReadout();
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
@@ -226,19 +246,120 @@ internal sealed class LiquidTransferMinigame : Minigame
         var text = textObject.GetComponent<Text>();
         var rect = text.rectTransform;
         rect.SetParent(parent, false);
-        rect.anchorMin = new Vector2(0f, 0.5f);
-        rect.anchorMax = new Vector2(0f, 0.5f);
-        rect.pivot = new Vector2(0f, 0.5f);
-        rect.anchoredPosition = new Vector2(24f, 0f);
-        rect.sizeDelta = new Vector2(360f, 220f);
+        rect.anchorMin = new Vector2(1f, 0f);
+        rect.anchorMax = new Vector2(1f, 0f);
+        rect.pivot = new Vector2(1f, 0f);
+        rect.anchoredPosition = new Vector2(-24f, 120f);
+        rect.sizeDelta = new Vector2(Mathf.Min(260f, parent.rect.width * 0.32f), 160f);
 
         text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        text.fontSize = 14;
-        text.alignment = TextAnchor.MiddleLeft;
+        text.fontSize = 12;
+        text.alignment = TextAnchor.UpperRight;
         text.verticalOverflow = VerticalWrapMode.Overflow;
         text.color = Color.white;
         text.raycastTarget = false;
         return text;
+    }
+
+    private static Toggle CreateToggle(
+        RectTransform parent,
+        string name,
+        string labelText,
+        Vector2 position)
+    {
+        var toggleObject = new GameObject(
+            name,
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image),
+            typeof(Toggle));
+        var toggle = toggleObject.GetComponent<Toggle>();
+        var rect = toggle.GetComponent<RectTransform>();
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = new Vector2(20f, 20f);
+
+        var background = toggle.GetComponent<Image>();
+        background.color = new Color(0.06f, 0.08f, 0.12f, 0.9f);
+
+        var checkmark = new GameObject(
+            "Checkmark",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Image)).GetComponent<Image>();
+        var checkmarkRect = checkmark.rectTransform;
+        checkmarkRect.SetParent(rect, false);
+        checkmarkRect.anchorMin = new Vector2(0.2f, 0.2f);
+        checkmarkRect.anchorMax = new Vector2(0.8f, 0.8f);
+        checkmarkRect.offsetMin = Vector2.zero;
+        checkmarkRect.offsetMax = Vector2.zero;
+        checkmark.color = new Color(0.15f, 0.75f, 0.35f, 1f);
+        checkmark.raycastTarget = false;
+
+        var labelObject = new GameObject(
+            $"{name}Label",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Text));
+        var label = labelObject.GetComponent<Text>();
+        var labelRect = label.rectTransform;
+        labelRect.SetParent(parent, false);
+        labelRect.anchorMin = new Vector2(0f, 1f);
+        labelRect.anchorMax = new Vector2(0f, 1f);
+        labelRect.pivot = new Vector2(0f, 1f);
+        labelRect.anchoredPosition = position + new Vector2(28f, 0f);
+        labelRect.sizeDelta = new Vector2(170f, 20f);
+        label.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        label.fontSize = 14;
+        label.alignment = TextAnchor.MiddleLeft;
+        label.text = labelText;
+        label.color = Color.white;
+        label.raycastTarget = false;
+
+        toggle.targetGraphic = background;
+        toggle.graphic = checkmark;
+        toggle.transition = Selectable.Transition.None;
+        toggle.isOn = true;
+        return toggle;
+    }
+
+    private void SetLiquidShaderEnabled(bool enabled)
+    {
+        liquidSimulation.SetSurfaceShaderEnabled(enabled);
+    }
+
+    private void SetClickSpawnEnabled(bool enabled)
+    {
+        clickSpawnEnabled = enabled;
+    }
+
+    private bool IsPointerOverInteractionControl(List<RaycastResult> uiCasts)
+    {
+        foreach (var uiCast in uiCasts)
+        {
+            var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
+            if (selectable == shaderToggle || selectable == spawnToggle)
+            {
+                return true;
+            }
+        }
+
+        var canvas = shaderToggle.GetComponentInParent<Canvas>();
+        var eventCamera = canvas && canvas.renderMode != RenderMode.ScreenSpaceOverlay
+            ? canvas.worldCamera
+            : null;
+        var pointer = Input.mousePosition;
+        return RectTransformUtility.RectangleContainsScreenPoint(
+                shaderToggle.GetComponent<RectTransform>(),
+                pointer,
+                eventCamera)
+            || RectTransformUtility.RectangleContainsScreenPoint(
+                spawnToggle.GetComponent<RectTransform>(),
+                pointer,
+                eventCamera);
     }
 
     public override void Update(List<RaycastResult> uiCasts)
@@ -298,9 +419,11 @@ internal sealed class LiquidTransferMinigame : Minigame
             MoveContainer(heldVisual, targetPosition);
         }
 
-        var spawnDrops = (Input.GetMouseButton(0) || game.handClicking)
+        var spawnDrops = clickSpawnEnabled
+            && (Input.GetMouseButton(0) || game.handClicking)
             && heldContainer == null
             && activeRotationContainer == null
+            && !IsPointerOverInteractionControl(uiCasts)
             && !liquidSimulation.IsInsideContainer(pointerPosition);
         var deltaTime = Time.unscaledDeltaTime;
         liquidSimulation.Tick(deltaTime, spawnDrops, pointerPosition);
@@ -329,58 +452,58 @@ internal sealed class LiquidTransferMinigame : Minigame
             + "Liquid amount (1 drop per ml)\n"
             + $"Receiver: {liquidSimulation.GetContainerDropCount(0):N0} ml\n"
             + $"Source: {liquidSimulation.GetContainerDropCount(1):N0} ml\n\n"
-            + "Estimated capacity (outline area x width)\n"
-            + $"Receiver: {EstimateVolume(receivingContainer):N0} units^3\n"
-            + $"Source: {EstimateVolume(sourceContainer):N0} units^3";
+            + "Estimated 2D area (container outline)\n"
+            + $"Receiver: {EstimateArea(receivingContainer):N0} units^2\n"
+            + $"Source: {EstimateArea(sourceContainer):N0} units^2";
     }
 
-    private static double EstimateVolume(ContainerVisual container)
+    private static double EstimateArea(ContainerVisual container)
     {
         var scale = container.Transform.localScale;
-        var scaleVolume = System.Math.Abs((double)scale.x * scale.y * scale.x);
-        return EstimateOutlineVolume(container.OutlinePoints) * scaleVolume;
+        var scaleArea = System.Math.Abs((double)scale.x * scale.y);
+        return EstimateOutlineArea(container.OutlinePoints) * scaleArea;
     }
 
-    private static void ApplyVolumeScale(
+    private static void ApplyAreaScale(
         ContainerVisual container,
         float targetCapacity,
-        double referenceVolume,
+        double referenceArea,
         string originalSpriteName)
     {
-        var spriteVolume = EstimateOutlineVolume(container.OutlinePoints);
-        if (targetCapacity <= 0f || referenceVolume <= 0d || spriteVolume <= 0d)
+        var spriteArea = EstimateOutlineArea(container.OutlinePoints);
+        if (targetCapacity <= 0f || referenceArea <= 0d || spriteArea <= 0d)
         {
             Plugin.LogWarning(
-                $"Could not volume-scale container '{originalSpriteName}': capacity={targetCapacity:F2}, "
-                + $"reference volume={referenceVolume:F2}, sprite volume={spriteVolume:F2}; using base scale.");
+                $"Could not area-scale container '{originalSpriteName}': capacity={targetCapacity:F2}, "
+                + $"reference area={referenceArea:F2}, sprite area={spriteArea:F2}; using base scale.");
             return;
         }
 
-        var volumeRatio = (targetCapacity / referenceCapacity) * (referenceVolume / spriteVolume);
-        if (volumeRatio <= 0d || double.IsNaN(volumeRatio) || double.IsInfinity(volumeRatio))
+        var areaRatio = (targetCapacity / referenceCapacity) * (referenceArea / spriteArea);
+        if (areaRatio <= 0d || double.IsNaN(areaRatio) || double.IsInfinity(areaRatio))
         {
-            Plugin.LogWarning($"Could not calculate a valid volume scale for container '{originalSpriteName}'.");
+            Plugin.LogWarning($"Could not calculate a valid area scale for container '{originalSpriteName}'.");
             return;
         }
 
-        var linearScale = (float)System.Math.Pow(volumeRatio, 1d / 3d);
+        var linearScale = (float)System.Math.Sqrt(areaRatio);
         container.Transform.localScale = Vector3.one * (ContainerScale * linearScale);
     }
 
-    private static double EstimateSpriteVolume(Sprite sprite)
+    private static double EstimateSpriteArea(Sprite sprite)
     {
         if (!sprite
             || !ModSprites.TryFindOpening(sprite, out var openingPosition, out var openingWidth)
             || !ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out var outline))
         {
-            Plugin.LogWarning($"Could not calculate the reference volume from sprite '{ReferenceSpriteName}.png'.");
+            Plugin.LogWarning($"Could not calculate the reference area from sprite '{ReferenceSpriteName}.png'.");
             return 0d;
         }
 
-        return EstimateOutlineVolume(outline);
+        return EstimateOutlineArea(outline);
     }
 
-    private static double EstimateOutlineVolume(Vector2[] outline)
+    private static double EstimateOutlineArea(Vector2[] outline)
     {
         if (outline.Length < 3)
         {
@@ -388,18 +511,14 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         var twiceArea = 0d;
-        var minimumX = outline[0].x;
-        var maximumX = minimumX;
         for (var i = 0; i < outline.Length; i++)
         {
             var current = outline[i];
             var next = outline[(i + 1) % outline.Length];
             twiceArea += (double)current.x * next.y - (double)next.x * current.y;
-            minimumX = Mathf.Min(minimumX, current.x);
-            maximumX = Mathf.Max(maximumX, current.x);
         }
 
-        return System.Math.Abs(twiceArea) * 0.5d * (maximumX - minimumX);
+        return System.Math.Abs(twiceArea) * 0.5d;
     }
 
     private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)

@@ -2,3 +2,9 @@
 bin/
 obj/
 reference/
+unity-shader-project/AssetBundles/
+unity-shader-project/Library/
+unity-shader-project/Logs/
+unity-shader-project/Temp/
+unity-shader-project/Obj/
+unity-shader-project/UserSettings/

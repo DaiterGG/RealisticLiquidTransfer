@@ -20,12 +20,16 @@
     <Compile Include="DebugLog.cs" />
     <Compile Include="SimulationProfiler.cs" />
     <Compile Include="LiquidSimulation.cs" />
+    <Compile Include="LiquidShaderAssets.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
     <Compile Include="Patches.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="resources\*.png">
+      <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="resources\*.bundle">
       <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
@@ -48,6 +52,10 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
