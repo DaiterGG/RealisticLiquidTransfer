@@ -364,6 +364,45 @@ internal sealed class LiquidSimulation
         }
     }
 
+    internal float GetContainerLiquidAmount(int containerIndex)
+    {
+        if ((uint)containerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(containerIndex));
+        }
+
+        var amount = 0f;
+        for (var drop = 0; drop < count; drop++)
+        {
+            var position = positions[drop];
+            var inReceiver = containers[0].Contains(position);
+            var inSource = containers[1].Contains(position);
+            var assignedContainerIndex = inReceiver && inSource
+                ? (containerAssignments[drop] == 2 ? 1 : 0)
+                : inReceiver
+                    ? 0
+                    : inSource
+                        ? 1
+                        : -1;
+            if (assignedContainerIndex != containerIndex)
+            {
+                continue;
+            }
+
+            for (var unit = dropUnitHeads[drop]; unit >= 0; unit = unitNext[unit])
+            {
+                for (var component = unitComponentHeads[unit];
+                    component >= 0;
+                    component = componentNext[component])
+                {
+                    amount += componentAmounts[component];
+                }
+            }
+        }
+
+        return amount;
+    }
+
     private void CopyLiquidAmounts(float[] source, float[] destination)
     {
         if (destination == null || destination.Length < source.Length)
@@ -958,6 +997,155 @@ internal sealed class LiquidSimulation
             }
         }
 
+        return false;
+    }
+
+    internal bool ContainsContainer(int containerIndex, Vector2 point)
+    {
+        if ((uint)containerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(containerIndex));
+        }
+
+        return containers[containerIndex].Contains(point);
+    }
+
+    internal int TryTransferNearestDrop(
+        int sourceContainerIndex,
+        int destinationContainerIndex,
+        Vector2 sourcePoint,
+        float maximumSourceDistance,
+        Vector2 destinationPoint,
+        int maximumVolume,
+        Vector2 outsideVelocity)
+    {
+        if (sourceContainerIndex < -1 || sourceContainerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sourceContainerIndex));
+        }
+
+        if (destinationContainerIndex < -1 || destinationContainerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(destinationContainerIndex));
+        }
+
+        if (sourceContainerIndex == destinationContainerIndex
+            || maximumVolume <= 0
+            || maximumSourceDistance < 0f
+            || float.IsNaN(maximumSourceDistance))
+        {
+            return 0;
+        }
+
+        var sourceAssignment = (byte)(sourceContainerIndex + 1);
+        var maximumDistanceSquared = maximumSourceDistance * maximumSourceDistance;
+        var closestDistanceSquared = float.PositiveInfinity;
+        var closestDrop = -1;
+        for (var drop = 0; drop < count; drop++)
+        {
+            if (containerAssignments[drop] != sourceAssignment
+                || dropVolumes[drop] > maximumVolume)
+            {
+                continue;
+            }
+
+            var distanceSquared = (positions[drop] - sourcePoint).sqrMagnitude;
+            if (distanceSquared > maximumDistanceSquared || distanceSquared >= closestDistanceSquared)
+            {
+                continue;
+            }
+
+            closestDistanceSquared = distanceSquared;
+            closestDrop = drop;
+        }
+
+        if (closestDrop < 0)
+        {
+            return 0;
+        }
+
+        var destinationPosition = destinationPoint;
+        var destinationAssignment = (byte)(destinationContainerIndex + 1);
+        if (destinationContainerIndex >= 0)
+        {
+            var radius = GetDropRadius(closestDrop);
+            if (!TryFindTransferPosition(
+                    destinationContainerIndex,
+                    destinationPoint,
+                    radius,
+                    closestDrop,
+                    out destinationPosition))
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            destinationAssignment = 0;
+        }
+
+        positions[closestDrop] = destinationPosition;
+        previousPositions[closestDrop] = destinationPosition;
+        velocities[closestDrop] = destinationContainerIndex >= 0
+            ? Vector2.zero
+            : outsideVelocity;
+        fastOutsideDrops[closestDrop] = false;
+        containerAssignments[closestDrop] = destinationAssignment;
+        dropSizeZoneAssignments[closestDrop] = destinationContainerIndex >= 0
+            && containers[destinationContainerIndex].IsPastSizeZone(destinationPosition)
+                ? destinationAssignment
+                : (byte)0;
+        densitySwapPaths[closestDrop] = new Vector4(
+            destinationPosition.x,
+            destinationPosition.y,
+            destinationPosition.x,
+            destinationPosition.y);
+        mergeDelayRemaining[closestDrop] = 0f;
+        graphicsDirty = true;
+        return dropVolumes[closestDrop];
+    }
+
+    private bool TryFindTransferPosition(
+        int containerIndex,
+        Vector2 requestedPosition,
+        float radius,
+        int excludedDrop,
+        out Vector2 position)
+    {
+        var container = containers[containerIndex];
+        var classification = container.Classify(requestedPosition);
+        if (classification.IsInside
+            && classification.DistanceSquared >= radius * radius
+            && IsPositionEmpty(requestedPosition, radius, excludedDrop))
+        {
+            position = requestedPosition;
+            return true;
+        }
+
+        var step = Mathf.Max(1f, radius * 0.75f);
+        for (var ring = 1; ring <= 16; ring++)
+        {
+            var distance = ring * step;
+            for (var direction = 0; direction < 12; direction++)
+            {
+                var angle = direction * Mathf.PI / 6f;
+                var candidate = requestedPosition + new Vector2(
+                    Mathf.Cos(angle),
+                    Mathf.Sin(angle)) * distance;
+                classification = container.Classify(candidate);
+                if (!classification.IsInside
+                    || classification.DistanceSquared < radius * radius
+                    || !IsPositionEmpty(candidate, radius, excludedDrop))
+                {
+                    continue;
+                }
+
+                position = candidate;
+                return true;
+            }
+        }
+
+        position = Vector2.zero;
         return false;
     }
 
