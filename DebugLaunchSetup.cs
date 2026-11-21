@@ -71,14 +71,69 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        GiveContainer(body, "waterjug", fillWithWater: true);
-        GiveContainer(body, "minibarrel", fillWithWater: false);
-        GiveContainer(body, "waterbottle", fillWithWater: false);
-        Plugin.LogInfo("Debug startup: equipped the main player with a full water jug, empty mini barrel, and empty water bottle.");
+        GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }, equip: true, barrelIndex: -1);
+        GiveContainer(body, "minibarrel", EqualDensityMixture, equip: true, barrelIndex: -1);
+        GiveContainer(
+            body,
+            "waterbottle",
+            System.Array.Empty<LiquidMix>(),
+            equip: true,
+            barrelIndex: -1);
+        for (var index = 1; index < TestBarrelMixtures.Length; index++)
+        {
+            GiveContainer(
+                body,
+                "minibarrel",
+                TestBarrelMixtures[index],
+                equip: false,
+                barrelIndex: index);
+        }
+
+        Plugin.LogInfo(
+            "Debug startup: equipped a full water jug, equal-density mini barrel, and empty water bottle; "
+            + $"spawned {TestBarrelMixtures.Length - 1} additional mixed-liquid mini barrels nearby.");
     }
 
-    private static void GiveContainer(Body body, string itemId, bool fillWithWater)
+    private static readonly LiquidMix[] EqualDensityMixture =
     {
+        new LiquidMix("Clean water", 0.34f),
+        new LiquidMix("Coffee", 0.33f),
+        new LiquidMix("Dirty water", 0.33f)
+    };
+
+    private static readonly LiquidMix[][] TestBarrelMixtures =
+    {
+        EqualDensityMixture,
+        new[]
+        {
+            new LiquidMix("Alcohol", 0.30f),
+            new LiquidMix("Oil", 0.30f),
+            new LiquidMix("Clean water", 0.40f)
+        },
+        new[]
+        {
+            new LiquidMix("Coffee", 0.35f),
+            new LiquidMix("Milk", 0.35f),
+            new LiquidMix("Red blood", 0.30f)
+        },
+        new[]
+        {
+            new LiquidMix("Clean water", 0.60f),
+            new LiquidMix("Red sludge", 0.20f),
+            new LiquidMix("Mercury", 0.20f)
+        }
+    };
+
+    private static void GiveContainer(
+        Body body,
+        string itemId,
+        LiquidMix[] mixture,
+        bool equip,
+        int barrelIndex)
+    {
+        var spawnPosition = equip
+            ? body.transform.position
+            : body.transform.position + new Vector3(1.25f + barrelIndex * 1.1f, 1.25f, 0f);
         var prefab = Resources.Load<GameObject>(itemId);
         if (!prefab)
         {
@@ -86,7 +141,7 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        var instance = Object.Instantiate(prefab, body.transform.position, Quaternion.identity);
+        var instance = Object.Instantiate(prefab, spawnPosition, Quaternion.identity);
         var item = instance.GetComponent<Item>();
         var container = instance.GetComponent<WaterContainerItem>();
         if (!item || !container)
@@ -97,10 +152,31 @@ internal static class DebugLaunchTutorialPatch
         }
 
         container.DrainAll();
-        if (fillWithWater && container.AddLiquid("water", container.Capacity) < container.Capacity)
+        foreach (var portion in mixture)
         {
-            Object.Destroy(instance);
-            Plugin.LogError($"Debug startup: could not fill '{itemId}' with water.");
+            if (!TryResolveLiquidId(portion.LiquidName, out var liquidId))
+            {
+                Object.Destroy(instance);
+                return;
+            }
+
+            var amount = container.Capacity * portion.Fraction;
+            var added = container.AddLiquid(liquidId, amount);
+            if (Mathf.Abs(added - amount) > 0.001f)
+            {
+                Object.Destroy(instance);
+                Plugin.LogError(
+                    $"Debug startup: '{itemId}' accepted {added:0.###} of {amount:0.###} mL "
+                    + $"of '{liquidId}'.");
+                return;
+            }
+        }
+
+        if (!equip)
+        {
+            Plugin.LogInfo(
+                $"Debug startup: spawned mixed-liquid '{itemId}' at {spawnPosition} "
+                + $"with {container.CurrentTotal:0} mL.");
             return;
         }
 
@@ -120,7 +196,36 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        Plugin.LogInfo($"Debug startup: equipped '{itemId}' in slot {slotIndex} with {container.CurrentTotal:0} mL.");
+        Plugin.LogInfo(
+            $"Debug startup: equipped '{itemId}' in slot {slotIndex} with {container.CurrentTotal:0} mL.");
+    }
+
+    private static bool TryResolveLiquidId(string liquidName, out string liquidId)
+    {
+        liquidId = null;
+        if (Liquids.Registry == null)
+        {
+            Plugin.LogError("Debug startup: liquid registry is unavailable.");
+            return false;
+        }
+
+        if (Liquids.Registry.ContainsKey(liquidName))
+        {
+            liquidId = liquidName;
+            return true;
+        }
+
+        foreach (var entry in Liquids.Registry)
+        {
+            if (LiquidDensityCatalog.MatchesIdentifier(entry.Key, liquidName))
+            {
+                liquidId = entry.Key;
+                return true;
+            }
+        }
+
+        Plugin.LogError($"Debug startup: liquid '{liquidName}' was not found in the game registry.");
+        return false;
     }
 
     private static int FindEmptySlot(Body body, bool handsOnly)
@@ -135,6 +240,18 @@ internal static class DebugLaunchTutorialPatch
         }
 
         return -1;
+    }
+
+    private readonly struct LiquidMix
+    {
+        internal LiquidMix(string liquidName, float fraction)
+        {
+            LiquidName = liquidName;
+            Fraction = fraction;
+        }
+
+        internal string LiquidName { get; }
+        internal float Fraction { get; }
     }
 }
 #endif

@@ -21,6 +21,20 @@ internal static class LiquidDensityCatalog
         return DensityByLiquidName.TryGetValue(NormalizeIdentifier(liquidId), out density);
     }
 
+    internal static bool MatchesIdentifier(string liquidId, string requestedName)
+    {
+        if (string.IsNullOrWhiteSpace(liquidId) || string.IsNullOrWhiteSpace(requestedName))
+        {
+            return false;
+        }
+
+        var normalizedId = NormalizeIdentifier(liquidId);
+        var normalizedName = NormalizeIdentifier(requestedName);
+        return string.Equals(normalizedId, normalizedName, StringComparison.Ordinal)
+            || (normalizedId == "water" && normalizedName == "cleanwater")
+            || (normalizedId == "cleanwater" && normalizedName == "water");
+    }
+
     private static Dictionary<string, float> CreateDensityMap()
     {
         var definitions = new (string Name, float Density)[]
@@ -30,6 +44,7 @@ internal static class LiquidDensityCatalog
             ("Carbonated water", 1.00f),
             ("Chocolate milk", 1.05f),
             ("Clean water", 1.00f),
+            ("Water", 1.00f),
             ("Coffee", 1.00f),
             ("Dirty water", 1.00f),
             ("Energy drink", 1.03f),
