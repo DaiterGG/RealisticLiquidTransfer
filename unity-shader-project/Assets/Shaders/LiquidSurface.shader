@@ -3,6 +3,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
     Properties
     {
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
+        _LiquidColorTex ("Liquid Color Texture", 2D) = "white" {}
         _Color ("Liquid Color", Color) = (0.16, 0.5, 0.95, 1)
 
         _StencilComp ("Stencil Comparison", Float) = 8
@@ -57,6 +58,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
             #include "UnityUI.cginc"
 
             sampler2D _MainTex;
+            sampler2D _LiquidColorTex;
             float4 _MainTex_TexelSize;
             float4 _Color;
             float4 _ClipRect;
@@ -89,6 +91,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
             fixed4 frag(v2f input) : SV_Target
             {
                 float density = tex2D(_MainTex, input.uv).r;
+                float3 liquidColor = tex2D(_LiquidColorTex, input.uv).rgb;
                 float leftDensity = tex2D(_MainTex, input.uv - float2(_MainTex_TexelSize.x, 0.0)).r;
                 float rightDensity = tex2D(_MainTex, input.uv + float2(_MainTex_TexelSize.x, 0.0)).r;
                 float downDensity = tex2D(_MainTex, input.uv - float2(0.0, _MainTex_TexelSize.y)).r;
@@ -106,7 +109,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float alpha = smoothstep(0.44, 0.56, density);
                 float edge = 1.0 - smoothstep(0.55, 0.8, density);
 
-                fixed4 color = input.color;
+                fixed4 color = fixed4(liquidColor, input.color.a);
                 color.rgb *= diffuse;
                 color.rgb = lerp(color.rgb * 0.62, color.rgb, 1.0 - edge * 0.35);
                 color.rgb = lerp(color.rgb, color.rgb * float3(0.62, 0.78, 0.96), trailingEdge * 0.35);

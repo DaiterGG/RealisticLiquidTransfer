@@ -8,8 +8,11 @@
 
 StructuredBuffer<float4> _DropData;
 StructuredBuffer<float> _DropRadii;
+StructuredBuffer<float4> _DropColors;
 RWStructuredBuffer<int4> _Accumulation;
+RWStructuredBuffer<int3> _ColorAccumulation;
 RWTexture2D<float4> _DensityOutput;
+RWTexture2D<float4> _ColorOutput;
 
 int _TextureWidth;
 int _TextureHeight;
@@ -30,6 +33,7 @@ void ClearAccumulation(uint3 dispatchId : SV_DispatchThreadID)
     }
 
     _Accumulation[dispatchId.x] = int4(0, 0, 0, 0);
+    _ColorAccumulation[dispatchId.x] = int3(0, 0, 0);
 }
 
 [numthreads(8, 8, 1)]
@@ -45,6 +49,7 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
     float2 position = drop.xy;
     float2 velocity = drop.zw;
     float dropRadius = _DropRadii[dropIndex];
+    float4 dropColor = _DropColors[dropIndex];
     float supportRadius = dropRadius * 2.2;
     float inverseSupportRadiusSquared = 1.0 / (supportRadius * supportRadius);
     float speed = length(velocity);
@@ -101,12 +106,18 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
             int weight = (int)round(contribution * VELOCITY_SCALE);
             int velocityX = (int)round(velocityRatio.x * contribution * VELOCITY_SCALE);
             int velocityY = (int)round(velocityRatio.y * contribution * VELOCITY_SCALE);
+            int colorR = (int)round(dropColor.r * contribution * VELOCITY_SCALE);
+            int colorG = (int)round(dropColor.g * contribution * VELOCITY_SCALE);
+            int colorB = (int)round(dropColor.b * contribution * VELOCITY_SCALE);
             uint pixelIndex = (uint)(pixel.y * _TextureWidth + pixel.x);
             int ignored;
             InterlockedAdd(_Accumulation[pixelIndex].x, densityIncrement, ignored);
             InterlockedAdd(_Accumulation[pixelIndex].y, weight, ignored);
             InterlockedAdd(_Accumulation[pixelIndex].z, velocityX, ignored);
             InterlockedAdd(_Accumulation[pixelIndex].w, velocityY, ignored);
+            InterlockedAdd(_ColorAccumulation[pixelIndex].x, colorR, ignored);
+            InterlockedAdd(_ColorAccumulation[pixelIndex].y, colorG, ignored);
+            InterlockedAdd(_ColorAccumulation[pixelIndex].z, colorB, ignored);
         }
     }
 }
@@ -128,4 +139,13 @@ void ResolveDensity(uint3 dispatchId : SV_DispatchThreadID)
         min(accumulated.x, 255) / 255.0,
         round((encodedVelocity * 0.5 + 0.5) * 255.0) / 255.0,
         accumulated.y > 0 ? 1.0 : 0.0);
+    int3 colorAccumulated = _ColorAccumulation[pixelIndex];
+    float4 liquidColor = accumulated.y > 0
+        ? float4(
+            saturate((float)colorAccumulated.x / accumulated.y),
+            saturate((float)colorAccumulated.y / accumulated.y),
+            saturate((float)colorAccumulated.z / accumulated.y),
+            1.0)
+        : float4(0.16, 0.5, 0.95, 1.0);
+    _ColorOutput[dispatchId.xy] = liquidColor;
 }

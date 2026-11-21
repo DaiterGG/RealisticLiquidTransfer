@@ -30,16 +30,20 @@ internal static class StartLiquidTransferPatch
         var secondCapacity = GetContainerCapacity(wat2, "second");
         var firstAmount = GetContainerAmount(wat1, "first");
         var secondAmount = GetContainerAmount(wat2, "second");
+        var firstComposition = GetContainerComposition(wat1, "first");
+        var secondComposition = GetContainerComposition(wat2, "second");
         MinigameBase.main.StartMinigame(
             new LiquidTransferMinigame(
                 wat1,
                 firstSpriteName,
                 firstCapacity,
                 firstAmount,
+                firstComposition,
                 wat2,
                 secondSpriteName,
                 secondCapacity,
-                secondAmount),
+                secondAmount,
+                secondComposition),
             null);
         return false;
     }
@@ -53,6 +57,61 @@ internal static class StartLiquidTransferPatch
         }
 
         return container.CurrentTotal;
+    }
+
+    internal static LiquidProfileEntry[] GetContainerComposition(
+        WaterContainerItem container,
+        string containerLabel)
+    {
+        if (!container || container.stack == null || container.stack.Count == 0)
+        {
+            return Array.Empty<LiquidProfileEntry>();
+        }
+
+        var validCount = 0;
+        foreach (var stack in container.stack)
+        {
+            if (stack != null
+                && !string.IsNullOrWhiteSpace(stack.liquidId)
+                && stack.amount > 0f
+                && !float.IsNaN(stack.amount)
+                && !float.IsInfinity(stack.amount))
+            {
+                validCount++;
+            }
+        }
+
+        var composition = new LiquidProfileEntry[validCount];
+        var index = 0;
+        foreach (var stack in container.stack)
+        {
+            if (stack == null
+                || string.IsNullOrWhiteSpace(stack.liquidId)
+                || stack.amount <= 0f
+                || float.IsNaN(stack.amount)
+                || float.IsInfinity(stack.amount))
+            {
+                continue;
+            }
+
+            var color = Color.white;
+            if (Liquids.Registry == null
+                || !Liquids.Registry.TryGetValue(stack.liquidId, out var liquidType)
+                || liquidType == null)
+            {
+                Plugin.LogWarning(
+                    $"Could not resolve liquid '{stack.liquidId}' in the {containerLabel} container; "
+                    + "using white for its liquid color.");
+            }
+            else
+            {
+                color = liquidType.color;
+            }
+
+            composition[index++] = new LiquidProfileEntry(stack.liquidId, stack.amount, color);
+        }
+
+        return composition;
     }
 
     internal static float GetContainerCapacity(WaterContainerItem container, string containerLabel)
@@ -138,7 +197,8 @@ internal static class StartLiquidDrainMinigamePatch
                     container,
                     StartLiquidTransferPatch.GetContainerSpriteName(container, "drain"),
                     StartLiquidTransferPatch.GetContainerCapacity(container, "drain"),
-                    StartLiquidTransferPatch.GetContainerAmount(container, "drain")),
+                    StartLiquidTransferPatch.GetContainerAmount(container, "drain"),
+                    StartLiquidTransferPatch.GetContainerComposition(container, "drain")),
                 null);
             return false;
         }

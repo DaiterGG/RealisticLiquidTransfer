@@ -6,6 +6,20 @@ using UnityEngine.UI;
 
 namespace RealisticLiquidTransfer;
 
+internal readonly struct LiquidProfileEntry
+{
+    internal LiquidProfileEntry(string liquidId, float amount, Color color)
+    {
+        LiquidId = liquidId;
+        Amount = amount;
+        Color = color;
+    }
+
+    internal string LiquidId { get; }
+    internal float Amount { get; }
+    internal Color Color { get; }
+}
+
 internal sealed class LiquidSimulation
 {
     private const int MaximumDrops = 20000;
@@ -46,6 +60,15 @@ internal sealed class LiquidSimulation
     private readonly bool[] openingTransitions;
     private readonly int[] containerDropSizes;
     private readonly int[] initialContainerDropCounts;
+    private readonly LiquidProfileEntry[][] liquidProfiles;
+    private readonly int[][] liquidProfileTypeIndices;
+    private readonly int liquidTypeCapacity;
+    private readonly string[] liquidIds;
+    private readonly Vector4[] liquidTypeColors;
+    private readonly float[] initialSimulatedLiquidAmounts;
+    private readonly float[] remainingProfileAmounts;
+    private readonly int[] liquidProfileCursors = new int[2];
+    private int liquidTypeCount;
     private Vector2[] positions = new Vector2[MaximumDrops];
     private Vector2[] previousPositions = new Vector2[MaximumDrops];
     private Vector2[] velocities = new Vector2[MaximumDrops];
@@ -55,6 +78,9 @@ internal sealed class LiquidSimulation
     private byte[] dropVolumes = new byte[MaximumDrops];
     private byte[] containerAssignments = new byte[MaximumDrops];
     private byte[] dropSizeZoneAssignments = new byte[MaximumDrops];
+    private Vector4[] dropColors = new Vector4[MaximumDrops];
+    private int[] dropUnitHeads = new int[MaximumDrops];
+    private int[] dropUnitTails = new int[MaximumDrops];
     private Vector2[] reorderedPositions = new Vector2[MaximumDrops];
     private Vector2[] reorderedPreviousPositions = new Vector2[MaximumDrops];
     private Vector2[] reorderedVelocities = new Vector2[MaximumDrops];
@@ -64,17 +90,36 @@ internal sealed class LiquidSimulation
     private byte[] reorderedDropVolumes = new byte[MaximumDrops];
     private byte[] reorderedContainerAssignments = new byte[MaximumDrops];
     private byte[] reorderedDropSizeZoneAssignments = new byte[MaximumDrops];
+    private Vector4[] reorderedDropColors = new Vector4[MaximumDrops];
+    private int[] reorderedDropUnitHeads = new int[MaximumDrops];
+    private int[] reorderedDropUnitTails = new int[MaximumDrops];
+    private int[] unitNext = new int[MaximumDrops];
+    private int[] unitComponentHeads = new int[MaximumDrops];
+    private int[] unitComponentTails = new int[MaximumDrops];
+    private int[] componentTypeIndices;
+    private float[] componentAmounts;
+    private int[] componentNext;
+    private float[] remainingSimulatedAmounts;
+    private float[] spawnWeightTotals;
+    private float[] spawnWeightPrefixes;
+    private int freeUnitHead;
+    private int freeComponentHead;
     private readonly List<LiquidDropGraphic> individualDropGraphics = new List<LiquidDropGraphic>();
     private readonly int[] pendingMergeIndices = new int[MaximumDropVolume];
     private LiquidSurfaceGraphic surfaceGraphic;
     private Texture2D densityTexture;
     private RenderTexture densityRenderTexture;
+    private Texture2D densityColorTexture;
+    private RenderTexture densityColorRenderTexture;
     private Texture2D densityUploadTexture;
     private Color32[] densityPixels;
     private Color32[] densityUploadPixels;
     private Vector3[] densityVelocityFields;
+    private Vector4[] densityWeightedColors;
+    private Color32[] densityColorPixels;
     private Vector4[] computeDropData;
     private float[] computeDropRadii;
+    private Vector4[] computeDropColors;
     private int[] activeDensityPixelIndices;
     private int activeDensityPixelCount;
     private int densityTextureWidth;
@@ -86,8 +131,10 @@ internal sealed class LiquidSimulation
     private int rasterizeDropsKernel;
     private int resolveDensityKernel;
     private ComputeBuffer densityAccumulationBuffer;
+    private ComputeBuffer colorAccumulationBuffer;
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
+    private ComputeBuffer computeDropColorBuffer;
     private ComputeShader densityComputeShader;
     private bool supportsPartialTextureCopy;
     private bool useComputeRendering;
@@ -147,9 +194,35 @@ internal sealed class LiquidSimulation
         float secondCapacity,
         float firstAmount,
         float secondAmount,
+        LiquidProfileEntry[] firstLiquidComposition,
+        LiquidProfileEntry[] secondLiquidComposition,
         float initialPacking = 1.75f)
     {
         this.root = root;
+        liquidProfiles = new[]
+        {
+            firstLiquidComposition ?? Array.Empty<LiquidProfileEntry>(),
+            secondLiquidComposition ?? Array.Empty<LiquidProfileEntry>()
+        };
+        liquidTypeCapacity = liquidProfiles[0].Length + liquidProfiles[1].Length;
+        liquidProfileTypeIndices = new[]
+        {
+            new int[liquidProfiles[0].Length],
+            new int[liquidProfiles[1].Length]
+        };
+        var profileEntryCapacity = liquidProfiles[0].Length + liquidProfiles[1].Length;
+        liquidIds = new string[liquidTypeCapacity];
+        liquidTypeColors = new Vector4[liquidTypeCapacity];
+        initialSimulatedLiquidAmounts = new float[2 * liquidTypeCapacity];
+        remainingProfileAmounts = new float[profileEntryCapacity];
+        spawnWeightTotals = new float[3];
+        spawnWeightPrefixes = new float[3 * liquidTypeCapacity];
+        componentTypeIndices = new int[MaximumDrops + profileEntryCapacity];
+        componentAmounts = new float[componentTypeIndices.Length];
+        componentNext = new int[componentTypeIndices.Length];
+        remainingSimulatedAmounts = new float[2];
+        InitializeLiquidProfiles(firstAmount, secondAmount);
+        InitializeLiquidNodePools();
         var screen = root.parent as RectTransform;
         if (!screen)
         {
@@ -201,6 +274,390 @@ internal sealed class LiquidSimulation
     }
 
     internal int Count => totalLiquidUnits;
+    internal int LiquidTypeCount => liquidTypeCount;
+    internal int LiquidTypeBufferLength => liquidTypeCapacity;
+
+    internal string GetLiquidId(int typeIndex)
+    {
+        if ((uint)typeIndex >= liquidTypeCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(typeIndex));
+        }
+
+        return liquidIds[typeIndex];
+    }
+
+    internal void GetInitialSimulatedLiquidAmounts(float[] amounts)
+    {
+        CopyLiquidAmounts(initialSimulatedLiquidAmounts, amounts);
+    }
+
+    internal void GetFinalSimulatedLiquidAmounts(float[] amounts)
+    {
+        if (amounts == null || amounts.Length < initialSimulatedLiquidAmounts.Length)
+        {
+            throw new ArgumentException("The liquid amount buffer is too small.", nameof(amounts));
+        }
+
+        Array.Clear(amounts, 0, initialSimulatedLiquidAmounts.Length);
+        for (var drop = 0; drop < count; drop++)
+        {
+            var position = positions[drop];
+            var inReceiver = containers[0].Contains(position);
+            var inSource = containers[1].Contains(position);
+            var containerIndex = inReceiver && inSource
+                ? (containerAssignments[drop] == 2 ? 1 : 0)
+                : inReceiver
+                    ? 0
+                    : inSource
+                        ? 1
+                        : -1;
+            if (containerIndex < 0)
+            {
+                continue;
+            }
+
+            var outputOffset = containerIndex * liquidTypeCapacity;
+            for (var unit = dropUnitHeads[drop]; unit >= 0; unit = unitNext[unit])
+            {
+                for (var component = unitComponentHeads[unit];
+                    component >= 0;
+                    component = componentNext[component])
+                {
+                    amounts[outputOffset + componentTypeIndices[component]] += componentAmounts[component];
+                }
+            }
+        }
+    }
+
+    private void CopyLiquidAmounts(float[] source, float[] destination)
+    {
+        if (destination == null || destination.Length < source.Length)
+        {
+            throw new ArgumentException("The liquid amount buffer is too small.", nameof(destination));
+        }
+
+        Array.Copy(source, destination, source.Length);
+    }
+
+    private void InitializeLiquidProfiles(float firstAmount, float secondAmount)
+    {
+        var profileTotals = new float[2];
+        for (var container = 0; container < liquidProfiles.Length; container++)
+        {
+            var profile = liquidProfiles[container];
+            var profileTypeIndexes = liquidProfileTypeIndices[container];
+            var profileOffset = container == 0 ? 0 : liquidProfiles[0].Length;
+            for (var entry = 0; entry < profile.Length; entry++)
+            {
+                var liquid = profile[entry];
+                if (string.IsNullOrWhiteSpace(liquid.LiquidId)
+                    || liquid.Amount <= 0f
+                    || float.IsNaN(liquid.Amount)
+                    || float.IsInfinity(liquid.Amount))
+                {
+                    throw new InvalidOperationException(
+                        $"Container {container + 1} has an invalid liquid profile entry at index {entry}.");
+                }
+
+                var typeIndex = FindLiquidType(liquid.LiquidId);
+                if (typeIndex < 0)
+                {
+                    typeIndex = liquidTypeCount++;
+                    liquidIds[typeIndex] = liquid.LiquidId;
+                    liquidTypeColors[typeIndex] = new Vector4(
+                        liquid.Color.r,
+                        liquid.Color.g,
+                        liquid.Color.b,
+                        1f);
+                }
+
+                profileTypeIndexes[entry] = typeIndex;
+                remainingProfileAmounts[profileOffset + entry] = liquid.Amount;
+                spawnWeightPrefixes[container * liquidTypeCapacity + typeIndex] += liquid.Amount;
+                profileTotals[container] += liquid.Amount;
+            }
+        }
+
+        var containerAmounts = new[] { firstAmount, secondAmount };
+        for (var container = 0; container < 2; container++)
+        {
+            if (Mathf.Abs(profileTotals[container] - containerAmounts[container]) > 0.01f)
+            {
+                throw new InvalidOperationException(
+                    $"Liquid stack amounts in container {container + 1} sum to {profileTotals[container]:F3} ml, "
+                    + $"but the game reports {containerAmounts[container]:F3} ml.");
+            }
+
+            remainingSimulatedAmounts[container] = Mathf.Min(
+                profileTotals[container],
+                GetInitialDropCount(containerAmounts[container]));
+        }
+
+        for (var container = 0; container < 2; container++)
+        {
+            var cumulative = 0f;
+            var offset = container * liquidTypeCapacity;
+            for (var type = 0; type < liquidTypeCount; type++)
+            {
+                cumulative += spawnWeightPrefixes[offset + type];
+                spawnWeightPrefixes[offset + type] = cumulative;
+            }
+
+            spawnWeightTotals[container] = cumulative;
+        }
+
+        var allCumulative = 0f;
+        var previousReceiverCumulative = 0f;
+        var previousSourceCumulative = 0f;
+        for (var type = 0; type < liquidTypeCount; type++)
+        {
+            var receiverCumulative = spawnWeightPrefixes[type];
+            var sourceCumulative = spawnWeightPrefixes[liquidTypeCapacity + type];
+            allCumulative += receiverCumulative - previousReceiverCumulative
+                + sourceCumulative - previousSourceCumulative;
+            spawnWeightPrefixes[2 * liquidTypeCapacity + type] = allCumulative;
+            previousReceiverCumulative = receiverCumulative;
+            previousSourceCumulative = sourceCumulative;
+        }
+        spawnWeightTotals[2] = allCumulative;
+    }
+
+    private int FindLiquidType(string liquidId)
+    {
+        for (var type = 0; type < liquidTypeCount; type++)
+        {
+            if (string.Equals(liquidIds[type], liquidId, StringComparison.Ordinal))
+            {
+                return type;
+            }
+        }
+
+        return -1;
+    }
+
+    private void InitializeLiquidNodePools()
+    {
+        for (var unit = 0; unit < MaximumDrops; unit++)
+        {
+            unitNext[unit] = unit + 1 < MaximumDrops ? unit + 1 : -1;
+            dropUnitHeads[unit] = -1;
+            dropUnitTails[unit] = -1;
+            reorderedDropUnitHeads[unit] = -1;
+            reorderedDropUnitTails[unit] = -1;
+        }
+
+        freeUnitHead = MaximumDrops > 0 ? 0 : -1;
+        for (var component = 0; component < componentNext.Length; component++)
+        {
+            componentNext[component] = component + 1 < componentNext.Length
+                ? component + 1
+                : -1;
+        }
+
+        freeComponentHead = componentNext.Length > 0 ? 0 : -1;
+    }
+
+    private void CreateInitialDropUnits(int dropIndex, int containerIndex, int volume)
+    {
+        var head = -1;
+        var tail = -1;
+        for (var member = 0; member < volume; member++)
+        {
+            var unit = AllocateLiquidUnit();
+            var remaining = Mathf.Min(1f, remainingSimulatedAmounts[containerIndex]);
+            var profileOffset = containerIndex == 0 ? 0 : liquidProfiles[0].Length;
+            var profile = liquidProfiles[containerIndex];
+            var cursor = liquidProfileCursors[containerIndex];
+            while (remaining > 0.00001f && cursor < profile.Length)
+            {
+                var amountIndex = profileOffset + cursor;
+                var available = remainingProfileAmounts[amountIndex];
+                if (available <= 0.00001f)
+                {
+                    cursor++;
+                    continue;
+                }
+
+                var amount = Mathf.Min(remaining, available);
+                var typeIndex = liquidProfileTypeIndices[containerIndex][cursor];
+                AppendComponentToUnit(unit, typeIndex, amount);
+                initialSimulatedLiquidAmounts[containerIndex * liquidTypeCapacity + typeIndex] += amount;
+                remainingProfileAmounts[amountIndex] -= amount;
+                remainingSimulatedAmounts[containerIndex] -= amount;
+                remaining -= amount;
+                if (remainingProfileAmounts[amountIndex] <= 0.00001f)
+                {
+                    cursor++;
+                }
+            }
+
+            if (remaining > 0.0001f)
+            {
+                throw new InvalidOperationException(
+                    $"Container {containerIndex + 1} has simulated liquid without a valid liquid ID.");
+            }
+
+            liquidProfileCursors[containerIndex] = cursor;
+            AppendUnit(ref head, ref tail, unit);
+        }
+
+        dropUnitHeads[dropIndex] = head;
+        dropUnitTails[dropIndex] = tail;
+        dropColors[dropIndex] = GetColorForUnits(head);
+    }
+
+    private void CreateSpawnDropUnits(int dropIndex, int assignment, int volume)
+    {
+        var head = -1;
+        var tail = -1;
+        for (var member = 0; member < volume; member++)
+        {
+            var typeIndex = SelectSpawnLiquidType(assignment);
+            if (typeIndex < 0)
+            {
+                throw new InvalidOperationException(
+                    "Cannot spawn simulated liquid because neither container has a liquid ID.");
+            }
+
+            var unit = AllocateLiquidUnit();
+            AppendComponentToUnit(unit, typeIndex, 1f);
+            AppendUnit(ref head, ref tail, unit);
+        }
+
+        dropUnitHeads[dropIndex] = head;
+        dropUnitTails[dropIndex] = tail;
+        dropColors[dropIndex] = GetColorForUnits(head);
+    }
+
+    private int SelectSpawnLiquidType(int assignment)
+    {
+        var profileIndex = assignment is 1 or 2 && spawnWeightTotals[assignment - 1] > 0f
+            ? assignment - 1
+            : 2;
+        var total = spawnWeightTotals[profileIndex];
+        if (total <= 0f)
+        {
+            return -1;
+        }
+
+        var randomWeight = NextRandom() * total;
+        var offset = profileIndex * liquidTypeCapacity;
+        var low = 0;
+        var high = liquidTypeCount;
+        while (low < high)
+        {
+            var middle = low + (high - low) / 2;
+            if (spawnWeightPrefixes[offset + middle] <= randomWeight)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle;
+            }
+        }
+
+        return Mathf.Min(low, liquidTypeCount - 1);
+    }
+
+    private int AllocateLiquidUnit()
+    {
+        if (freeUnitHead < 0)
+        {
+            throw new InvalidOperationException("The simulated liquid-unit pool is exhausted.");
+        }
+
+        var unit = freeUnitHead;
+        freeUnitHead = unitNext[unit];
+        unitNext[unit] = -1;
+        unitComponentHeads[unit] = -1;
+        unitComponentTails[unit] = -1;
+        return unit;
+    }
+
+    private void AppendComponentToUnit(int unit, int typeIndex, float amount)
+    {
+        if (freeComponentHead < 0)
+        {
+            throw new InvalidOperationException("The simulated liquid-component pool is exhausted.");
+        }
+
+        var component = freeComponentHead;
+        freeComponentHead = componentNext[component];
+        componentTypeIndices[component] = typeIndex;
+        componentAmounts[component] = amount;
+        componentNext[component] = -1;
+        if (unitComponentHeads[unit] < 0)
+        {
+            unitComponentHeads[unit] = component;
+        }
+        else
+        {
+            componentNext[unitComponentTails[unit]] = component;
+        }
+
+        unitComponentTails[unit] = component;
+    }
+
+    private void AppendUnit(ref int head, ref int tail, int unit)
+    {
+        if (head < 0)
+        {
+            head = unit;
+        }
+        else
+        {
+            unitNext[tail] = unit;
+        }
+
+        tail = unit;
+    }
+
+    private Vector4 GetColorForUnits(int head)
+    {
+        var color = Vector4.zero;
+        var amountTotal = 0f;
+        for (var unit = head; unit >= 0; unit = unitNext[unit])
+        {
+            for (var component = unitComponentHeads[unit];
+                component >= 0;
+                component = componentNext[component])
+            {
+                var amount = componentAmounts[component];
+                color += liquidTypeColors[componentTypeIndices[component]] * amount;
+                amountTotal += amount;
+            }
+        }
+
+        return amountTotal > 0f
+            ? new Vector4(color.x / amountTotal, color.y / amountTotal, color.z / amountTotal, 1f)
+            : new Vector4(0.16f, 0.5f, 0.95f, 1f);
+    }
+
+    private void ReleaseDropLiquidUnits(int dropIndex)
+    {
+        var unit = dropUnitHeads[dropIndex];
+        while (unit >= 0)
+        {
+            var nextUnit = unitNext[unit];
+            var component = unitComponentHeads[unit];
+            while (component >= 0)
+            {
+                var nextComponent = componentNext[component];
+                componentNext[component] = freeComponentHead;
+                freeComponentHead = component;
+                component = nextComponent;
+            }
+
+            unitNext[unit] = freeUnitHead;
+            freeUnitHead = unit;
+            unit = nextUnit;
+        }
+
+        dropUnitHeads[dropIndex] = -1;
+        dropUnitTails[dropIndex] = -1;
+    }
 
     internal void SetDropRadius(float radius)
     {
@@ -638,7 +1095,8 @@ internal sealed class LiquidSimulation
                     candidate,
                     Vector2.zero,
                     (byte)(containerIndex + 1),
-                    volume);
+                    volume,
+                    seedFromProfile: true);
                 topSeededPosition = candidate;
                 seeded += volume;
                 remaining -= volume;
@@ -675,7 +1133,7 @@ internal sealed class LiquidSimulation
 
     private void Spawn(Vector2 position)
     {
-        if (totalLiquidUnits >= MaximumDrops)
+        if (totalLiquidUnits >= MaximumDrops || liquidTypeCount == 0)
         {
             return;
         }
@@ -829,7 +1287,8 @@ internal sealed class LiquidSimulation
         Vector2 position,
         Vector2 velocity,
         byte containerAssignment,
-        int volume)
+        int volume,
+        bool seedFromProfile = false)
     {
         if (count >= MaximumDrops)
         {
@@ -860,6 +1319,14 @@ internal sealed class LiquidSimulation
             && containers[assignment - 1].IsPastSizeZone(position)
                 ? assignment
                 : (byte)0;
+        if (seedFromProfile)
+        {
+            CreateInitialDropUnits(count, assignment - 1, volume);
+        }
+        else
+        {
+            CreateSpawnDropUnits(count, assignment, volume);
+        }
         mergeDelayRemaining[count] = volume == 1
             && assignment > 0
             && containers[assignment - 1].IsPastMergeSizeZone(position)
@@ -1002,15 +1469,22 @@ internal sealed class LiquidSimulation
 
             totalLiquidUnits -= deletedVolume;
             count--;
-            positions[i] = positions[count];
-            previousPositions[i] = previousPositions[count];
-            velocities[i] = velocities[count];
-            dropIds[i] = dropIds[count];
-            dropVolumes[i] = dropVolumes[count];
-            containerAssignments[i] = containerAssignments[count];
-            dropSizeZoneAssignments[i] = dropSizeZoneAssignments[count];
-            mergeDelayRemaining[i] = mergeDelayRemaining[count];
-            fastOutsideDrops[i] = fastOutsideDrops[count];
+            ReleaseDropLiquidUnits(i);
+            if (i != count)
+            {
+                positions[i] = positions[count];
+                previousPositions[i] = previousPositions[count];
+                velocities[i] = velocities[count];
+                dropIds[i] = dropIds[count];
+                dropVolumes[i] = dropVolumes[count];
+                containerAssignments[i] = containerAssignments[count];
+                dropSizeZoneAssignments[i] = dropSizeZoneAssignments[count];
+                dropColors[i] = dropColors[count];
+                dropUnitHeads[i] = dropUnitHeads[count];
+                dropUnitTails[i] = dropUnitTails[count];
+                mergeDelayRemaining[i] = mergeDelayRemaining[count];
+                fastOutsideDrops[i] = fastOutsideDrops[count];
+            }
             offscreenDeleted++;
         }
     }
@@ -1498,6 +1972,7 @@ internal sealed class LiquidSimulation
                             aggregatePosition,
                             aggregatePosition,
                             velocities[first]);
+                        MergePendingDropUnits(outputCount - 1, pendingCount);
                         pendingCount = 0;
                     }
 
@@ -1537,6 +2012,9 @@ internal sealed class LiquidSimulation
         SwapBuffers(ref dropVolumes, ref reorderedDropVolumes);
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
         SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
+        SwapBuffers(ref dropColors, ref reorderedDropColors);
+        SwapBuffers(ref dropUnitHeads, ref reorderedDropUnitHeads);
+        SwapBuffers(ref dropUnitTails, ref reorderedDropUnitTails);
         SwapBuffers(ref fastOutsideDrops, ref reorderedFastOutsideDrops);
         graphicsDirty = true;
         return true;
@@ -1544,8 +2022,16 @@ internal sealed class LiquidSimulation
 
     private void WriteSplitDrops(int source, byte sizeZoneAssignment, ref int outputCount)
     {
+        var unit = dropUnitHeads[source];
         for (var member = 0; member < dropVolumes[source]; member++)
         {
+            if (unit < 0)
+            {
+                throw new InvalidOperationException("A merged liquid drop lost one of its constituent units.");
+            }
+
+            var nextUnit = unitNext[unit];
+            unitNext[unit] = -1;
             var offset = GetSplitDropOffset(member);
             WriteNormalizedDrop(
                 outputCount++,
@@ -1556,6 +2042,16 @@ internal sealed class LiquidSimulation
                 positions[source] + offset,
                 previousPositions[source] + offset,
                 velocities[source]);
+            var output = outputCount - 1;
+            reorderedDropUnitHeads[output] = unit;
+            reorderedDropUnitTails[output] = unit;
+            reorderedDropColors[output] = GetColorForUnits(unit);
+            unit = nextUnit;
+        }
+
+        if (unit >= 0)
+        {
+            throw new InvalidOperationException("A merged liquid drop has more constituent units than its volume.");
         }
     }
 
@@ -1569,7 +2065,40 @@ internal sealed class LiquidSimulation
         reorderedDropVolumes[destination] = dropVolumes[source];
         reorderedContainerAssignments[destination] = containerAssignments[source];
         reorderedDropSizeZoneAssignments[destination] = dropSizeZoneAssignments[source];
+        reorderedDropColors[destination] = dropColors[source];
+        reorderedDropUnitHeads[destination] = dropUnitHeads[source];
+        reorderedDropUnitTails[destination] = dropUnitTails[source];
         reorderedFastOutsideDrops[destination] = fastOutsideDrops[source];
+    }
+
+    private void MergePendingDropUnits(int destination, int pendingCount)
+    {
+        var first = pendingMergeIndices[0];
+        var head = dropUnitHeads[first];
+        var tail = dropUnitTails[first];
+        var next = unitNext[tail];
+        if (next >= 0)
+        {
+            throw new InvalidOperationException("A single liquid drop contains more than one constituent unit.");
+        }
+
+        for (var pending = 1; pending < pendingCount; pending++)
+        {
+            var source = pendingMergeIndices[pending];
+            var sourceHead = dropUnitHeads[source];
+            var sourceTail = dropUnitTails[source];
+            if (sourceHead < 0 || sourceHead != sourceTail || unitNext[sourceTail] >= 0)
+            {
+                throw new InvalidOperationException("A single liquid drop has invalid constituent-unit data.");
+            }
+
+            unitNext[tail] = sourceHead;
+            tail = sourceTail;
+        }
+
+        reorderedDropUnitHeads[destination] = head;
+        reorderedDropUnitTails[destination] = tail;
+        reorderedDropColors[destination] = GetColorForUnits(head);
     }
 
     private Vector2 GetSplitDropOffset(int member)
@@ -1670,6 +2199,8 @@ internal sealed class LiquidSimulation
         reorderedDropVolumes[index] = (byte)volume;
         reorderedContainerAssignments[index] = containerAssignment;
         reorderedDropSizeZoneAssignments[index] = sizeZoneAssignment;
+        reorderedDropUnitHeads[index] = -1;
+        reorderedDropUnitTails[index] = -1;
         reorderedFastOutsideDrops[index] = false;
     }
 
@@ -1691,6 +2222,9 @@ internal sealed class LiquidSimulation
             reorderedDropVolumes[sortedIndex] = dropVolumes[sourceIndex];
             reorderedContainerAssignments[sortedIndex] = containerAssignments[sourceIndex];
             reorderedDropSizeZoneAssignments[sortedIndex] = dropSizeZoneAssignments[sourceIndex];
+            reorderedDropColors[sortedIndex] = dropColors[sourceIndex];
+            reorderedDropUnitHeads[sortedIndex] = dropUnitHeads[sourceIndex];
+            reorderedDropUnitTails[sortedIndex] = dropUnitTails[sourceIndex];
             reorderedFastOutsideDrops[sortedIndex] = fastOutsideDrops[sourceIndex];
         }
 
@@ -1702,6 +2236,9 @@ internal sealed class LiquidSimulation
         SwapBuffers(ref dropVolumes, ref reorderedDropVolumes);
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
         SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
+        SwapBuffers(ref dropColors, ref reorderedDropColors);
+        SwapBuffers(ref dropUnitHeads, ref reorderedDropUnitHeads);
+        SwapBuffers(ref dropUnitTails, ref reorderedDropUnitTails);
         SwapBuffers(ref fastOutsideDrops, ref reorderedFastOutsideDrops);
     }
 
@@ -2113,6 +2650,34 @@ internal sealed class LiquidSimulation
                 densityRenderTexture = null;
                 useComputeRendering = false;
             }
+            if (useComputeRendering)
+            {
+                densityColorRenderTexture = new RenderTexture(
+                    densityTextureWidth,
+                    densityTextureHeight,
+                    0,
+                    RenderTextureFormat.ARGB32,
+                    RenderTextureReadWrite.Linear)
+                {
+                    name = "LiquidColor",
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp,
+                    enableRandomWrite = true,
+                    useMipMap = false,
+                    autoGenerateMips = false
+                };
+                if (!densityColorRenderTexture.Create())
+                {
+                    Debug.LogWarning(
+                        "[RealisticLiquidTransfer] Could not create the compute liquid color texture; "
+                        + "falling back to the CPU liquid renderer.");
+                    UnityEngine.Object.Destroy(densityRenderTexture);
+                    densityRenderTexture = null;
+                    UnityEngine.Object.Destroy(densityColorRenderTexture);
+                    densityColorRenderTexture = null;
+                    useComputeRendering = false;
+                }
+            }
         }
 
         if (useComputeRendering)
@@ -2140,17 +2705,21 @@ internal sealed class LiquidSimulation
             (minimumScreenY + maximumScreenY) * 0.5f);
         surfaceGraphic.color = new Color(0.16f, 0.5f, 0.95f, 1f);
         surfaceGraphic.SetDensityTexture(useComputeRendering ? densityRenderTexture : densityTexture);
+        surfaceGraphic.SetLiquidColorTexture(
+            useComputeRendering ? densityColorRenderTexture : densityColorTexture);
         surfaceGraphic.SetDensityUploadTexture(densityUploadTexture);
         if (useComputeRendering)
         {
             surfaceGraphic.SetComputeBuffers(
                 densityAccumulationBuffer,
                 computeDropDataBuffer,
-                computeDropRadiusBuffer);
+                computeDropRadiusBuffer,
+                computeDropColorBuffer,
+                colorAccumulationBuffer);
         }
         if (LiquidShaderAssets.SurfaceMaterial)
         {
-            surfaceGraphic.material = LiquidShaderAssets.SurfaceMaterial;
+            surfaceGraphic.SetSurfaceMaterial(new Material(LiquidShaderAssets.SurfaceMaterial));
         }
 
         surfaceGraphic.raycastTarget = false;
@@ -2190,10 +2759,13 @@ internal sealed class LiquidSimulation
     {
         densityPixels = new Color32[densityComputePixelCount];
         densityVelocityFields = new Vector3[densityPixels.Length];
+        densityWeightedColors = new Vector4[densityPixels.Length];
+        densityColorPixels = new Color32[densityPixels.Length];
         activeDensityPixelIndices = new int[densityPixels.Length];
         for (var i = 0; i < densityPixels.Length; i++)
         {
             densityPixels[i] = new Color32(0, 128, 128, 0);
+            densityColorPixels[i] = new Color32(41, 128, 243, 255);
         }
 
         densityTexture = new Texture2D(
@@ -2210,6 +2782,20 @@ internal sealed class LiquidSimulation
         supportsPartialTextureCopy = SystemInfo.copyTextureSupport != CopyTextureSupport.None;
         densityTexture.SetPixels32(densityPixels);
         densityTexture.Apply(false, false);
+
+        densityColorTexture = new Texture2D(
+            densityTextureWidth,
+            densityTextureHeight,
+            TextureFormat.RGBA32,
+            false,
+            true)
+        {
+            name = "LiquidColor",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        densityColorTexture.SetPixels32(densityColorPixels);
+        densityColorTexture.Apply(false, false);
     }
 
     private void InitializeComputeRendering()
@@ -2221,17 +2807,28 @@ internal sealed class LiquidSimulation
             densityComputePixelCount,
             sizeof(int) * 4,
             ComputeBufferType.Structured);
+        colorAccumulationBuffer = new ComputeBuffer(
+            densityComputePixelCount,
+            sizeof(int) * 3,
+            ComputeBufferType.Structured);
         computeDropDataBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
         computeDropRadiusBuffer = new ComputeBuffer(MaximumDrops, sizeof(float), ComputeBufferType.Structured);
+        computeDropColorBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
         computeDropData = new Vector4[MaximumDrops];
         computeDropRadii = new float[MaximumDrops];
+        computeDropColors = new Vector4[MaximumDrops];
 
         densityComputeShader.SetBuffer(clearAccumulationKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_Accumulation", densityAccumulationBuffer);
+        densityComputeShader.SetBuffer(clearAccumulationKernel, "_ColorAccumulation", colorAccumulationBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_ColorAccumulation", colorAccumulationBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropData", computeDropDataBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropRadii", computeDropRadiusBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropColors", computeDropColorBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_Accumulation", densityAccumulationBuffer);
+        densityComputeShader.SetBuffer(resolveDensityKernel, "_ColorAccumulation", colorAccumulationBuffer);
         densityComputeShader.SetTexture(resolveDensityKernel, "_DensityOutput", densityRenderTexture);
+        densityComputeShader.SetTexture(resolveDensityKernel, "_ColorOutput", densityColorRenderTexture);
         densityComputeShader.SetInt("_TextureWidth", densityTextureWidth);
         densityComputeShader.SetInt("_TextureHeight", densityTextureHeight);
         densityComputeShader.SetInt("_PixelCount", densityComputePixelCount);
@@ -2275,6 +2872,8 @@ internal sealed class LiquidSimulation
             var pixelIndex = activeDensityPixelIndices[index];
             densityPixels[pixelIndex] = new Color32(0, 128, 128, 0);
             densityVelocityFields[pixelIndex] = Vector3.zero;
+            densityWeightedColors[pixelIndex] = Vector4.zero;
+            densityColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
             IncludeDensityPixel(pixelIndex, ref minimumX, ref minimumY, ref maximumX, ref maximumY);
         }
         activeDensityPixelCount = 0;
@@ -2345,6 +2944,12 @@ internal sealed class LiquidSimulation
                     velocityField.y += velocity.x * contribution;
                     velocityField.z += velocity.y * contribution;
                     densityVelocityFields[pixelIndex] = velocityField;
+                    var weightedColor = densityWeightedColors[pixelIndex];
+                    weightedColor.x += dropColors[drop].x * contribution;
+                    weightedColor.y += dropColors[drop].y * contribution;
+                    weightedColor.z += dropColors[drop].z * contribution;
+                    weightedColor.w += contribution;
+                    densityWeightedColors[pixelIndex] = weightedColor;
                 }
             }
         }
@@ -2364,11 +2969,21 @@ internal sealed class LiquidSimulation
             densityPixels[i].g = (byte)Mathf.RoundToInt((averageVelocityX * 0.5f + 0.5f) * byte.MaxValue);
             densityPixels[i].b = (byte)Mathf.RoundToInt((averageVelocityY * 0.5f + 0.5f) * byte.MaxValue);
             densityPixels[i].a = byte.MaxValue;
+            var weightedColor = densityWeightedColors[i];
+            if (weightedColor.w > 0.0001f)
+            {
+                densityColorPixels[i] = new Color32(
+                    (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.x / weightedColor.w) * byte.MaxValue),
+                    (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.y / weightedColor.w) * byte.MaxValue),
+                    (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.z / weightedColor.w) * byte.MaxValue),
+                    byte.MaxValue);
+            }
         }
 
         if (maximumX >= minimumX && maximumY >= minimumY)
         {
             UploadDensityRegion(minimumX, minimumY, maximumX, maximumY);
+            UploadLiquidColorRegion(minimumX, minimumY, maximumX, maximumY);
         }
     }
 
@@ -2380,12 +2995,14 @@ internal sealed class LiquidSimulation
             var velocity = velocities[i];
             computeDropData[i] = new Vector4(position.x, position.y, velocity.x, velocity.y);
             computeDropRadii[i] = GetDropRadius(i);
+            computeDropColors[i] = dropColors[i];
         }
 
         if (count > 0)
         {
             computeDropDataBuffer.SetData(computeDropData, 0, 0, count);
             computeDropRadiusBuffer.SetData(computeDropRadii, 0, 0, count);
+            computeDropColorBuffer.SetData(computeDropColors, 0, 0, count);
         }
 
         densityComputeShader.SetInt("_DropCount", count);
@@ -2464,6 +3081,57 @@ internal sealed class LiquidSimulation
             minimumY);
     }
 
+    private void UploadLiquidColorRegion(
+        int minimumX,
+        int minimumY,
+        int maximumX,
+        int maximumY)
+    {
+        var width = maximumX - minimumX + 1;
+        var height = maximumY - minimumY + 1;
+        var textureArea = densityTextureWidth * densityTextureHeight;
+        if (!supportsPartialTextureCopy || width * height >= textureArea)
+        {
+            densityColorTexture.SetPixels32(densityColorPixels);
+            densityColorTexture.Apply(false, false);
+            return;
+        }
+
+        EnsureDensityUploadTexture(width, height);
+        if (densityUploadPixels.Length >= textureArea)
+        {
+            densityColorTexture.SetPixels32(densityColorPixels);
+            densityColorTexture.Apply(false, false);
+            return;
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            Array.Copy(
+                densityColorPixels,
+                (minimumY + y) * densityTextureWidth + minimumX,
+                densityUploadPixels,
+                y * densityUploadTextureWidth,
+                width);
+        }
+
+        densityUploadTexture.SetPixels32(densityUploadPixels);
+        densityUploadTexture.Apply(false, false);
+        Graphics.CopyTexture(
+            densityUploadTexture,
+            0,
+            0,
+            0,
+            0,
+            width,
+            height,
+            densityColorTexture,
+            0,
+            0,
+            minimumX,
+            minimumY);
+    }
+
     private void EnsureDensityUploadTexture(int width, int height)
     {
         if (densityUploadTextureWidth >= width && densityUploadTextureHeight >= height)
@@ -2505,6 +3173,7 @@ internal sealed class LiquidSimulation
             individualDropGraphics[i].SetDrops(
                 positions,
                 dropVolumes,
+                dropColors,
                 start,
                 length,
                 dropRadius * 0.88f,
@@ -3509,11 +4178,15 @@ internal sealed class LiquidSimulation
 internal sealed class LiquidSurfaceGraphic : MaskableGraphic
 {
     private Texture densityTexture;
+    private Texture liquidColorTexture;
     private Texture2D densityUploadTexture;
     private RenderTexture densityRenderTexture;
     private ComputeBuffer densityAccumulationBuffer;
+    private ComputeBuffer colorAccumulationBuffer;
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
+    private ComputeBuffer computeDropColorBuffer;
+    private Material surfaceMaterial;
 
     public override Texture mainTexture => densityTexture ? densityTexture : s_WhiteTexture;
 
@@ -3524,6 +4197,25 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         SetVerticesDirty();
     }
 
+    internal void SetLiquidColorTexture(Texture texture)
+    {
+        liquidColorTexture = texture;
+        if (surfaceMaterial)
+        {
+            surfaceMaterial.SetTexture("_LiquidColorTex", texture);
+        }
+    }
+
+    internal void SetSurfaceMaterial(Material material)
+    {
+        surfaceMaterial = material;
+        this.material = material;
+        if (liquidColorTexture)
+        {
+            surfaceMaterial.SetTexture("_LiquidColorTex", liquidColorTexture);
+        }
+    }
+
     internal void SetDensityUploadTexture(Texture2D texture)
     {
         densityUploadTexture = texture;
@@ -3532,11 +4224,15 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
     internal void SetComputeBuffers(
         ComputeBuffer accumulation,
         ComputeBuffer dropData,
-        ComputeBuffer dropRadii)
+        ComputeBuffer dropRadii,
+        ComputeBuffer dropColors,
+        ComputeBuffer colorAccumulation)
     {
         densityAccumulationBuffer = accumulation;
         computeDropDataBuffer = dropData;
         computeDropRadiusBuffer = dropRadii;
+        computeDropColorBuffer = dropColors;
+        colorAccumulationBuffer = colorAccumulation;
     }
 
     protected override void OnPopulateMesh(VertexHelper vertexHelper)
@@ -3580,13 +4276,32 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
             Destroy(densityUploadTexture);
             densityUploadTexture = null;
         }
+        if (liquidColorTexture is RenderTexture colorRenderTexture)
+        {
+            colorRenderTexture.Release();
+            Destroy(colorRenderTexture);
+        }
+        else if (liquidColorTexture)
+        {
+            Destroy(liquidColorTexture);
+        }
+        liquidColorTexture = null;
 
         densityAccumulationBuffer?.Release();
         densityAccumulationBuffer = null;
+        colorAccumulationBuffer?.Release();
+        colorAccumulationBuffer = null;
         computeDropDataBuffer?.Release();
         computeDropDataBuffer = null;
         computeDropRadiusBuffer?.Release();
         computeDropRadiusBuffer = null;
+        computeDropColorBuffer?.Release();
+        computeDropColorBuffer = null;
+        if (surfaceMaterial)
+        {
+            Destroy(surfaceMaterial);
+            surfaceMaterial = null;
+        }
 
         base.OnDestroy();
     }
@@ -3602,10 +4317,12 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
     private int count;
     private float radius;
     private byte[] volumes;
+    private Vector4[] colors;
 
     internal void SetDrops(
         Vector2[] dropPositions,
         byte[] dropVolumes,
+        Vector4[] dropColors,
         int first,
         int length,
         float dropRadius,
@@ -3613,6 +4330,7 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
     {
         positions = dropPositions;
         volumes = dropVolumes;
+        colors = dropColors;
         start = first;
         count = length;
         radius = dropRadius;
@@ -3632,11 +4350,12 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
         {
             var center = positions[start + drop] - localOffset;
             var dropRadius = radius * Mathf.Sqrt(Mathf.Max(1, volumes[start + drop]));
+            var dropColor = colors[start + drop];
             var centerIndex = vertexHelper.currentVertCount;
-            AddVertex(vertexHelper, center);
+            AddVertex(vertexHelper, center, dropColor);
             for (var segment = 0; segment < UnitCircle.Length; segment++)
             {
-                AddVertex(vertexHelper, center + UnitCircle[segment] * dropRadius);
+                AddVertex(vertexHelper, center + UnitCircle[segment] * dropRadius, dropColor);
             }
 
             for (var segment = 0; segment < UnitCircle.Length; segment++)
@@ -3647,10 +4366,10 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
         }
     }
 
-    private void AddVertex(VertexHelper vertexHelper, Vector2 position)
+    private void AddVertex(VertexHelper vertexHelper, Vector2 position, Vector4 dropColor)
     {
         var vertex = UIVertex.simpleVert;
-        vertex.color = color;
+        vertex.color = new Color(dropColor.x, dropColor.y, dropColor.z, dropColor.w) * color;
         vertex.position = position;
         vertex.uv0 = new Vector2(0.5f, 0.5f);
         vertexHelper.AddVert(vertex);
