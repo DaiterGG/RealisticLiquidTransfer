@@ -44,10 +44,13 @@ internal sealed class LiquidSimulation
     private const float Gravity = 420f;
     private const float GravityMultiplier = 2f;
     private const float FixedStep = 1f / 30f;
-    private const float DensityRebalanceInterval = 0.2f;
-    private const float DensityRebalanceMaximumSpeed = 8f;
-    private const float DensityRebalanceVelocityKick = 4f;
-    private const float DensityComparisonTolerance = 0.005f;
+    private const float DensitySwapCheckInterval = 0.1f;
+    private const float DensitySwapDuration = 0.75f;
+    private const float DensitySwapCooldown = 1f;
+    private const float DensitySwapMaximumSpeed = 8f;
+    private const float DensitySwapComparisonTolerance = 0.005f;
+    private const int DensitySwapCandidateBudget = 96;
+    private const int MaximumConcurrentDensitySwapDrops = 4;
     private const float VelocityRampDuration = 2f;
     private const float OutsideDropExtraBoundsPadding = 1f;
     internal const int MinimumDropCollisionPasses = 2;
@@ -85,7 +88,8 @@ internal sealed class LiquidSimulation
     private byte[] containerAssignments = new byte[MaximumDrops];
     private byte[] dropSizeZoneAssignments = new byte[MaximumDrops];
     private Vector4[] dropColors = new Vector4[MaximumDrops];
-    private float[] dropDensities = new float[MaximumDrops];
+    private Vector4[] densitySwapPaths = new Vector4[MaximumDrops];
+    private float[] densitySwapProgress = new float[MaximumDrops];
     private int[] dropUnitHeads = new int[MaximumDrops];
     private int[] dropUnitTails = new int[MaximumDrops];
     private Vector2[] reorderedPositions = new Vector2[MaximumDrops];
@@ -98,7 +102,8 @@ internal sealed class LiquidSimulation
     private byte[] reorderedContainerAssignments = new byte[MaximumDrops];
     private byte[] reorderedDropSizeZoneAssignments = new byte[MaximumDrops];
     private Vector4[] reorderedDropColors = new Vector4[MaximumDrops];
-    private float[] reorderedDropDensities = new float[MaximumDrops];
+    private Vector4[] reorderedDensitySwapPaths = new Vector4[MaximumDrops];
+    private float[] reorderedDensitySwapProgress = new float[MaximumDrops];
     private int[] reorderedDropUnitHeads = new int[MaximumDrops];
     private int[] reorderedDropUnitTails = new int[MaximumDrops];
     private int[] unitNext = new int[MaximumDrops];
@@ -143,6 +148,7 @@ internal sealed class LiquidSimulation
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
     private ComputeBuffer computeDropColorBuffer;
+    private ComputeBuffer computeDropSwapPathBuffer;
     private ComputeShader densityComputeShader;
     private bool supportsPartialTextureCopy;
     private bool useComputeRendering;
@@ -190,8 +196,10 @@ internal sealed class LiquidSimulation
     private int mergedAggregatesThisInterval;
     private int splitAggregatesThisInterval;
     private int largestSplitBatchThisInterval;
-    private float densityRebalanceTimer;
-    private int densityRebalancePhase;
+    private float densitySwapCheckTimer;
+    private int densitySwapScanCursor;
+    private int activeDensitySwapCount;
+    private float densitySwapCooldownRemaining;
     private uint randomState = 0xA341316Cu;
 
     internal LiquidSimulation(
@@ -548,7 +556,6 @@ internal sealed class LiquidSimulation
         dropUnitHeads[dropIndex] = head;
         dropUnitTails[dropIndex] = tail;
         dropColors[dropIndex] = GetColorForUnits(head);
-        dropDensities[dropIndex] = GetDensityForUnits(head);
     }
 
     private int SelectInitialProfileEntry(int containerIndex, ref int cursor)
@@ -635,7 +642,6 @@ internal sealed class LiquidSimulation
         dropUnitHeads[dropIndex] = head;
         dropUnitTails[dropIndex] = tail;
         dropColors[dropIndex] = GetColorForUnits(head);
-        dropDensities[dropIndex] = GetDensityForUnits(head);
     }
 
     private int SelectSpawnLiquidType(int assignment)
@@ -741,27 +747,6 @@ internal sealed class LiquidSimulation
         return amountTotal > 0f
             ? new Vector4(color.x / amountTotal, color.y / amountTotal, color.z / amountTotal, 1f)
             : new Vector4(0.16f, 0.5f, 0.95f, 1f);
-    }
-
-    private float GetDensityForUnits(int head)
-    {
-        var weightedDensity = 0f;
-        var totalAmount = 0f;
-        for (var unit = head; unit >= 0; unit = unitNext[unit])
-        {
-            for (var component = unitComponentHeads[unit];
-                component >= 0;
-                component = componentNext[component])
-            {
-                var amount = componentAmounts[component];
-                weightedDensity += liquidTypeDensities[componentTypeIndices[component]] * amount;
-                totalAmount += amount;
-            }
-        }
-
-        return totalAmount > 0f
-            ? weightedDensity / totalAmount
-            : LiquidDensityCatalog.DefaultDensity;
     }
 
     private void ReleaseDropLiquidUnits(int dropIndex)
@@ -1456,6 +1441,8 @@ internal sealed class LiquidSimulation
         {
             CreateSpawnDropUnits(count, assignment, volume);
         }
+        densitySwapPaths[count] = new Vector4(position.x, position.y, position.x, position.y);
+        densitySwapProgress[count] = -1f;
         mergeDelayRemaining[count] = volume == 1
             && assignment > 0
             && containers[assignment - 1].IsPastMergeSizeZone(position)
@@ -1475,10 +1462,36 @@ internal sealed class LiquidSimulation
             1f,
             Mathf.Clamp01(velocityRampElapsed / VelocityRampDuration));
         UpdateOutsideDropFastPath(deltaTime, velocityRampRatio);
+        densitySwapCooldownRemaining = Mathf.Max(
+            0f,
+            densitySwapCooldownRemaining - deltaTime);
         for (var i = 0; i < count; i++)
         {
             previousPositions[i] = positions[i];
             mergeDelayRemaining[i] = Mathf.Max(0f, mergeDelayRemaining[i] - deltaTime);
+            if (activeDensitySwapCount > 0 && densitySwapProgress[i] >= 0f)
+            {
+                var progress = Mathf.Min(
+                    1f,
+                    densitySwapProgress[i] + deltaTime / DensitySwapDuration);
+                densitySwapProgress[i] = progress;
+                var easedProgress = progress * progress * (3f - 2f * progress);
+                var path = densitySwapPaths[i];
+                positions[i] = Vector2.Lerp(
+                    new Vector2(path.x, path.y),
+                    new Vector2(path.z, path.w),
+                    easedProgress);
+                if (progress >= 1f)
+                {
+                    positions[i] = new Vector2(path.z, path.w);
+                    densitySwapProgress[i] = -1f;
+                    densitySwapCooldownRemaining = DensitySwapCooldown;
+                    activeDensitySwapCount--;
+                }
+
+                continue;
+            }
+
             velocities[i].y -= Gravity * GravityMultiplier * deltaTime;
             velocities[i] *= velocityRampRatio;
             positions[i] += velocities[i] * deltaTime;
@@ -1573,6 +1586,12 @@ internal sealed class LiquidSimulation
     {
         for (var i = 0; i < count;)
         {
+            if (activeDensitySwapCount > 0 && densitySwapProgress[i] >= 0f)
+            {
+                i++;
+                continue;
+            }
+
             var position = positions[i];
             var fullyOutsideScreen = IsOutsideScreen(position, GetDropRadius(i));
             if (!fullyOutsideScreen || IsInsideContainer(position))
@@ -1609,7 +1628,11 @@ internal sealed class LiquidSimulation
                 containerAssignments[i] = containerAssignments[count];
                 dropSizeZoneAssignments[i] = dropSizeZoneAssignments[count];
                 dropColors[i] = dropColors[count];
-                dropDensities[i] = dropDensities[count];
+                densitySwapProgress[i] = densitySwapProgress[count];
+                if (activeDensitySwapCount > 0)
+                {
+                    densitySwapPaths[i] = densitySwapPaths[count];
+                }
                 dropUnitHeads[i] = dropUnitHeads[count];
                 dropUnitTails[i] = dropUnitTails[count];
                 mergeDelayRemaining[i] = mergeDelayRemaining[count];
@@ -1675,7 +1698,8 @@ internal sealed class LiquidSimulation
     {
         for (var i = 0; i < count; i++)
         {
-            if (fastOutsideDrops[i])
+            if (fastOutsideDrops[i]
+                || (activeDensitySwapCount > 0 && densitySwapProgress[i] >= 0f))
             {
                 continue;
             }
@@ -2059,6 +2083,12 @@ internal sealed class LiquidSimulation
                     continue;
                 }
 
+                if (activeDensitySwapCount > 0 && densitySwapProgress[i] >= 0f)
+                {
+                    CopyNormalizedDrop(i, outputCount++);
+                    continue;
+                }
+
                 if (dropVolumes[i] == targetVolume && mergeDelayRemaining[i] <= 0f)
                 {
                     CopyNormalizedDrop(i, outputCount++);
@@ -2143,7 +2173,11 @@ internal sealed class LiquidSimulation
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
         SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
         SwapBuffers(ref dropColors, ref reorderedDropColors);
-        SwapBuffers(ref dropDensities, ref reorderedDropDensities);
+        SwapBuffers(ref densitySwapProgress, ref reorderedDensitySwapProgress);
+        if (activeDensitySwapCount > 0)
+        {
+            SwapBuffers(ref densitySwapPaths, ref reorderedDensitySwapPaths);
+        }
         SwapBuffers(ref dropUnitHeads, ref reorderedDropUnitHeads);
         SwapBuffers(ref dropUnitTails, ref reorderedDropUnitTails);
         SwapBuffers(ref fastOutsideDrops, ref reorderedFastOutsideDrops);
@@ -2177,7 +2211,6 @@ internal sealed class LiquidSimulation
             reorderedDropUnitHeads[output] = unit;
             reorderedDropUnitTails[output] = unit;
             reorderedDropColors[output] = GetColorForUnits(unit);
-            reorderedDropDensities[output] = GetDensityForUnits(unit);
             unit = nextUnit;
         }
 
@@ -2198,7 +2231,11 @@ internal sealed class LiquidSimulation
         reorderedContainerAssignments[destination] = containerAssignments[source];
         reorderedDropSizeZoneAssignments[destination] = dropSizeZoneAssignments[source];
         reorderedDropColors[destination] = dropColors[source];
-        reorderedDropDensities[destination] = dropDensities[source];
+        reorderedDensitySwapProgress[destination] = densitySwapProgress[source];
+        if (activeDensitySwapCount > 0)
+        {
+            reorderedDensitySwapPaths[destination] = densitySwapPaths[source];
+        }
         reorderedDropUnitHeads[destination] = dropUnitHeads[source];
         reorderedDropUnitTails[destination] = dropUnitTails[source];
         reorderedFastOutsideDrops[destination] = fastOutsideDrops[source];
@@ -2232,7 +2269,6 @@ internal sealed class LiquidSimulation
         reorderedDropUnitHeads[destination] = head;
         reorderedDropUnitTails[destination] = tail;
         reorderedDropColors[destination] = GetColorForUnits(head);
-        reorderedDropDensities[destination] = GetDensityForUnits(head);
     }
 
     private Vector2 GetSplitDropOffset(int member)
@@ -2333,9 +2369,14 @@ internal sealed class LiquidSimulation
         reorderedDropVolumes[index] = (byte)volume;
         reorderedContainerAssignments[index] = containerAssignment;
         reorderedDropSizeZoneAssignments[index] = sizeZoneAssignment;
+        reorderedDensitySwapPaths[index] = new Vector4(
+            position.x,
+            position.y,
+            position.x,
+            position.y);
+        reorderedDensitySwapProgress[index] = -1f;
         reorderedDropUnitHeads[index] = -1;
         reorderedDropUnitTails[index] = -1;
-        reorderedDropDensities[index] = LiquidDensityCatalog.DefaultDensity;
         reorderedFastOutsideDrops[index] = false;
     }
 
@@ -2358,7 +2399,11 @@ internal sealed class LiquidSimulation
             reorderedContainerAssignments[sortedIndex] = containerAssignments[sourceIndex];
             reorderedDropSizeZoneAssignments[sortedIndex] = dropSizeZoneAssignments[sourceIndex];
             reorderedDropColors[sortedIndex] = dropColors[sourceIndex];
-            reorderedDropDensities[sortedIndex] = dropDensities[sourceIndex];
+            reorderedDensitySwapProgress[sortedIndex] = densitySwapProgress[sourceIndex];
+            if (activeDensitySwapCount > 0)
+            {
+                reorderedDensitySwapPaths[sortedIndex] = densitySwapPaths[sourceIndex];
+            }
             reorderedDropUnitHeads[sortedIndex] = dropUnitHeads[sourceIndex];
             reorderedDropUnitTails[sortedIndex] = dropUnitTails[sourceIndex];
             reorderedFastOutsideDrops[sortedIndex] = fastOutsideDrops[sourceIndex];
@@ -2373,7 +2418,11 @@ internal sealed class LiquidSimulation
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
         SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
         SwapBuffers(ref dropColors, ref reorderedDropColors);
-        SwapBuffers(ref dropDensities, ref reorderedDropDensities);
+        SwapBuffers(ref densitySwapProgress, ref reorderedDensitySwapProgress);
+        if (activeDensitySwapCount > 0)
+        {
+            SwapBuffers(ref densitySwapPaths, ref reorderedDensitySwapPaths);
+        }
         SwapBuffers(ref dropUnitHeads, ref reorderedDropUnitHeads);
         SwapBuffers(ref dropUnitTails, ref reorderedDropUnitTails);
         SwapBuffers(ref fastOutsideDrops, ref reorderedFastOutsideDrops);
@@ -2390,141 +2439,279 @@ internal sealed class LiquidSimulation
     {
         BuildSpatialGrid();
         ResolveSpatialGridPairs(true);
-        ApplyDensityRebalance();
+        TryStartDensitySwaps();
     }
 
-    private void ApplyDensityRebalance()
+    private void TryStartDensitySwaps()
     {
-        densityRebalanceTimer += FixedStep;
-        if (densityRebalanceTimer < DensityRebalanceInterval)
+        if (count == 0
+            || activeDensitySwapCount >= MaximumConcurrentDensitySwapDrops
+            || densitySwapCooldownRemaining > 0f)
         {
             return;
         }
 
-        densityRebalanceTimer -= DensityRebalanceInterval;
-        densityRebalancePhase ^= 1;
-        var maximumSpeedSquared =
-            DensityRebalanceMaximumSpeed * DensityRebalanceMaximumSpeed;
-        for (var drop = 0; drop < count; drop++)
+        densitySwapCheckTimer += FixedStep;
+        if (densitySwapCheckTimer < DensitySwapCheckInterval)
         {
-            if ((dropIds[drop] & 1) != densityRebalancePhase)
+            return;
+        }
+
+        densitySwapCheckTimer %= DensitySwapCheckInterval;
+        densitySwapScanCursor %= count;
+        var candidatesToCheck = Mathf.Min(count, DensitySwapCandidateBudget);
+        var maximumSpeedSquared = DensitySwapMaximumSpeed * DensitySwapMaximumSpeed;
+        for (var candidateIndex = 0; candidateIndex < candidatesToCheck; candidateIndex++)
+        {
+            var drop = densitySwapScanCursor++;
+            if (densitySwapScanCursor >= count)
+            {
+                densitySwapScanCursor = 0;
+            }
+
+            if (activeDensitySwapCount >= MaximumConcurrentDensitySwapDrops)
+            {
+                break;
+            }
+
+            if (densitySwapProgress[drop] >= 0f
+                || dropVolumes[drop] != 1
+                || containerAssignments[drop] == 0
+                || containerAssignments[drop] > containers.Length
+                || velocities[drop].sqrMagnitude > maximumSpeedSquared)
             {
                 continue;
             }
 
-            var containerAssignment = containerAssignments[drop];
-            if (containerAssignment == 0 || containerAssignment > containers.Length)
-            {
-                continue;
-            }
-
-            if (velocities[drop].sqrMagnitude > maximumSpeedSquared)
-            {
-                continue;
-            }
-
-            var containerIndex = containerAssignment - 1;
+            var containerIndex = containerAssignments[drop] - 1;
             var position = positions[drop];
             if (!containers[containerIndex].Contains(position))
             {
                 continue;
             }
 
-            var dropRadiusForSearch = GetDropRadius(drop);
-            var largestNeighborRadius =
-                dropRadius * Mathf.Sqrt(containerDropSizes[containerIndex]);
-            var searchRadius = dropRadiusForSearch
-                + largestNeighborRadius
-                + dropRadius * 0.25f;
-            var searchRadiusSquared = searchRadius * searchRadius;
-            var cellRadius = Mathf.FloorToInt(searchRadius / cellSize) + 1;
-            var centerCell = GetCell(position);
-            var centerCellX = centerCell % gridColumns;
-            var centerCellY = centerCell / gridColumns;
-            var minimumCellX = Mathf.Max(0, centerCellX - cellRadius);
-            var maximumCellX = Mathf.Min(gridColumns - 1, centerCellX + cellRadius);
-            var minimumCellY = Mathf.Max(0, centerCellY - cellRadius);
-            var maximumCellY = Mathf.Min(gridRows - 1, centerCellY + cellRadius);
-            var sectorMask = 0;
-            var neighborCount = 0;
-            var lowerDensityCount = 0;
-            var higherDensityCount = 0;
-            var density = dropDensities[drop];
-            for (var cellY = minimumCellY; cellY <= maximumCellY; cellY++)
-            {
-                for (var cellX = minimumCellX; cellX <= maximumCellX; cellX++)
-                {
-                    var cell = cellY * gridColumns + cellX;
-                    if (cellActiveDropCounts[cell] == 0)
-                    {
-                        continue;
-                    }
-
-                    var cellEnd = cellOffsets[cell] + cellActiveDropCounts[cell];
-                    for (var neighbor = cellOffsets[cell]; neighbor < cellEnd; neighbor++)
-                    {
-                        if (neighbor == drop || containerAssignments[neighbor] != containerAssignment)
-                        {
-                            continue;
-                        }
-
-                        var difference = positions[neighbor] - position;
-                        var distanceSquared = difference.sqrMagnitude;
-                        if (distanceSquared <= 0.0001f || distanceSquared > searchRadiusSquared)
-                        {
-                            continue;
-                        }
-
-                        sectorMask |= GetDensityRebalanceSector(difference.x, difference.y);
-                        neighborCount++;
-                        if (dropDensities[neighbor] < density - DensityComparisonTolerance)
-                        {
-                            lowerDensityCount++;
-                        }
-                        else if (dropDensities[neighbor] > density + DensityComparisonTolerance)
-                        {
-                            higherDensityCount++;
-                        }
-                    }
-                }
-            }
-
-            if (sectorMask != 0xFF || neighborCount < 8)
+            var dropDensity = GetDensityForDrop(drop);
+            if (!TryFindHigherDensityDrop(
+                    drop,
+                    containerIndex,
+                    dropDensity,
+                    out var higherDensityDrop))
             {
                 continue;
             }
 
-            if (lowerDensityCount * 2 > neighborCount)
+            var radius = GetDropRadius(drop);
+            if (!HasDenseNeighbors(drop, higherDensityDrop, containerAssignments[drop], radius)
+                || !HasDenseNeighbors(
+                    higherDensityDrop,
+                    drop,
+                    containerAssignments[drop],
+                    radius)
+                || !IsDensitySwapPathClear(
+                    containerIndex,
+                    position,
+                    positions[higherDensityDrop],
+                    radius))
             {
-                velocities[drop].y -= DensityRebalanceVelocityKick;
+                continue;
             }
-            else if (higherDensityCount * 2 > neighborCount)
-            {
-                velocities[drop].y += DensityRebalanceVelocityKick;
-            }
+
+            var higherPosition = positions[higherDensityDrop];
+            densitySwapPaths[drop] = new Vector4(
+                position.x,
+                position.y,
+                higherPosition.x,
+                higherPosition.y);
+            densitySwapPaths[higherDensityDrop] = new Vector4(
+                higherPosition.x,
+                higherPosition.y,
+                position.x,
+                position.y);
+            densitySwapProgress[drop] = 0f;
+            densitySwapProgress[higherDensityDrop] = 0f;
+            activeDensitySwapCount += 2;
         }
     }
 
-    private static int GetDensityRebalanceSector(float x, float y)
+    private bool TryFindHigherDensityDrop(
+        int drop,
+        int containerIndex,
+        float dropDensity,
+        out int higherDensityDrop)
+    {
+        higherDensityDrop = -1;
+        var radius = GetDropRadius(drop);
+        var maximumHorizontalOffset = radius * 0.65f;
+        var minimumVerticalOffset = radius * 1.35f;
+        var maximumVerticalOffset = radius * 2.15f;
+        var maximumDistanceSquared = radius * radius * 2.05f * 2.05f;
+        var searchRadius = radius * 2.15f;
+        var cellRadius = Mathf.CeilToInt(searchRadius / cellSize) + 1;
+        var centerCell = GetCell(positions[drop]);
+        var centerCellX = centerCell % gridColumns;
+        var centerCellY = centerCell / gridColumns;
+        var assignment = (byte)(containerIndex + 1);
+        var higherDensity = dropDensity + DensitySwapComparisonTolerance;
+
+        for (var cellY = Mathf.Max(0, centerCellY - cellRadius);
+             cellY <= Mathf.Min(gridRows - 1, centerCellY + cellRadius);
+             cellY++)
+        {
+            for (var cellX = Mathf.Max(0, centerCellX - cellRadius);
+                 cellX <= Mathf.Min(gridColumns - 1, centerCellX + cellRadius);
+                 cellX++)
+            {
+                var cell = cellY * gridColumns + cellX;
+                var cellEnd = cellOffsets[cell] + cellActiveDropCounts[cell];
+                for (var neighbor = cellOffsets[cell]; neighbor < cellEnd; neighbor++)
+                {
+                    if (neighbor == drop
+                        || containerAssignments[neighbor] != assignment
+                        || dropVolumes[neighbor] != dropVolumes[drop]
+                        || densitySwapProgress[neighbor] >= 0f
+                        || velocities[neighbor].sqrMagnitude > DensitySwapMaximumSpeed * DensitySwapMaximumSpeed)
+                    {
+                        continue;
+                    }
+
+                    var difference = positions[neighbor] - positions[drop];
+                    if (difference.y < minimumVerticalOffset
+                        || difference.y > maximumVerticalOffset
+                        || Mathf.Abs(difference.x) > maximumHorizontalOffset
+                        || difference.sqrMagnitude > maximumDistanceSquared
+                        || !containers[containerIndex].Contains(positions[neighbor]))
+                    {
+                        continue;
+                    }
+
+                    var density = GetDensityForDrop(neighbor);
+                    if (density <= higherDensity)
+                    {
+                        continue;
+                    }
+
+                    higherDensity = density;
+                    higherDensityDrop = neighbor;
+                }
+            }
+        }
+
+        return higherDensityDrop >= 0;
+    }
+
+    private bool HasDenseNeighbors(int drop, int excludedDrop, byte assignment, float radius)
+    {
+        const int AllSectors = (1 << 8) - 1;
+        var supportRadius = radius * 3f;
+        var supportRadiusSquared = supportRadius * supportRadius;
+        var cellRadius = Mathf.CeilToInt(supportRadius / cellSize) + 1;
+        var center = positions[drop];
+        var centerCell = GetCell(center);
+        var centerCellX = centerCell % gridColumns;
+        var centerCellY = centerCell / gridColumns;
+        var sectorMask = 0;
+        var neighborCount = 0;
+        for (var cellY = Mathf.Max(0, centerCellY - cellRadius);
+             cellY <= Mathf.Min(gridRows - 1, centerCellY + cellRadius);
+             cellY++)
+        {
+            for (var cellX = Mathf.Max(0, centerCellX - cellRadius);
+                 cellX <= Mathf.Min(gridColumns - 1, centerCellX + cellRadius);
+                 cellX++)
+            {
+                var cell = cellY * gridColumns + cellX;
+                var cellEnd = cellOffsets[cell] + cellActiveDropCounts[cell];
+                for (var neighbor = cellOffsets[cell]; neighbor < cellEnd; neighbor++)
+                {
+                    if (neighbor == drop
+                        || neighbor == excludedDrop
+                        || containerAssignments[neighbor] != assignment)
+                    {
+                        continue;
+                    }
+
+                    var difference = positions[neighbor] - center;
+                    if (difference.sqrMagnitude <= 0.0001f
+                        || difference.sqrMagnitude > supportRadiusSquared
+                        || !containers[assignment - 1].Contains(positions[neighbor]))
+                    {
+                        continue;
+                    }
+
+                    sectorMask |= 1 << GetDensitySwapSector(difference.x, difference.y);
+                    neighborCount++;
+                    if (sectorMask == AllSectors && neighborCount >= 8)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsDensitySwapPathClear(
+        int containerIndex,
+        Vector2 start,
+        Vector2 end,
+        float radius)
+    {
+        var container = containers[containerIndex];
+        for (var sample = 1; sample <= 7; sample++)
+        {
+            var point = Vector2.Lerp(start, end, sample * 0.125f);
+            var classification = container.Classify(point);
+            if (!classification.IsInside || classification.DistanceSquared < radius * radius)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private float GetDensityForDrop(int drop)
+    {
+        var weightedDensity = 0f;
+        var totalAmount = 0f;
+        for (var unit = dropUnitHeads[drop]; unit >= 0; unit = unitNext[unit])
+        {
+            for (var component = unitComponentHeads[unit];
+                component >= 0;
+                component = componentNext[component])
+            {
+                var amount = componentAmounts[component];
+                weightedDensity += liquidTypeDensities[componentTypeIndices[component]] * amount;
+                totalAmount += amount;
+            }
+        }
+
+        return totalAmount > 0f
+            ? weightedDensity / totalAmount
+            : LiquidDensityCatalog.DefaultDensity;
+    }
+
+    private static int GetDensitySwapSector(float x, float y)
     {
         var absoluteX = Mathf.Abs(x);
         var absoluteY = Mathf.Abs(y);
         if (absoluteY > absoluteX * 2f)
         {
-            return y > 0f ? 1 : 16;
+            return y > 0f ? 0 : 4;
         }
 
         if (absoluteX > absoluteY * 2f)
         {
-            return x > 0f ? 4 : 64;
+            return x > 0f ? 2 : 6;
         }
 
         if (x > 0f)
         {
-            return y > 0f ? 2 : 8;
+            return y > 0f ? 1 : 3;
         }
 
-        return y > 0f ? 128 : 32;
+        return y > 0f ? 7 : 5;
     }
 
     private void ResolveDropCollisions()
@@ -2631,7 +2818,9 @@ internal sealed class LiquidSimulation
 
         for (var first = 0; first < count; first++)
         {
-            if (fastOutsideDrops[first] || dropVolumes[first] <= 1)
+            if (fastOutsideDrops[first]
+                || densitySwapProgress[first] >= 0f
+                || dropVolumes[first] <= 1)
             {
                 continue;
             }
@@ -2663,6 +2852,7 @@ internal sealed class LiquidSimulation
                         var second = secondOffset;
                         if (fastOutsideDrops[second]
                             || second == first
+                            || densitySwapProgress[second] >= 0f
                             || (dropVolumes[second] > 1 && second < first))
                         {
                             continue;
@@ -2732,6 +2922,8 @@ internal sealed class LiquidSimulation
     {
         if (fastOutsideDrops[first]
             || fastOutsideDrops[second]
+            || (activeDensitySwapCount > 0
+                && (densitySwapProgress[first] >= 0f || densitySwapProgress[second] >= 0f))
             || dropVolumes[first] > 1
             || dropVolumes[second] > 1)
         {
@@ -2987,6 +3179,7 @@ internal sealed class LiquidSimulation
                 computeDropDataBuffer,
                 computeDropRadiusBuffer,
                 computeDropColorBuffer,
+                computeDropSwapPathBuffer,
                 colorAccumulationBuffer);
         }
         if (LiquidShaderAssets.SurfaceMaterial)
@@ -3086,6 +3279,10 @@ internal sealed class LiquidSimulation
         computeDropDataBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
         computeDropRadiusBuffer = new ComputeBuffer(MaximumDrops, sizeof(float), ComputeBufferType.Structured);
         computeDropColorBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
+        computeDropSwapPathBuffer = new ComputeBuffer(
+            MaximumDrops,
+            sizeof(float) * 4,
+            ComputeBufferType.Structured);
         computeDropData = new Vector4[MaximumDrops];
         computeDropRadii = new float[MaximumDrops];
         computeDropColors = new Vector4[MaximumDrops];
@@ -3097,6 +3294,7 @@ internal sealed class LiquidSimulation
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropData", computeDropDataBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropRadii", computeDropRadiusBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropColors", computeDropColorBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropSwapPaths", computeDropSwapPathBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_ColorAccumulation", colorAccumulationBuffer);
         densityComputeShader.SetTexture(resolveDensityKernel, "_DensityOutput", densityRenderTexture);
@@ -3268,6 +3466,15 @@ internal sealed class LiquidSimulation
             computeDropData[i] = new Vector4(position.x, position.y, velocity.x, velocity.y);
             computeDropRadii[i] = GetDropRadius(i);
             computeDropColors[i] = dropColors[i];
+            if (densitySwapProgress[i] >= 0f)
+            {
+                computeDropColors[i].w = densitySwapProgress[i];
+                computeDropSwapPathBuffer.SetData(densitySwapPaths, i, i, 1);
+            }
+            else
+            {
+                computeDropColors[i].w = 1f;
+            }
         }
 
         if (count > 0)
@@ -4458,6 +4665,7 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
     private ComputeBuffer computeDropColorBuffer;
+    private ComputeBuffer computeDropSwapPathBuffer;
     private Material surfaceMaterial;
 
     public override Texture mainTexture => densityTexture ? densityTexture : s_WhiteTexture;
@@ -4498,12 +4706,14 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         ComputeBuffer dropData,
         ComputeBuffer dropRadii,
         ComputeBuffer dropColors,
+        ComputeBuffer dropSwapPaths,
         ComputeBuffer colorAccumulation)
     {
         densityAccumulationBuffer = accumulation;
         computeDropDataBuffer = dropData;
         computeDropRadiusBuffer = dropRadii;
         computeDropColorBuffer = dropColors;
+        computeDropSwapPathBuffer = dropSwapPaths;
         colorAccumulationBuffer = colorAccumulation;
     }
 
@@ -4569,6 +4779,8 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         computeDropRadiusBuffer = null;
         computeDropColorBuffer?.Release();
         computeDropColorBuffer = null;
+        computeDropSwapPathBuffer?.Release();
+        computeDropSwapPathBuffer = null;
         if (surfaceMaterial)
         {
             Destroy(surfaceMaterial);

@@ -9,6 +9,7 @@
 StructuredBuffer<float4> _DropData;
 StructuredBuffer<float> _DropRadii;
 StructuredBuffer<float4> _DropColors;
+StructuredBuffer<float4> _DropSwapPaths;
 RWStructuredBuffer<int4> _Accumulation;
 RWStructuredBuffer<int3> _ColorAccumulation;
 RWTexture2D<float4> _DensityOutput;
@@ -50,6 +51,14 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
     float2 velocity = drop.zw;
     float dropRadius = _DropRadii[dropIndex];
     float4 dropColor = _DropColors[dropIndex];
+    if (dropColor.a < 1.0)
+    {
+        float progress = saturate(dropColor.a);
+        progress = progress * progress * (3.0 - 2.0 * progress);
+        float4 swapPath = _DropSwapPaths[dropIndex];
+        position = lerp(swapPath.xy, swapPath.zw, progress);
+    }
+
     float supportRadius = dropRadius * 2.2;
     float inverseSupportRadiusSquared = 1.0 / (supportRadius * supportRadius);
     float speed = length(velocity);
