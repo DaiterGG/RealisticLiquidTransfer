@@ -60,6 +60,11 @@ internal static class ModSprites
 
     internal static Sprite GetContainer(string originalSpriteName)
     {
+        return GetContainer(originalSpriteName, float.NaN);
+    }
+
+    internal static Sprite GetContainer(string originalSpriteName, float capacity)
+    {
         if (!string.IsNullOrWhiteSpace(originalSpriteName)
             && ContainerSprites.TryGetValue(originalSpriteName, out var matchingSprite))
         {
@@ -73,9 +78,54 @@ internal static class ModSprites
             return matchingSprite;
         }
 
+        var capacitySpriteName = GetDefaultContainerNameForCapacity(capacity);
+        if (ContainerSprites.TryGetValue(capacitySpriteName, out matchingSprite))
+        {
+            Plugin.LogWarning(
+                $"No container sprite resource matched '{originalSpriteName ?? "null"}'; "
+                + $"using {capacitySpriteName}.png for capacity {capacity:F2} ml.");
+            return matchingSprite;
+        }
+
         Plugin.LogWarning(
-            $"No container sprite resource matched '{originalSpriteName ?? "null"}'; using {DefaultContainerName}.png.");
+            $"No container sprite resource matched '{originalSpriteName ?? "null"}' "
+            + $"or capacity default '{capacitySpriteName}.png'; using {DefaultContainerName}.png.");
         return defaultContainer;
+    }
+
+    private static string GetDefaultContainerNameForCapacity(float capacity)
+    {
+        if (float.IsNaN(capacity) || float.IsInfinity(capacity) || capacity < 0f || capacity > 999999f)
+        {
+            return DefaultContainerName;
+        }
+
+        if (capacity <= 150f)
+        {
+            return "default0-150";
+        }
+
+        if (capacity <= 350f)
+        {
+            return "default151-350";
+        }
+
+        if (capacity <= 750f)
+        {
+            return "default351-750";
+        }
+
+        if (capacity <= 2000f)
+        {
+            return "default751-2000";
+        }
+
+        if (capacity <= 5000f)
+        {
+            return "default2001-5000";
+        }
+
+        return "default5001-999999";
     }
 
     private static string RemoveTrailingStateNumber(string spriteName)

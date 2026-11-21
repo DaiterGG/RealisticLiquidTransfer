@@ -289,13 +289,13 @@ internal sealed class LiquidTransferMinigame : Minigame
         receivingContainer = CreateContainer(
             screenRoot,
             "ReceivingContainer",
-            ModSprites.GetContainer(firstOriginalContainerSpriteName),
+            ModSprites.GetContainer(firstOriginalContainerSpriteName, firstOriginalContainerCapacity),
             Vector2.zero,
             0f);
         sourceContainer = CreateContainer(
             screenRoot,
             "SourceContainer",
-            ModSprites.GetContainer(secondOriginalContainerSpriteName),
+            ModSprites.GetContainer(secondOriginalContainerSpriteName, secondOriginalContainerCapacity),
             Vector2.zero,
             0f);
         var referenceArea = EstimateSpriteArea(ModSprites.GetContainer(ReferenceSpriteName));
