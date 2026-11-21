@@ -995,6 +995,15 @@ internal sealed class LiquidSimulation
 
                 positions[i] += translation;
                 previousPositions[i] += translation;
+                if (densitySwapProgress[i] >= 0f)
+                {
+                    var path = densitySwapPaths[i];
+                    path.x += translation.x;
+                    path.y += translation.y;
+                    path.z = positions[i].x;
+                    path.w = positions[i].y;
+                    densitySwapPaths[i] = path;
+                }
             }
 
             graphicsDirty = true;
@@ -1050,6 +1059,25 @@ internal sealed class LiquidSimulation
                 var appliedDelta = Vector2.Scale(targetPosition - positions[i], influence);
                 positions[i] += appliedDelta;
                 previousPositions[i] += appliedDelta;
+                if (densitySwapProgress[i] >= 0f)
+                {
+                    var path = densitySwapPaths[i];
+                    var transitionStart = new Vector2(path.x, path.y);
+                    var startOffset = transitionStart - previousPosition;
+                    var localStartOffset = new Vector2(
+                        startOffset.x * oldCos + startOffset.y * oldSin,
+                        -startOffset.x * oldSin + startOffset.y * oldCos);
+                    var currentStartOffset = new Vector2(
+                        localStartOffset.x * newCos - localStartOffset.y * newSin,
+                        localStartOffset.x * newSin + localStartOffset.y * newCos);
+                    var targetStart = currentPosition + currentStartOffset;
+                    transitionStart += Vector2.Scale(targetStart - transitionStart, influence);
+                    path.x = transitionStart.x;
+                    path.y = transitionStart.y;
+                    path.z = positions[i].x;
+                    path.w = positions[i].y;
+                    densitySwapPaths[i] = path;
+                }
             }
 
             graphicsDirty = true;
