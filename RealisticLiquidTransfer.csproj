@@ -24,6 +24,7 @@
     <Compile Include="DebugLog.cs" />
     <Compile Include="SimulationProfiler.cs" />
     <Compile Include="LiquidSimulation.cs" />
+    <Compile Include="LiquidDensityCatalog.cs" />
     <Compile Include="LiquidShaderAssets.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />

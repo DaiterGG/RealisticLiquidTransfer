@@ -62,9 +62,11 @@ internal sealed class LiquidSimulation
     private readonly int[] initialContainerDropCounts;
     private readonly LiquidProfileEntry[][] liquidProfiles;
     private readonly int[][] liquidProfileTypeIndices;
+    private readonly int[][] liquidProfileOrders;
     private readonly int liquidTypeCapacity;
     private readonly string[] liquidIds;
     private readonly Vector4[] liquidTypeColors;
+    private readonly float[] liquidTypeDensities;
     private readonly float[] initialSimulatedLiquidAmounts;
     private readonly float[] remainingProfileAmounts;
     private readonly int[] liquidProfileCursors = new int[2];
@@ -210,9 +212,15 @@ internal sealed class LiquidSimulation
             new int[liquidProfiles[0].Length],
             new int[liquidProfiles[1].Length]
         };
+        liquidProfileOrders = new[]
+        {
+            new int[liquidProfiles[0].Length],
+            new int[liquidProfiles[1].Length]
+        };
         var profileEntryCapacity = liquidProfiles[0].Length + liquidProfiles[1].Length;
         liquidIds = new string[liquidTypeCapacity];
         liquidTypeColors = new Vector4[liquidTypeCapacity];
+        liquidTypeDensities = new float[liquidTypeCapacity];
         initialSimulatedLiquidAmounts = new float[2 * liquidTypeCapacity];
         remainingProfileAmounts = new float[profileEntryCapacity];
         spawnWeightTotals = new float[3];
@@ -370,13 +378,23 @@ internal sealed class LiquidSimulation
                         liquid.Color.g,
                         liquid.Color.b,
                         1f);
+                    if (!LiquidDensityCatalog.TryGetDensity(liquid.LiquidId, out liquidTypeDensities[typeIndex]))
+                    {
+                        liquidTypeDensities[typeIndex] = LiquidDensityCatalog.DefaultDensity;
+                        Plugin.LogWarning(
+                            $"No density is defined for liquid '{liquid.LiquidId}'; "
+                            + $"using {LiquidDensityCatalog.DefaultDensity:F2} g/ml.");
+                    }
                 }
 
                 profileTypeIndexes[entry] = typeIndex;
+                liquidProfileOrders[container][entry] = entry;
                 remainingProfileAmounts[profileOffset + entry] = liquid.Amount;
                 spawnWeightPrefixes[container * liquidTypeCapacity + typeIndex] += liquid.Amount;
                 profileTotals[container] += liquid.Amount;
             }
+
+            SortLiquidProfileByDensity(container);
         }
 
         var containerAmounts = new[] { firstAmount, secondAmount };
@@ -421,6 +439,27 @@ internal sealed class LiquidSimulation
             previousSourceCumulative = sourceCumulative;
         }
         spawnWeightTotals[2] = allCumulative;
+    }
+
+    private void SortLiquidProfileByDensity(int containerIndex)
+    {
+        // Initial seeding traverses from the container bottom upward.
+        var order = liquidProfileOrders[containerIndex];
+        var typeIndices = liquidProfileTypeIndices[containerIndex];
+        for (var index = 1; index < order.Length; index++)
+        {
+            var entry = order[index];
+            var density = liquidTypeDensities[typeIndices[entry]];
+            var insertion = index - 1;
+            while (insertion >= 0
+                && liquidTypeDensities[typeIndices[order[insertion]]] < density)
+            {
+                order[insertion + 1] = order[insertion];
+                insertion--;
+            }
+
+            order[insertion + 1] = entry;
+        }
     }
 
     private int FindLiquidType(string liquidId)
@@ -469,27 +508,23 @@ internal sealed class LiquidSimulation
             var profileOffset = containerIndex == 0 ? 0 : liquidProfiles[0].Length;
             var profile = liquidProfiles[containerIndex];
             var cursor = liquidProfileCursors[containerIndex];
-            while (remaining > 0.00001f && cursor < profile.Length)
+            while (remaining > 0.00001f)
             {
-                var amountIndex = profileOffset + cursor;
-                var available = remainingProfileAmounts[amountIndex];
-                if (available <= 0.00001f)
+                var entry = SelectInitialProfileEntry(containerIndex, ref cursor);
+                if (entry < 0)
                 {
-                    cursor++;
-                    continue;
+                    break;
                 }
 
+                var amountIndex = profileOffset + entry;
+                var available = remainingProfileAmounts[amountIndex];
                 var amount = Mathf.Min(remaining, available);
-                var typeIndex = liquidProfileTypeIndices[containerIndex][cursor];
+                var typeIndex = liquidProfileTypeIndices[containerIndex][entry];
                 AppendComponentToUnit(unit, typeIndex, amount);
                 initialSimulatedLiquidAmounts[containerIndex * liquidTypeCapacity + typeIndex] += amount;
                 remainingProfileAmounts[amountIndex] -= amount;
                 remainingSimulatedAmounts[containerIndex] -= amount;
                 remaining -= amount;
-                if (remainingProfileAmounts[amountIndex] <= 0.00001f)
-                {
-                    cursor++;
-                }
             }
 
             if (remaining > 0.0001f)
@@ -505,6 +540,69 @@ internal sealed class LiquidSimulation
         dropUnitHeads[dropIndex] = head;
         dropUnitTails[dropIndex] = tail;
         dropColors[dropIndex] = GetColorForUnits(head);
+    }
+
+    private int SelectInitialProfileEntry(int containerIndex, ref int cursor)
+    {
+        var profile = liquidProfiles[containerIndex];
+        var order = liquidProfileOrders[containerIndex];
+        var typeIndices = liquidProfileTypeIndices[containerIndex];
+        var profileOffset = containerIndex == 0 ? 0 : liquidProfiles[0].Length;
+        while (cursor < profile.Length)
+        {
+            while (cursor < profile.Length
+                && remainingProfileAmounts[profileOffset + order[cursor]] <= 0.00001f)
+            {
+                cursor++;
+            }
+
+            if (cursor >= profile.Length)
+            {
+                return -1;
+            }
+
+            var density = liquidTypeDensities[typeIndices[order[cursor]]];
+            var groupEnd = cursor;
+            var groupTotal = 0f;
+            while (groupEnd < profile.Length
+                && liquidTypeDensities[typeIndices[order[groupEnd]]] == density)
+            {
+                groupTotal += Mathf.Max(
+                    0f,
+                    remainingProfileAmounts[profileOffset + order[groupEnd]]);
+                groupEnd++;
+            }
+
+            if (groupTotal <= 0f)
+            {
+                cursor = groupEnd;
+                continue;
+            }
+
+            // Sampling by remaining volume interleaves liquids in the same density layer.
+            var randomAmount = NextRandom() * groupTotal;
+            var lastAvailableEntry = -1;
+            for (var index = cursor; index < groupEnd; index++)
+            {
+                var entry = order[index];
+                var available = remainingProfileAmounts[profileOffset + entry];
+                if (available <= 0.00001f)
+                {
+                    continue;
+                }
+
+                lastAvailableEntry = entry;
+                randomAmount -= available;
+                if (randomAmount < 0f)
+                {
+                    return entry;
+                }
+            }
+
+            return lastAvailableEntry;
+        }
+
+        return -1;
     }
 
     private void CreateSpawnDropUnits(int dropIndex, int assignment, int volume)
