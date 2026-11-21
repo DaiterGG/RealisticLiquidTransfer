@@ -358,7 +358,7 @@ internal sealed class LiquidSimulation
             {
                 finalCounts[0] += dropVolumes[i];
             }
-            else if (inSource || !IsOutsideScreen(position, GetDropRadius(i)))
+            else if (inSource)
             {
                 finalCounts[1] += dropVolumes[i];
             }

@@ -1,5 +1,7 @@
 using HarmonyLib;
 using System;
+using System.Collections.Generic;
+using UnityEngine.EventSystems;
 using UnityEngine;
 
 namespace RealisticLiquidTransfer;
@@ -42,7 +44,7 @@ internal static class StartLiquidTransferPatch
         return false;
     }
 
-    private static float GetContainerAmount(WaterContainerItem container, string containerLabel)
+    internal static float GetContainerAmount(WaterContainerItem container, string containerLabel)
     {
         if (!container)
         {
@@ -53,7 +55,7 @@ internal static class StartLiquidTransferPatch
         return container.CurrentTotal;
     }
 
-    private static float GetContainerCapacity(WaterContainerItem container, string containerLabel)
+    internal static float GetContainerCapacity(WaterContainerItem container, string containerLabel)
     {
         if (!container)
         {
@@ -64,7 +66,7 @@ internal static class StartLiquidTransferPatch
         return container.Capacity;
     }
 
-    private static string GetContainerSpriteName(WaterContainerItem container, string containerLabel)
+    internal static string GetContainerSpriteName(WaterContainerItem container, string containerLabel)
     {
         if (!container)
         {
@@ -85,6 +87,81 @@ internal static class StartLiquidTransferPatch
         }
 
         return spriteRenderer.sprite.name;
+    }
+}
+
+[HarmonyPatch(typeof(PlayerCamera), "HandleWhileDragging")]
+internal static class StartLiquidDrainMinigamePatch
+{
+    internal static bool BlockDraggingUntilRelease;
+
+    [HarmonyPrefix]
+    private static bool Prefix(PlayerCamera __instance, List<RaycastResult> uiCasts)
+    {
+        if (BlockDraggingUntilRelease)
+        {
+            return false;
+        }
+
+        foreach (var uiCast in uiCasts)
+        {
+            if (uiCast.gameObject != __instance.liquidDrainObject)
+            {
+                continue;
+            }
+
+            var item = __instance.dragItem;
+            if (!item
+                || !item.TryGetComponent<WaterContainerItem>(out var container)
+                || container.CurrentTotal <= 0f
+                || FluidManager.main.HasLiquid(WorldGeneration.world.WorldToBlockPos(item.transform.position))
+                || !__instance.body.DoPickupCheck(item, noAlerts: true))
+            {
+                return true;
+            }
+
+            if (!MinigameBase.main)
+            {
+                Plugin.LogError("Cannot open liquid-drain minigame because MinigameBase is unavailable.");
+                return false;
+            }
+
+            if (MinigameBase.main.currentMinigame)
+            {
+                return false;
+            }
+
+            BlockDraggingUntilRelease = true;
+            __instance.dragImage.enabled = false;
+            MinigameBase.main.StartMinigame(
+                new LiquidTransferMinigame(
+                    container,
+                    StartLiquidTransferPatch.GetContainerSpriteName(container, "drain"),
+                    StartLiquidTransferPatch.GetContainerCapacity(container, "drain"),
+                    StartLiquidTransferPatch.GetContainerAmount(container, "drain")),
+                null);
+            return false;
+        }
+
+        return true;
+    }
+}
+
+[HarmonyPatch(typeof(PlayerCamera), "HandleReleaseDragging")]
+internal static class LiquidDrainReleasePatch
+{
+    [HarmonyPrefix]
+    private static bool BeforeReleaseDragging(PlayerCamera __instance)
+    {
+        if (!StartLiquidDrainMinigamePatch.BlockDraggingUntilRelease)
+        {
+            return true;
+        }
+
+        StartLiquidDrainMinigamePatch.BlockDraggingUntilRelease = false;
+        __instance.dragItem = null;
+        __instance.dragImage.enabled = false;
+        return false;
     }
 }
 

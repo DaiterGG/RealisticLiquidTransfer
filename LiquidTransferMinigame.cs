@@ -46,6 +46,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly float secondOriginalContainerCapacity;
     private readonly float firstOriginalContainerAmount;
     private readonly float secondOriginalContainerAmount;
+    private readonly bool drainOnly;
     private Image handImage;
     private Text controlsText;
     private Text volumeText;
@@ -126,6 +127,32 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
     }
 
+    internal LiquidTransferMinigame(
+        WaterContainerItem container,
+        string originalContainerSpriteName,
+        float originalContainerCapacity,
+        float originalContainerAmount)
+    {
+        receivingGameContainer = container;
+        sourceGameContainer = null;
+        firstOriginalContainerSpriteName = originalContainerSpriteName;
+        secondOriginalContainerSpriteName = originalContainerSpriteName;
+        firstOriginalContainerCapacity = originalContainerCapacity;
+        secondOriginalContainerCapacity = originalContainerCapacity;
+        firstOriginalContainerAmount = originalContainerAmount;
+        secondOriginalContainerAmount = 0f;
+        drainOnly = true;
+
+        if (string.Equals(
+                originalContainerSpriteName,
+                ReferenceSpriteName,
+                System.StringComparison.OrdinalIgnoreCase)
+            && originalContainerCapacity > 0f)
+        {
+            referenceCapacity = originalContainerCapacity;
+        }
+    }
+
     public override HandSpriteType HandType()
     {
         return HandSpriteType.Grasp;
@@ -166,6 +193,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         game.spawnedMiniGame = screenRoot;
         debugTextRoot = CreateDebugTextRoot(game.minigameScreen);
         controlsText = CreateControlsText(debugTextRoot);
+        if (drainOnly)
+        {
+            controlsText.text = "Hold left-click outside the container to spawn drops | Right-click and drag to rotate | Esc: exit";
+        }
+
         volumeText = CreateVolumeText(debugTextRoot);
         var rightControlsX = Mathf.Max(24f, debugTextRoot.rect.width - 210f);
         shaderToggle = CreateToggle(
@@ -265,13 +297,24 @@ internal sealed class LiquidTransferMinigame : Minigame
             secondOriginalContainerCapacity,
             referenceArea,
             secondOriginalContainerSpriteName);
-        PositionContainersSideBySide(receivingContainer, sourceContainer);
+        if (drainOnly)
+        {
+            receivingContainer.Transform.anchoredPosition = Vector2.zero;
+            sourceContainer.Transform.anchoredPosition = Vector2.one * 100000f;
+            sourceContainer.Transform.gameObject.SetActive(false);
+        }
+        else
+        {
+            PositionContainersSideBySide(receivingContainer, sourceContainer);
+        }
 
         handImage = game.handTransform.GetComponent<Image>();
         originalHandSize = handImage.rectTransform.sizeDelta;
         originalPreserveAspect = handImage.preserveAspect;
 
-        fitScale = GetFitScale(game.minigameScreen, screenRoot, receivingContainer, sourceContainer);
+        fitScale = drainOnly
+            ? GetFitScale(game.minigameScreen, screenRoot, receivingContainer)
+            : GetFitScale(game.minigameScreen, screenRoot, receivingContainer, sourceContainer);
         screenRoot.localScale = Vector3.one * fitScale;
         liquidSimulation = new LiquidSimulation(
             screenRoot,
@@ -789,8 +832,9 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (displayedDropCount != liquidSimulation.Count)
             {
                 displayedDropCount = liquidSimulation.Count;
+                var dropScope = drainOnly ? "outside the container" : "outside containers";
                 controlsText.text =
-                    $"Hold left-click outside containers to spawn drops ({displayedDropCount}/20000) | Right-click and drag to rotate | Esc: exit";
+                    $"Hold left-click {dropScope} to spawn drops ({displayedDropCount}/20000) | Right-click and drag to rotate | Esc: exit";
             }
 
             UpdateVolumeReadout();
@@ -801,6 +845,15 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private void UpdateVolumeReadout()
     {
+        if (drainOnly)
+        {
+            volumeText.text =
+                "Liquid amount (1 drop per ml)\n"
+                + $"Container: {liquidSimulation.GetContainerDropCount(0):N0} ml\n\n"
+                + "Liquid outside the container is lost on exit.";
+            return;
+        }
+
         volumeText.text =
             "Original container sprites\n"
             + $"Container 1: {firstOriginalContainerSpriteName}\n"
@@ -934,22 +987,39 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
-        if (!receivingGameContainer || !sourceGameContainer)
+        if (!receivingGameContainer || (!drainOnly && !sourceGameContainer))
         {
             throw new System.InvalidOperationException(
-                "Cannot commit liquid transfer because one or both game containers are unavailable.");
+                "Cannot commit liquid simulation because a required game container is unavailable.");
         }
 
         var receiverAmount = receivingGameContainer.CurrentTotal;
-        var sourceAmount = sourceGameContainer.CurrentTotal;
         var receiverCapacity = receivingGameContainer.Capacity;
-        var sourceCapacity = sourceGameContainer.Capacity;
         ValidateAmount(receiverAmount, "receiver amount");
-        ValidateAmount(sourceAmount, "source amount");
         ValidateCapacity(receiverCapacity, "receiver capacity");
-        ValidateCapacity(sourceCapacity, "source capacity");
 
         var finalDropCounts = liquidSimulation.GetFinalContainerDropCounts();
+        if (drainOnly)
+        {
+            var targetAmount = receiverAmount
+                + finalDropCounts[0]
+                - liquidSimulation.GetInitialContainerDropCount(0);
+            var discardedDrainOverflow = Mathf.Max(0f, targetAmount - receiverCapacity);
+            targetAmount = Mathf.Clamp(targetAmount, 0f, receiverCapacity);
+            ApplySingleContainerAmount(receivingGameContainer, targetAmount);
+            transferCommitted = true;
+            DebugLog.Write(
+                $"Committed liquid drain: drops remaining={finalDropCounts[0]}; "
+                + $"amount={receivingGameContainer.CurrentTotal:F2}, "
+                + $"outside liquid lost, capacity overflow discarded={discardedDrainOverflow:F2} ml.");
+            return;
+        }
+
+        var sourceAmount = sourceGameContainer.CurrentTotal;
+        var sourceCapacity = sourceGameContainer.Capacity;
+        ValidateAmount(sourceAmount, "source amount");
+        ValidateCapacity(sourceCapacity, "source capacity");
+
         var targetReceiverAmount = receiverAmount
             + finalDropCounts[0]
             - liquidSimulation.GetInitialContainerDropCount(0);
@@ -973,6 +1043,23 @@ internal sealed class LiquidTransferMinigame : Minigame
             + $"amounts receiver={receivingGameContainer.CurrentTotal:F2}, "
             + $"source={sourceGameContainer.CurrentTotal:F2}, "
             + $"capacity overflow discarded={discardedOverflow:F2} ml.");
+    }
+
+    private static void ApplySingleContainerAmount(
+        WaterContainerItem container,
+        float targetAmount)
+    {
+        const float AmountTolerance = 0.001f;
+        var currentAmount = container.CurrentTotal;
+        var change = targetAmount - currentAmount;
+        if (change < -AmountTolerance)
+        {
+            DrainLiquid(container, -change);
+        }
+        else if (change > AmountTolerance)
+        {
+            AddLiquid(container, GetLiquidComposition(container), change);
+        }
     }
 
     private static void ApplyLiquidAmounts(
