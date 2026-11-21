@@ -10,6 +10,7 @@ internal static class ModSprites
     private const string ResourcePrefix = "RealisticLiquidTransfer.Resources.";
     private const string DefaultContainerName = "default";
     private const string ReferenceSpriteName = "coffee";
+    private const byte MinimumVisibleAlpha = 32;
     private static readonly Dictionary<string, Sprite> ContainerSprites =
         new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
 
@@ -203,7 +204,7 @@ internal static class ModSprites
             var maskRowStart = y * spriteWidth;
             for (var x = 0; x < spriteWidth; x++)
             {
-                opaque[maskRowStart + x] = pixels[rowStart + x].a >= 32;
+                opaque[maskRowStart + x] = pixels[rowStart + x].a >= MinimumVisibleAlpha;
             }
         }
 
@@ -260,13 +261,66 @@ internal static class ModSprites
             throw new InvalidDataException($"Embedded sprite resource '{resourceName}' is not a valid PNG.");
         }
 
+        if (!TryFindVisiblePixelBounds(
+                texture.GetPixels32(),
+                texture.width,
+                texture.height,
+                out var visibleBounds))
+        {
+            UnityEngine.Object.Destroy(texture);
+            throw new InvalidDataException(
+                $"Embedded sprite resource '{resourceName}' contains no visible pixels.");
+        }
+
         texture.filterMode = FilterMode.Point;
         texture.wrapMode = TextureWrapMode.Clamp;
         return Sprite.Create(
             texture,
-            new Rect(0f, 0f, texture.width, texture.height),
+            new Rect(visibleBounds.x, visibleBounds.y, visibleBounds.width, visibleBounds.height),
             new Vector2(0.5f, 0.5f),
             100f);
+    }
+
+    private static bool TryFindVisiblePixelBounds(
+        Color32[] pixels,
+        int width,
+        int height,
+        out RectInt bounds)
+    {
+        var minimumX = width;
+        var minimumY = height;
+        var maximumX = -1;
+        var maximumY = -1;
+
+        for (var y = 0; y < height; y++)
+        {
+            var rowStart = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                if (pixels[rowStart + x].a < MinimumVisibleAlpha)
+                {
+                    continue;
+                }
+
+                minimumX = Math.Min(minimumX, x);
+                minimumY = Math.Min(minimumY, y);
+                maximumX = Math.Max(maximumX, x);
+                maximumY = Math.Max(maximumY, y);
+            }
+        }
+
+        if (maximumX < minimumX || maximumY < minimumY)
+        {
+            bounds = default;
+            return false;
+        }
+
+        bounds = new RectInt(
+            minimumX,
+            minimumY,
+            maximumX - minimumX + 1,
+            maximumY - minimumY + 1);
+        return true;
     }
 
     private static void FindRuns(
@@ -282,7 +336,7 @@ internal static class ModSprites
         var rowStart = y * textureWidth + originX;
         for (var x = 0; x < width; x++)
         {
-            var opaque = pixels[rowStart + x].a >= 32;
+            var opaque = pixels[rowStart + x].a >= MinimumVisibleAlpha;
             if (opaque && runStart < 0)
             {
                 runStart = x;
