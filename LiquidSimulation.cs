@@ -30,7 +30,7 @@ internal sealed class LiquidSimulation
     private const float Gravity = 420f;
     private const float GravityMultiplier = 2f;
     private const float FixedStep = 1f / 30f;
-    private const float VelocityRampDuration = 5f;
+    private const float VelocityRampDuration = 2f;
     internal const int MinimumDropCollisionPasses = 2;
     internal const int MaximumDropCollisionPasses = 6;
     internal const int DefaultDropCollisionPasses = 6;
