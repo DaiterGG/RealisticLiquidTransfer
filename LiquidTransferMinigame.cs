@@ -19,6 +19,24 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
+    private const string ShaderEnabledPref = "RealisticLiquidTransfer.ShaderEnabled";
+    private const string ClickSpawnEnabledPref = "RealisticLiquidTransfer.ClickSpawnEnabled";
+    private const string CollisionPassesPref = "RealisticLiquidTransfer.CollisionPasses";
+    private const string CollisionCorrectionPref = "RealisticLiquidTransfer.CollisionCorrection";
+    private const string VelocityContactMarginPref = "RealisticLiquidTransfer.VelocityContactMargin";
+    private const string DropRadiusPref = "RealisticLiquidTransfer.DropRadiusTenths.v3";
+    private const string FreezeSimulationPref = "RealisticLiquidTransfer.FreezeSimulation";
+    private const string InitialPackingPref = "RealisticLiquidTransfer.InitialPackingTenths";
+
+    private static bool savedShaderEnabled = true;
+    private static bool savedClickSpawnEnabled;
+    private static int savedCollisionPasses = LiquidSimulation.MinimumDropCollisionPasses;
+    private static int savedCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
+    private static int savedVelocityContactMargin =
+        LiquidSimulation.DefaultVelocityContactMarginTenths;
+    private static int savedDropRadiusTenths = LiquidSimulation.DefaultDropRadiusTenths;
+    private static bool savedFreezeSimulation;
+    private static int savedInitialPackingTenths = LiquidSimulation.DefaultPackingTenths;
 
     private readonly WaterContainerItem receivingGameContainer;
     private readonly WaterContainerItem sourceGameContainer;
@@ -40,6 +58,11 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Text collisionCorrectionText;
     private Slider velocityContactMarginSlider;
     private Text velocityContactMarginText;
+    private Slider dropRadiusSlider;
+    private Text dropRadiusText;
+    private Slider initialPackingSlider;
+    private Text initialPackingText;
+    private Toggle freezeToggle;
     private Slider[] collisionTuningSliders;
     private RectTransform debugTextRoot;
     private LiquidSimulation liquidSimulation;
@@ -130,6 +153,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     public override void Start()
     {
+        LoadPersistentSettings();
         var game = Minigame.game;
         screenRoot = new GameObject("RealisticLiquidTransferScreen", typeof(RectTransform))
             .GetComponent<RectTransform>();
@@ -149,12 +173,19 @@ internal sealed class LiquidTransferMinigame : Minigame
             "LiquidShaderToggle",
             "Liquid shader",
             new Vector2(rightControlsX, -24f));
+        shaderToggle.isOn = savedShaderEnabled;
         spawnToggle = CreateToggle(
             debugTextRoot,
             "ClickSpawnToggle",
             "Spawn drops on click",
             new Vector2(rightControlsX, -52f));
-        spawnToggle.isOn = false;
+        spawnToggle.isOn = savedClickSpawnEnabled;
+        freezeToggle = CreateToggle(
+            debugTextRoot,
+            "FreezeSimulationToggle",
+            "Freeze simulation",
+            new Vector2(rightControlsX, -298f));
+        freezeToggle.isOn = savedFreezeSimulation;
         collisionPassSlider = CreateTuningSlider(
             debugTextRoot,
             "CollisionPasses",
@@ -163,7 +194,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             new Vector2(rightControlsX, -104f),
             LiquidSimulation.MinimumDropCollisionPasses,
             LiquidSimulation.MaximumDropCollisionPasses,
-            LiquidSimulation.MinimumDropCollisionPasses,
+            savedCollisionPasses,
             true,
             out collisionPassText);
         collisionCorrectionSlider = CreateTuningSlider(
@@ -174,7 +205,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             new Vector2(rightControlsX, -158f),
             LiquidSimulation.MinimumCollisionCorrectionPercent,
             LiquidSimulation.MaximumCollisionCorrectionPercent,
-            LiquidSimulation.DefaultCollisionCorrectionPercent,
+            savedCollisionCorrection,
             true,
             out collisionCorrectionText);
         velocityContactMarginSlider = CreateTuningSlider(
@@ -185,9 +216,31 @@ internal sealed class LiquidTransferMinigame : Minigame
             new Vector2(rightControlsX, -212f),
             LiquidSimulation.MinimumVelocityContactMarginTenths,
             LiquidSimulation.MaximumVelocityContactMarginTenths,
-            LiquidSimulation.DefaultVelocityContactMarginTenths,
+            savedVelocityContactMargin,
             true,
             out velocityContactMarginText);
+        dropRadiusSlider = CreateTuningSlider(
+            debugTextRoot,
+            "DropRadius",
+            "Base drop radius",
+            new Vector2(rightControlsX, -240f),
+            new Vector2(rightControlsX, -266f),
+            LiquidSimulation.MinimumDropRadiusTenths,
+            LiquidSimulation.MaximumDropRadiusTenths,
+            savedDropRadiusTenths,
+            false,
+            out dropRadiusText);
+        initialPackingSlider = CreateTuningSlider(
+            debugTextRoot,
+            "InitialPacking",
+            "Initial packing",
+            new Vector2(rightControlsX, -320f),
+            new Vector2(rightControlsX, -346f),
+            LiquidSimulation.MinimumPackingTenths,
+            LiquidSimulation.MaximumPackingTenths,
+            savedInitialPackingTenths,
+            false,
+            out initialPackingText);
 
         receivingContainer = CreateContainer(
             screenRoot,
@@ -224,19 +277,26 @@ internal sealed class LiquidTransferMinigame : Minigame
             screenRoot,
             receivingContainer.Transform,
             receivingContainer.OutlinePoints,
+            firstOriginalContainerCapacity,
             sourceContainer.Transform,
             sourceContainer.OutlinePoints,
+            secondOriginalContainerCapacity,
             firstOriginalContainerAmount,
-            secondOriginalContainerAmount);
+            secondOriginalContainerAmount,
+            savedInitialPackingTenths / 100f);
         shaderToggle.onValueChanged.AddListener(SetLiquidShaderEnabled);
         SetLiquidShaderEnabled(shaderToggle.isOn);
         spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
         SetClickSpawnEnabled(spawnToggle.isOn);
+        freezeToggle.onValueChanged.AddListener(SetFreezeSimulation);
+        SetFreezeSimulation(freezeToggle.isOn);
         collisionTuningSliders = new[]
         {
             collisionPassSlider,
             collisionCorrectionSlider,
-            velocityContactMarginSlider
+            velocityContactMarginSlider,
+            dropRadiusSlider,
+            initialPackingSlider
         };
         collisionPassSlider.onValueChanged.AddListener(SetCollisionPasses);
         SetCollisionPasses(collisionPassSlider.value);
@@ -244,6 +304,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         SetCollisionCorrection(collisionCorrectionSlider.value);
         velocityContactMarginSlider.onValueChanged.AddListener(SetVelocityContactMargin);
         SetVelocityContactMargin(velocityContactMarginSlider.value);
+        dropRadiusSlider.onValueChanged.AddListener(SetDropRadius);
+        SetDropRadius(dropRadiusSlider.value);
+        initialPackingSlider.onValueChanged.AddListener(SetInitialPacking);
+        SetInitialPacking(initialPackingSlider.value);
         UpdateVolumeReadout();
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
@@ -491,14 +555,49 @@ internal sealed class LiquidTransferMinigame : Minigame
         return slider;
     }
 
+    private static void LoadPersistentSettings()
+    {
+        savedShaderEnabled = PlayerPrefs.GetInt(ShaderEnabledPref, 1) != 0;
+        savedClickSpawnEnabled = PlayerPrefs.GetInt(ClickSpawnEnabledPref, 0) != 0;
+        savedCollisionPasses = Mathf.Clamp(
+            PlayerPrefs.GetInt(CollisionPassesPref, LiquidSimulation.MinimumDropCollisionPasses),
+            LiquidSimulation.MinimumDropCollisionPasses,
+            LiquidSimulation.MaximumDropCollisionPasses);
+        savedCollisionCorrection = Mathf.Clamp(
+            PlayerPrefs.GetInt(CollisionCorrectionPref, LiquidSimulation.DefaultCollisionCorrectionPercent),
+            LiquidSimulation.MinimumCollisionCorrectionPercent,
+            LiquidSimulation.MaximumCollisionCorrectionPercent);
+        savedVelocityContactMargin = Mathf.Clamp(
+            PlayerPrefs.GetInt(
+                VelocityContactMarginPref,
+                LiquidSimulation.DefaultVelocityContactMarginTenths),
+            LiquidSimulation.MinimumVelocityContactMarginTenths,
+            LiquidSimulation.MaximumVelocityContactMarginTenths);
+        savedDropRadiusTenths = Mathf.Clamp(
+            PlayerPrefs.GetInt(DropRadiusPref, LiquidSimulation.DefaultDropRadiusTenths),
+            LiquidSimulation.MinimumDropRadiusTenths,
+            LiquidSimulation.MaximumDropRadiusTenths);
+        savedInitialPackingTenths = Mathf.Clamp(
+            PlayerPrefs.GetInt(InitialPackingPref, LiquidSimulation.DefaultPackingTenths),
+            LiquidSimulation.MinimumPackingTenths,
+            LiquidSimulation.MaximumPackingTenths);
+        savedFreezeSimulation = PlayerPrefs.GetInt(FreezeSimulationPref, 0) != 0;
+    }
+
     private void SetLiquidShaderEnabled(bool enabled)
     {
+        savedShaderEnabled = enabled;
+        PlayerPrefs.SetInt(ShaderEnabledPref, enabled ? 1 : 0);
+        PlayerPrefs.Save();
         liquidSimulation.SetSurfaceShaderEnabled(enabled);
     }
 
     private void SetCollisionPasses(float passes)
     {
         var passCount = Mathf.RoundToInt(passes);
+        savedCollisionPasses = passCount;
+        PlayerPrefs.SetInt(CollisionPassesPref, passCount);
+        PlayerPrefs.Save();
         liquidSimulation.SetDropCollisionPasses(passCount);
         collisionPassText.text = $"Collision passes: {passCount}";
     }
@@ -506,6 +605,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private void SetCollisionCorrection(float percent)
     {
         var correction = Mathf.RoundToInt(percent);
+        savedCollisionCorrection = correction;
+        PlayerPrefs.SetInt(CollisionCorrectionPref, correction);
+        PlayerPrefs.Save();
         liquidSimulation.SetCollisionCorrectionPercent(correction);
         collisionCorrectionText.text = $"Position correction: {correction}%";
     }
@@ -514,12 +616,48 @@ internal sealed class LiquidTransferMinigame : Minigame
     {
         var marginTenths = Mathf.RoundToInt(tenths);
         var margin = marginTenths / 10f;
+        savedVelocityContactMargin = marginTenths;
+        PlayerPrefs.SetInt(VelocityContactMarginPref, marginTenths);
+        PlayerPrefs.Save();
         liquidSimulation.SetVelocityContactMarginTenths(marginTenths);
         velocityContactMarginText.text = $"Velocity contact margin: {margin:F1}px";
     }
 
+    private void SetDropRadius(float tenths)
+    {
+        var radiusTenths = Mathf.RoundToInt(tenths);
+        var radius = radiusTenths / 10f;
+        savedDropRadiusTenths = radiusTenths;
+        PlayerPrefs.SetInt(DropRadiusPref, radiusTenths);
+        PlayerPrefs.Save();
+        liquidSimulation.SetDropRadius(radius);
+        dropRadiusText.text = $"Base drop radius: {radius:F1}px";
+    }
+
+    private void SetInitialPacking(float tenths)
+    {
+        var packingTenths = Mathf.RoundToInt(tenths);
+        var packing = packingTenths / 100f;
+        savedInitialPackingTenths = packingTenths;
+        PlayerPrefs.SetInt(InitialPackingPref, packingTenths);
+        PlayerPrefs.Save();
+        liquidSimulation.SetInitialPacking(packing);
+        initialPackingText.text = $"Initial packing: {packing:F2}x";
+    }
+
+    private void SetFreezeSimulation(bool enabled)
+    {
+        savedFreezeSimulation = enabled;
+        PlayerPrefs.SetInt(FreezeSimulationPref, enabled ? 1 : 0);
+        PlayerPrefs.Save();
+        liquidSimulation.SetSimulationFrozen(enabled);
+    }
+
     private void SetClickSpawnEnabled(bool enabled)
     {
+        savedClickSpawnEnabled = enabled;
+        PlayerPrefs.SetInt(ClickSpawnEnabledPref, enabled ? 1 : 0);
+        PlayerPrefs.Save();
         clickSpawnEnabled = enabled;
     }
 
@@ -529,7 +667,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
             if (selectable == shaderToggle
-                || selectable == spawnToggle)
+                || selectable == spawnToggle
+                || selectable == freezeToggle)
             {
                 return true;
             }
@@ -554,6 +693,10 @@ internal sealed class LiquidTransferMinigame : Minigame
                 eventCamera)
             || RectTransformUtility.RectangleContainsScreenPoint(
                 spawnToggle.GetComponent<RectTransform>(),
+                pointer,
+                eventCamera)
+            || RectTransformUtility.RectangleContainsScreenPoint(
+                freezeToggle.GetComponent<RectTransform>(),
                 pointer,
                 eventCamera)
             || IsPointerOverTuningSlider(pointer, eventCamera);

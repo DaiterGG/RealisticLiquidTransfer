@@ -10,6 +10,7 @@ namespace RealisticLiquidTransfer.Editor
     public static class BuildLiquidShaderBundle
     {
         private const string ShaderPath = "Assets/Shaders/LiquidSurface.shader";
+        private const string ComputeShaderPath = "Assets/Shaders/LiquidDensity.compute";
         private const string RendererTemplatePath =
             "Packages/com.unity.render-pipelines.universal/Runtime/Data/UniversalRendererData.asset";
         private const string RendererPath = "Assets/Generated/UniversalRendererData.asset";
@@ -17,6 +18,7 @@ namespace RealisticLiquidTransfer.Editor
         private const string MaterialPath = "Assets/Generated/LiquidSurfaceMaterial.mat";
         private const string BundleName = "liquidshaders.bundle";
         private const string MaterialAddress = "LiquidSurfaceMaterial";
+        private const string ComputeShaderAddress = "LiquidDensityCompute";
 
         public static void Build()
         {
@@ -34,6 +36,12 @@ namespace RealisticLiquidTransfer.Editor
             if (!shader || !shader.isSupported)
             {
                 throw new InvalidOperationException($"The URP liquid shader is missing or unsupported: {ShaderPath}");
+            }
+
+            var computeShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            if (!computeShader)
+            {
+                throw new InvalidOperationException($"The liquid density compute shader is missing: {ComputeShaderPath}");
             }
 
             var material = AssetDatabase.LoadAssetAtPath<Material>(MaterialPath);
@@ -59,8 +67,8 @@ namespace RealisticLiquidTransfer.Editor
             var bundleBuild = new AssetBundleBuild
             {
                 assetBundleName = BundleName,
-                assetNames = new[] { MaterialPath },
-                addressableNames = new[] { MaterialAddress }
+                assetNames = new[] { MaterialPath, ComputeShaderPath },
+                addressableNames = new[] { MaterialAddress, ComputeShaderAddress }
             };
             var manifest = UnityEditor.BuildPipeline.BuildAssetBundles(
                 outputDirectory,
@@ -84,6 +92,7 @@ namespace RealisticLiquidTransfer.Editor
             try
             {
                 var bundledMaterial = validationBundle.LoadAsset<Material>(MaterialAddress);
+                var bundledComputeShader = validationBundle.LoadAsset<ComputeShader>(ComputeShaderAddress);
                 if (!bundledMaterial
                     || !bundledMaterial.shader
                     || bundledMaterial.shader.name != "RealisticLiquidTransfer/LiquidSurface"
@@ -92,6 +101,13 @@ namespace RealisticLiquidTransfer.Editor
                     throw new InvalidOperationException(
                         "The generated bundle does not contain a supported RealisticLiquidTransfer/LiquidSurface material.");
                 }
+
+                if (!bundledComputeShader)
+                {
+                    throw new InvalidOperationException(
+                        "The generated bundle does not contain the LiquidDensityCompute compute shader.");
+                }
+
             }
             finally
             {

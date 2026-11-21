@@ -10,11 +10,14 @@ internal static class LiquidShaderAssets
 {
     private const string BundleResourceName = "RealisticLiquidTransfer.Resources.liquidshaders.bundle";
     private const string MaterialAssetName = "LiquidSurfaceMaterial";
+    private const string DensityComputeAssetName = "LiquidDensityCompute";
 
     private static AssetBundle bundle;
     private static Material surfaceMaterial;
+    private static ComputeShader densityComputeShader;
 
     internal static Material SurfaceMaterial => surfaceMaterial;
+    internal static ComputeShader DensityComputeShader => densityComputeShader;
 
     internal static void Load()
     {
@@ -58,6 +61,18 @@ internal static class LiquidShaderAssets
         Debug.Log(
             $"[RealisticLiquidTransfer] Loaded material '{surfaceMaterial.name}' with shader "
             + $"'{surfaceMaterial.shader.name}' (supported={surfaceMaterial.shader.isSupported}).");
+        densityComputeShader = bundle.LoadAsset<ComputeShader>(DensityComputeAssetName);
+        if (densityComputeShader)
+        {
+            Debug.Log(
+                $"[RealisticLiquidTransfer] Loaded compute shader '{densityComputeShader.name}'.");
+        }
+        else
+        {
+            Debug.LogWarning(
+                $"[RealisticLiquidTransfer] Compute shader '{DensityComputeAssetName}' is missing; "
+                + "the CPU liquid renderer will be used.");
+        }
     }
 
     internal static void Unload()
@@ -66,6 +81,12 @@ internal static class LiquidShaderAssets
         {
             UnityEngine.Object.Destroy(surfaceMaterial);
             surfaceMaterial = null;
+        }
+
+        if (densityComputeShader)
+        {
+            UnityEngine.Object.Destroy(densityComputeShader);
+            densityComputeShader = null;
         }
 
         if (bundle)

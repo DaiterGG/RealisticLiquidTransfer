@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace RealisticLiquidTransfer;
@@ -8,22 +9,28 @@ namespace RealisticLiquidTransfer;
 internal sealed class LiquidSimulation
 {
     private const int MaximumDrops = 20000;
-    private const byte AggregateVolume = 7;
-    private const float DropRadius = 12f * 0.7368063f;
-    private const float DropCollisionDistance = DropRadius * 2f;
-    private const float DropCollisionDistanceSquared = DropCollisionDistance * DropCollisionDistance;
-    private const float AggregateRadius = DropRadius * 2.6457513f;
+    private const int MillilitersPerDropTier = 500;
+    private const int MaximumDropVolume = (MaximumDrops + MillilitersPerDropTier - 1)
+        / MillilitersPerDropTier;
+    internal const float DefaultDropRadius = 12f * 0.7368063f;
+    internal const int MinimumDropRadiusTenths = 40;
+    internal const int MaximumDropRadiusTenths = 160;
+    internal const int DefaultDropRadiusTenths = 95;
+    internal const int MinimumPackingTenths = 120;
+    internal const int MaximumPackingTenths = 220;
+    internal const int DefaultPackingTenths = 175;
     private const float DensityTexturePixelsPerUnit = 0.5f;
     private const int MaximumDensityTextureDimension = 1024;
     private const float DensityContribution = 1.2f;
     private const float TailSpeedForMaximumLength = 600f;
     private const float MaximumEncodedVelocity = 800f;
     private const int DropsPerGraphic = 4096;
-    private const float IndividualDropRadius = DropRadius * 0.88f;
     private const float SpawnRate = 1000f;
+    private const float MergeDelaySeconds = 2f;
     private const float Gravity = 420f;
     private const float GravityMultiplier = 2f;
     private const float FixedStep = 1f / 30f;
+    private const float VelocityRampDuration = 5f;
     internal const int MinimumDropCollisionPasses = 2;
     internal const int MaximumDropCollisionPasses = 6;
     internal const int MinimumCollisionCorrectionPercent = 25;
@@ -32,72 +39,86 @@ internal sealed class LiquidSimulation
     internal const int MinimumVelocityContactMarginTenths = 0;
     internal const int MaximumVelocityContactMarginTenths = 20;
     internal const int DefaultVelocityContactMarginTenths = 5;
-    private const float AggregateRingTolerance = DropRadius * 0.45f;
-    private const int AggregateMinimumSupport = 3;
-    private const int AggregateMinimumSplitSupport = 5;
-    private static readonly Vector2[] AggregateRingDirections =
-    {
-        new Vector2(1f, 0f),
-        new Vector2(0.5f, 0.8660254f),
-        new Vector2(-0.5f, 0.8660254f),
-        new Vector2(-1f, 0f),
-        new Vector2(-0.5f, -0.8660254f),
-        new Vector2(0.5f, -0.8660254f)
-    };
-
     private readonly RectTransform root;
     private readonly ContainerShape[] containers;
     private readonly bool[] openingTransitions;
+    private readonly int[] containerDropSizes;
     private readonly int[] initialContainerDropCounts;
     private Vector2[] positions = new Vector2[MaximumDrops];
     private Vector2[] previousPositions = new Vector2[MaximumDrops];
     private Vector2[] velocities = new Vector2[MaximumDrops];
+    private float[] mergeDelayRemaining = new float[MaximumDrops];
     private int[] dropIds = new int[MaximumDrops];
     private byte[] dropVolumes = new byte[MaximumDrops];
     private byte[] containerAssignments = new byte[MaximumDrops];
+    private byte[] dropSizeZoneAssignments = new byte[MaximumDrops];
     private Vector2[] reorderedPositions = new Vector2[MaximumDrops];
     private Vector2[] reorderedPreviousPositions = new Vector2[MaximumDrops];
     private Vector2[] reorderedVelocities = new Vector2[MaximumDrops];
+    private float[] reorderedMergeDelayRemaining = new float[MaximumDrops];
     private int[] reorderedDropIds = new int[MaximumDrops];
     private byte[] reorderedDropVolumes = new byte[MaximumDrops];
     private byte[] reorderedContainerAssignments = new byte[MaximumDrops];
-    private readonly bool[] aggregationConsumed = new bool[MaximumDrops];
-    private readonly int[] aggregateMembers = new int[AggregateVolume];
+    private byte[] reorderedDropSizeZoneAssignments = new byte[MaximumDrops];
     private readonly List<LiquidDropGraphic> individualDropGraphics = new List<LiquidDropGraphic>();
+    private readonly int[] pendingMergeIndices = new int[MaximumDropVolume];
     private LiquidSurfaceGraphic surfaceGraphic;
     private Texture2D densityTexture;
+    private RenderTexture densityRenderTexture;
+    private Texture2D densityUploadTexture;
     private Color32[] densityPixels;
+    private Color32[] densityUploadPixels;
     private Vector3[] densityVelocityFields;
+    private Vector4[] computeDropData;
+    private float[] computeDropRadii;
     private int[] activeDensityPixelIndices;
     private int activeDensityPixelCount;
     private int densityTextureWidth;
     private int densityTextureHeight;
+    private int densityUploadTextureWidth;
+    private int densityUploadTextureHeight;
+    private int densityComputePixelCount;
+    private int clearAccumulationKernel;
+    private int rasterizeDropsKernel;
+    private int resolveDensityKernel;
+    private ComputeBuffer densityAccumulationBuffer;
+    private ComputeBuffer computeDropDataBuffer;
+    private ComputeBuffer computeDropRadiusBuffer;
+    private ComputeShader densityComputeShader;
+    private bool supportsPartialTextureCopy;
+    private bool useComputeRendering;
     private readonly float minimumScreenX;
     private readonly float maximumScreenX;
     private readonly float minimumScreenY;
     private readonly float maximumScreenY;
-    private readonly int gridColumns;
-    private readonly int gridRows;
-    private readonly int[] cellCounts;
-    private readonly int[] cellOffsets;
-    private readonly int[] cellWriteOffsets;
-    private readonly int[] cellParticleIndices;
-    private readonly int[] activeCells;
+    private int gridColumns;
+    private int gridRows;
+    private int[] cellCounts;
+    private int[] cellOffsets;
+    private int[] cellWriteOffsets;
+    private int[] cellParticleIndices;
+    private int[] activeCells;
     private int activeCellCount;
-    private readonly float cellSize = DropRadius * 2f;
+    private float cellSize;
+    private float dropRadius = DefaultDropRadius;
+    private float initialPacking = DefaultPackingTenths / 100f;
+    private float dropCollisionDistance;
+    private float dropCollisionDistanceSquared;
     private int count;
     private int totalLiquidUnits;
     private int dropCollisionPasses = MinimumDropCollisionPasses;
     private float collisionCorrectionStrength = 1f;
     private float velocityContactMargin = 0.5f;
-    private float velocityContactDistanceSquared =
-        (DropCollisionDistance + 0.5f) * (DropCollisionDistance + 0.5f);
+    private float velocityContactDistanceSquared;
     private bool graphicsDirty = true;
     private bool surfaceShaderEnabled;
+    private bool simulationFrozen;
     private int nextDropId = 1;
     private float simulationTime;
     private float spawnAccumulator;
+    private float velocityRampElapsed;
     private float diagnosticTimer;
+    private int topSeededDropId;
     private long assignmentCorrections;
     private int offscreenDeleted;
     private int offscreenDeletedThisInterval;
@@ -114,10 +135,13 @@ internal sealed class LiquidSimulation
         RectTransform root,
         RectTransform firstContainer,
         Vector2[] firstOutline,
+        float firstCapacity,
         RectTransform secondContainer,
         Vector2[] secondOutline,
+        float secondCapacity,
         float firstAmount,
-        float secondAmount)
+        float secondAmount,
+        float initialPacking = 1.75f)
     {
         this.root = root;
         var screen = root.parent as RectTransform;
@@ -142,25 +166,22 @@ internal sealed class LiquidSimulation
             maximumScreenY = Mathf.Max(maximumScreenY, localCorner.y);
         }
 
-        gridColumns = Mathf.Max(1, Mathf.CeilToInt((maximumScreenX - minimumScreenX) / cellSize));
-        gridRows = Mathf.Max(1, Mathf.CeilToInt((maximumScreenY - minimumScreenY) / cellSize));
-        var cellCount = gridColumns * gridRows;
-        cellCounts = new int[cellCount];
-        cellOffsets = new int[cellCount + 1];
-        cellWriteOffsets = new int[cellCount];
-        cellParticleIndices = new int[MaximumDrops];
-        activeCells = new int[cellCount];
+        SetDropRadius(DefaultDropRadiusTenths / 10f);
+        SetInitialPacking(initialPacking);
         containers = new[]
         {
             new ContainerShape(root, firstContainer, firstOutline),
             new ContainerShape(root, secondContainer, secondOutline)
         };
         openingTransitions = new bool[containers.Length];
+        containerDropSizes = new[]
+        {
+            GetDropSizeForCapacity(firstCapacity),
+            GetDropSizeForCapacity(secondCapacity)
+        };
         CreateGraphics();
         SeedContainer(containers[0], GetInitialDropCount(firstAmount));
         SeedContainer(containers[1], GetInitialDropCount(secondAmount));
-        BuildSpatialGrid();
-        AggregatePackedDrops();
         initialContainerDropCounts = new[]
         {
             GetContainerDropCount(0),
@@ -169,11 +190,64 @@ internal sealed class LiquidSimulation
         DebugLog.Write(
             $"Simulation initialized: seeded "
             + $"{GetContainerDropCount(0)} receiver and {GetContainerDropCount(1)} source drops; "
-            + $"drop radius={DropRadius:F1}, screen bounds=({minimumScreenX:F1},{minimumScreenY:F1})"
+            + $"drop radius={dropRadius:F1}, screen bounds=({minimumScreenX:F1},{minimumScreenY:F1})"
             + $"-({maximumScreenX:F1},{maximumScreenY:F1}).");
     }
 
     internal int Count => totalLiquidUnits;
+
+    internal void SetDropRadius(float radius)
+    {
+        radius = Mathf.Clamp(
+            radius,
+            MinimumDropRadiusTenths / 10f,
+            MaximumDropRadiusTenths / 10f);
+        if (Mathf.Abs(dropRadius - radius) <= 0.001f)
+        {
+            return;
+        }
+
+        dropRadius = radius;
+        dropCollisionDistance = dropRadius * 2f;
+        dropCollisionDistanceSquared = dropCollisionDistance * dropCollisionDistance;
+        var contactDistance = dropCollisionDistance + velocityContactMargin;
+        velocityContactDistanceSquared = contactDistance * contactDistance;
+        RebuildSpatialGrid();
+        if (containers != null)
+        {
+            foreach (var container in containers)
+            {
+                container.SetMaximumDropRadius(dropRadius * 6.3245554f);
+                container.RefreshBoundaries();
+            }
+        }
+        graphicsDirty = true;
+        DebugLog.Write($"Base drop radius changed to {dropRadius:F2}px.");
+    }
+
+    internal void SetInitialPacking(float packing)
+    {
+        initialPacking = Mathf.Clamp(
+            packing,
+            MinimumPackingTenths / 100f,
+            MaximumPackingTenths / 100f);
+        graphicsDirty = true;
+        DebugLog.Write($"Initial drop packing changed to {initialPacking:F2}.");
+    }
+
+    private void RebuildSpatialGrid()
+    {
+        cellSize = dropRadius * 2f;
+        gridColumns = Mathf.Max(1, Mathf.CeilToInt((maximumScreenX - minimumScreenX) / cellSize));
+        gridRows = Mathf.Max(1, Mathf.CeilToInt((maximumScreenY - minimumScreenY) / cellSize));
+        var cellCount = gridColumns * gridRows;
+        cellCounts = new int[cellCount];
+        cellOffsets = new int[cellCount + 1];
+        cellWriteOffsets = new int[cellCount];
+        cellParticleIndices = new int[MaximumDrops];
+        activeCells = new int[cellCount];
+        activeCellCount = 0;
+    }
 
     internal void SetDropCollisionPasses(int passes)
     {
@@ -198,8 +272,20 @@ internal sealed class LiquidSimulation
             MinimumVelocityContactMarginTenths,
             MaximumVelocityContactMarginTenths) / 10f;
         velocityContactMargin = margin;
-        var contactDistance = DropCollisionDistance + margin;
+        var contactDistance = dropCollisionDistance + margin;
         velocityContactDistanceSquared = contactDistance * contactDistance;
+    }
+
+    internal void SetSimulationFrozen(bool frozen)
+    {
+        simulationFrozen = frozen;
+        spawnAccumulator = 0f;
+        if (frozen)
+        {
+            simulationTime = 0f;
+            Array.Clear(velocities, 0, velocities.Length);
+        }
+        DebugLog.Write($"Liquid simulation {(frozen ? "frozen" : "unfrozen")}.");
     }
 
     internal void SetSurfaceShaderEnabled(bool enabled)
@@ -291,6 +377,10 @@ internal sealed class LiquidSimulation
         Vector2 translation,
         Vector2 movementInfluence)
     {
+        if (simulationFrozen)
+        {
+            return;
+        }
         translation = Vector2.Scale(
             translation,
             new Vector2(
@@ -333,6 +423,10 @@ internal sealed class LiquidSimulation
         float currentAngle,
         Vector2 movementInfluence)
     {
+        if (simulationFrozen)
+        {
+            return;
+        }
         var oldRadians = previousAngle * Mathf.Deg2Rad;
         var oldCos = Mathf.Cos(oldRadians);
         var oldSin = Mathf.Sin(oldRadians);
@@ -379,6 +473,20 @@ internal sealed class LiquidSimulation
     internal void Tick(float deltaTime, bool spawn, Vector2 spawnPosition)
     {
         deltaTime = Mathf.Clamp(deltaTime, 0f, 0.1f);
+        if (simulationFrozen)
+        {
+            spawnAccumulator = 0f;
+            simulationTime = 0f;
+            if (graphicsDirty)
+            {
+                UpdateGraphics();
+                graphicsDirty = false;
+            }
+            return;
+        }
+        velocityRampElapsed = Mathf.Min(
+            VelocityRampDuration,
+            velocityRampElapsed + deltaTime);
         var profilingStart = SimulationProfiler.Begin();
         if (spawn)
         {
@@ -402,13 +510,29 @@ internal sealed class LiquidSimulation
         }
 
         simulationTime = Mathf.Min(simulationTime + deltaTime, FixedStep * 3f);
-        var mergesRemaining = 1;
         var steps = 0;
         while (simulationTime >= FixedStep && steps < 3)
         {
-            Step(FixedStep, ref mergesRemaining);
+            Step(FixedStep);
             simulationTime -= FixedStep;
             steps++;
+        }
+
+        if (topSeededDropId != 0 && DebugLog.IsFileEnabled)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                if (dropIds[i] == topSeededDropId)
+                {
+                    var position = positions[i];
+                    DebugLog.Write(
+                        $"Tracked top seeded drop: id={topSeededDropId}, "
+                        + $"container={containerAssignments[i]}, "
+                        + $"position=({position.x:F2},{position.y:F2}), "
+                        + $"radius={GetDropRadius(i):F2}.");
+                    break;
+                }
+            }
         }
 
         diagnosticTimer += deltaTime;
@@ -479,28 +603,50 @@ internal sealed class LiquidSimulation
         }
 
         var seeded = 0;
-        var rowSpacing = DropRadius * 1.7320508f;
-        var minimumDistanceSquared = DropRadius * DropRadius;
+        var remaining = amount;
+        var targetVolume = GetContainerDropSize(containerIndex + 1);
         var row = 0;
-        for (var y = minimum.y + DropRadius;
-            y <= maximum.y - DropRadius && seeded < amount && count < MaximumDrops;
-            y += rowSpacing, row++)
+        var topSeededPosition = Vector2.zero;
+        for (var y = minimum.y;
+            y <= maximum.y && remaining > 0 && count < MaximumDrops;
+            y += dropRadius * Mathf.Sqrt(targetVolume) * initialPacking * 0.8660254f, row++)
         {
-            var xOffset = (row & 1) == 0 ? 0f : DropRadius;
-            for (var x = minimum.x + DropRadius + xOffset;
-                x <= maximum.x - DropRadius && seeded < amount && count < MaximumDrops;
-                x += DropRadius * 2f)
+            var aggregateRadius = dropRadius * Mathf.Sqrt(targetVolume);
+            var xOffset = (row & 1) == 0 ? 0f : aggregateRadius;
+            for (var x = minimum.x + aggregateRadius + xOffset;
+                x <= maximum.x - aggregateRadius
+                    && remaining > 0
+                    && count < MaximumDrops;
+                x += aggregateRadius * initialPacking)
             {
                 var candidate = new Vector2(x, y);
+                var volume = Mathf.Min(targetVolume, remaining);
+                var candidateRadius = dropRadius * Mathf.Sqrt(volume);
                 var classification = container.Classify(candidate);
-                if (!classification.IsInside || classification.DistanceSquared < minimumDistanceSquared)
+                if (!classification.IsInside
+                    || classification.DistanceSquared < candidateRadius * candidateRadius)
                 {
                     continue;
                 }
 
-                AddDrop(candidate, Vector2.zero, (byte)(containerIndex + 1));
-                seeded++;
+                AddDrop(
+                    candidate,
+                    Vector2.zero,
+                    (byte)(containerIndex + 1),
+                    volume);
+                topSeededPosition = candidate;
+                seeded += volume;
+                remaining -= volume;
             }
+        }
+
+        if (topSeededDropId == 0 && seeded > 0)
+        {
+            topSeededDropId = nextDropId - 1;
+            DebugLog.Write(
+                $"Top seeded drop spawned: id={topSeededDropId}, container={containerIndex + 1}, "
+                + $"position=({topSeededPosition.x:F2},{topSeededPosition.y:F2}), "
+                + $"radius={dropRadius:F2}.");
         }
 
         if (seeded < amount)
@@ -529,45 +675,212 @@ internal sealed class LiquidSimulation
             return;
         }
 
-        var angle = NextRandom() * Mathf.PI * 2f;
-        var offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * (NextRandom() * DropRadius);
-        AddDrop(position + offset, new Vector2(
-            (NextRandom() * 2f - 1f) * 24f,
-            (NextRandom() * 2f - 1f) * 12f));
+        var assignment = GetContainerAssignment(position, dropRadius);
+        var volume = assignment > 0
+            ? GetContainerDropSize(assignment)
+            : 1;
+        volume = Mathf.Min(volume, MaximumDrops - totalLiquidUnits);
+        var aggregateRadius = dropRadius * Mathf.Sqrt(volume);
+        var hexPosition = FindNearestEmptySpawnPosition(position, aggregateRadius);
+        AddDrop(
+            hexPosition,
+            new Vector2(
+                (NextRandom() * 2f - 1f) * 24f,
+                (NextRandom() * 2f - 1f) * 12f),
+            assignment,
+            volume);
+    }
+
+    private Vector2 FindNearestEmptySpawnPosition(Vector2 position, float aggregateRadius)
+    {
+        var nearest = SnapToHexagonalDropPosition(position);
+        if (IsPositionEmpty(nearest, aggregateRadius, -1))
+        {
+            return nearest;
+        }
+
+        for (var ring = 1; ring <= 12; ring++)
+        {
+            var ringStart = 1;
+            for (var previousRing = 1; previousRing < ring; previousRing++)
+            {
+                ringStart += previousRing * 6;
+            }
+            for (var member = ringStart; member < ringStart + ring * 6; member++)
+            {
+                var candidate = nearest + GetSplitDropOffset(member) * (initialPacking * 0.5f);
+                if (IsPositionEmpty(candidate, aggregateRadius, -1))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return nearest;
+    }
+
+    private Vector2 SnapToHexagonalDropPosition(Vector2 position)
+    {
+        var horizontalSpacing = dropRadius * initialPacking;
+        var rowSpacing = dropRadius * initialPacking * 0.8660254f;
+        var row = Mathf.RoundToInt(position.y / rowSpacing);
+        var xOffset = (Mathf.Abs(row) & 1) != 0 ? horizontalSpacing * 0.5f : 0f;
+        var column = Mathf.RoundToInt((position.x - xOffset) / horizontalSpacing);
+        return new Vector2(
+            column * horizontalSpacing + xOffset,
+            row * rowSpacing);
+    }
+
+    private Vector2 GetHexRingOffset(int member, int ring)
+    {
+        var axialX = ring;
+        var axialY = 0;
+        var ringIndex = member;
+        for (var side = 0; side < 6 && ringIndex >= 0; side++)
+        {
+            var stepCount = Mathf.Min(ringIndex, ring);
+            MoveAlongHexRingSide(side, stepCount, ref axialX, ref axialY);
+            ringIndex -= stepCount;
+        }
+
+        return new Vector2(
+            (axialX + axialY * 0.5f) * dropRadius * 2f,
+            axialY * dropRadius * 1.7320508f);
+    }
+
+    private static void MoveAlongHexRingSide(
+        int side,
+        int steps,
+        ref int axialX,
+        ref int axialY)
+    {
+        switch (side)
+        {
+            case 0:
+                axialX -= steps;
+                axialY += steps;
+                break;
+            case 1:
+                axialX -= steps;
+                break;
+            case 2:
+                axialY -= steps;
+                break;
+            case 3:
+                axialX += steps;
+                axialY -= steps;
+                break;
+            case 4:
+                axialX += steps;
+                break;
+            default:
+                axialY += steps;
+                break;
+        }
+    }
+
+    private bool IsPositionEmpty(
+        Vector2 position,
+        float radius,
+        int excludedIndex)
+    {
+        foreach (var container in containers)
+        {
+            var classification = container.Classify(position);
+            if (!classification.IsInside)
+            {
+                continue;
+            }
+
+            if (classification.DistanceSquared >= radius * radius)
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    if (i == excludedIndex)
+                    {
+                        continue;
+                    }
+
+                    var minimumDistance = radius + GetDropRadius(i);
+                    if ((positions[i] - position).sqrMagnitude < minimumDistance * minimumDistance)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void AddDrop(Vector2 position, Vector2 velocity, byte containerAssignment = 0)
+    {
+        AddDrop(position, velocity, containerAssignment, 1);
+    }
+
+    private void AddDrop(
+        Vector2 position,
+        Vector2 velocity,
+        byte containerAssignment,
+        int volume)
     {
         if (count >= MaximumDrops)
         {
             return;
         }
 
+        volume = Mathf.Clamp(volume, 1, MaximumDropVolume);
+        if (totalLiquidUnits + volume > MaximumDrops)
+        {
+            volume = MaximumDrops - totalLiquidUnits;
+            if (volume <= 0)
+            {
+                return;
+            }
+        }
+
         positions[count] = position;
         previousPositions[count] = position;
         velocities[count] = velocity;
         dropIds[count] = nextDropId++;
-        dropVolumes[count] = 1;
-        containerAssignments[count] = containerAssignment == 0
-            ? GetContainerAssignment(position, DropRadius)
+        dropVolumes[count] = (byte)volume;
+        var assignment = containerAssignment == 0
+            ? GetContainerAssignment(position, dropRadius)
             : containerAssignment;
+        containerAssignments[count] = assignment;
+        dropSizeZoneAssignments[count] = assignment > 0
+            && containers[assignment - 1].IsPastSizeZone(position)
+                ? assignment
+                : (byte)0;
+        mergeDelayRemaining[count] = containerAssignment == 0
+            && dropSizeZoneAssignments[count] > 0
+                ? MergeDelaySeconds
+                : 0f;
         count++;
-        totalLiquidUnits++;
+        totalLiquidUnits += volume;
         graphicsDirty = true;
     }
 
-    private void Step(float deltaTime, ref int mergesRemaining)
+    private void Step(float deltaTime)
     {
         var profilingStart = SimulationProfiler.Begin();
         RefreshContainerGeometry();
+        var velocityRampRatio = Mathf.Lerp(
+            0f,
+            1f,
+            Mathf.Clamp01(velocityRampElapsed / VelocityRampDuration));
         for (var i = 0; i < count; i++)
         {
             previousPositions[i] = positions[i];
+            mergeDelayRemaining[i] = Mathf.Max(0f, mergeDelayRemaining[i] - deltaTime);
             velocities[i].y -= Gravity * GravityMultiplier * deltaTime;
+            velocities[i] *= velocityRampRatio;
             positions[i] += velocities[i] * deltaTime;
         }
         SimulationProfiler.End(SimulationProfileStage.GeometryRefreshAndIntegration, profilingStart);
-        ResolveDropCollisions(ref mergesRemaining);
+        ResolveDropCollisions();
 
         profilingStart = SimulationProfiler.Begin();
         for (var i = 0; i < count; i++)
@@ -629,6 +942,8 @@ internal sealed class LiquidSimulation
             dropIds[i] = dropIds[count];
             dropVolumes[i] = dropVolumes[count];
             containerAssignments[i] = containerAssignments[count];
+            dropSizeZoneAssignments[i] = dropSizeZoneAssignments[count];
+            mergeDelayRemaining[i] = mergeDelayRemaining[count];
             offscreenDeleted++;
         }
     }
@@ -650,7 +965,7 @@ internal sealed class LiquidSimulation
             {
                 singleParticles++;
             }
-            else if (volume == AggregateVolume)
+            else if (volume > 1)
             {
                 aggregateParticles++;
             }
@@ -675,7 +990,7 @@ internal sealed class LiquidSimulation
     {
         for (var i = 0; i < containers.Length; i++)
         {
-            if ((radius <= DropRadius && containers[i].IsInsidePaddedRectangle(position))
+            if ((radius <= dropRadius && containers[i].IsInsidePaddedRectangle(position))
                 || containers[i].Contains(position))
             {
                 return (byte)(i + 1);
@@ -694,16 +1009,32 @@ internal sealed class LiquidSimulation
             var previousPosition = previousPositions[i];
             var velocity = velocities[i];
             var assignment = containerAssignments[i];
+            var sizeZoneAssignment = dropSizeZoneAssignments[i];
             var anyOpeningTransition = false;
             for (var containerIndex = 0; containerIndex < containers.Length; containerIndex++)
             {
                 var container = containers[containerIndex];
+                if (container.CrossesSizeZone(previousPosition, position, out var enteringSizeZone))
+                {
+                    var containerAssignment = (byte)(containerIndex + 1);
+                    if (enteringSizeZone)
+                    {
+                        sizeZoneAssignment = containerAssignment;
+                        mergeDelayRemaining[i] = MergeDelaySeconds;
+                    }
+                    else if (sizeZoneAssignment == containerAssignment)
+                    {
+                        sizeZoneAssignment = 0;
+                        mergeDelayRemaining[i] = 0f;
+                    }
+                }
+
                 var crossesOpening = container.CrossesOpening(previousPosition, position);
                 var nearOpeningBefore = container.IsNearOpening(previousPosition, radius * 2f);
                 var nearOpeningAfter = container.IsNearOpening(position, radius * 2f);
                 openingTransitions[containerIndex] =
                     crossesOpening || nearOpeningBefore || nearOpeningAfter;
-                if (dropVolumes[i] == AggregateVolume
+                if (dropVolumes[i] > 1
                     && !crossesOpening
                     && (nearOpeningBefore || nearOpeningAfter)
                     && DebugLog.IsFileEnabled)
@@ -740,7 +1071,7 @@ internal sealed class LiquidSimulation
                 }
 
                 var shouldBeInside = assignment == containerIndex + 1;
-                if (shouldBeInside && radius <= DropRadius && container.IsInsidePaddedRectangle(position))
+                if (shouldBeInside && radius <= dropRadius && container.IsInsidePaddedRectangle(position))
                 {
                     continue;
                 }
@@ -785,6 +1116,7 @@ internal sealed class LiquidSimulation
             positions[i] = position;
             velocities[i] = velocity;
             containerAssignments[i] = assignment;
+            dropSizeZoneAssignments[i] = sizeZoneAssignment;
         }
     }
 
@@ -831,315 +1163,430 @@ internal sealed class LiquidSimulation
         ReorderParticlesByCell();
     }
 
-    private int AggregatePackedDrops(int maximumMerges = int.MaxValue)
+    private Vector2 FindNearestEmptyAggregatePosition(
+        int[] pendingIndices,
+        int pendingCount,
+        byte containerAssignment,
+        int targetVolume)
     {
-        if (maximumMerges <= 0)
+        var aggregateRadius = dropRadius * Mathf.Sqrt(targetVolume);
+        var container = containers[containerAssignment - 1];
+        var centroid = Vector2.zero;
+        for (var i = 0; i < pendingCount; i++)
         {
-            return 0;
+            var position = positions[pendingIndices[i]];
+            centroid += position;
+        }
+        centroid /= Mathf.Max(1, pendingCount);
+
+        for (var i = 0; i < pendingCount; i++)
+        {
+            var position = positions[pendingIndices[i]];
+            if (IsAggregatePositionEmpty(
+                    position,
+                    aggregateRadius,
+                    container,
+                    pendingIndices,
+                    pendingCount))
+            {
+                return position;
+            }
         }
 
-        Array.Clear(aggregationConsumed, 0, count);
-        var mergedCount = 0;
-        var ringToleranceSquared = AggregateRingTolerance * AggregateRingTolerance;
-        for (var center = 0; center < count; center++)
+        if (IsAggregatePositionEmpty(
+                centroid,
+                aggregateRadius,
+                container,
+                pendingIndices,
+                pendingCount))
         {
-            if (dropVolumes[center] != 1 || aggregationConsumed[center])
+            return centroid;
+        }
+
+        for (var ring = 1; ring <= 16; ring++)
+        {
+            var ringStart = 1;
+            for (var previousRing = 1; previousRing < ring; previousRing++)
             {
-                continue;
+                ringStart += previousRing * 6;
             }
 
-            var centerPosition = positions[center];
-            aggregateMembers[0] = center;
-            var completeRing = true;
-            for (var directionIndex = 0; directionIndex < AggregateRingDirections.Length; directionIndex++)
+            for (var member = ringStart; member < ringStart + ring * 6; member++)
             {
-                var target = centerPosition
-                    + AggregateRingDirections[directionIndex] * (DropRadius * 2f);
-                var targetCell = GetCell(target);
-                var targetCellX = targetCell % gridColumns;
-                var targetCellY = targetCell / gridColumns;
-                var nearest = -1;
-                var nearestDistanceSquared = ringToleranceSquared;
-                for (var cellY = Mathf.Max(0, targetCellY - 1);
-                     cellY <= Mathf.Min(gridRows - 1, targetCellY + 1);
-                     cellY++)
+                var candidate = centroid + GetSplitDropOffset(member);
+                if (IsAggregatePositionEmpty(
+                        candidate,
+                        aggregateRadius,
+                        container,
+                        pendingIndices,
+                        pendingCount))
                 {
-                    for (var cellX = Mathf.Max(0, targetCellX - 1);
-                         cellX <= Mathf.Min(gridColumns - 1, targetCellX + 1);
-                         cellX++)
-                    {
-                        var cell = cellY * gridColumns + cellX;
-                        for (var index = cellOffsets[cell]; index < cellOffsets[cell + 1]; index++)
-                        {
-                            if (index == center
-                                || dropVolumes[index] != 1
-                                || aggregationConsumed[index]
-                                || containerAssignments[index] != containerAssignments[center])
-                            {
-                                continue;
-                            }
-
-                            var alreadySelected = false;
-                            for (var member = 0; member <= directionIndex; member++)
-                            {
-                                alreadySelected |= aggregateMembers[member] == index;
-                            }
-
-                            if (alreadySelected)
-                            {
-                                continue;
-                            }
-
-                            var distanceSquared = (positions[index] - target).sqrMagnitude;
-                            if (distanceSquared < nearestDistanceSquared)
-                            {
-                                nearestDistanceSquared = distanceSquared;
-                                nearest = index;
-                            }
-                        }
-                    }
+                    return candidate;
                 }
+            }
+        }
 
-                if (nearest < 0)
+        return centroid;
+    }
+
+    private bool IsAggregatePositionEmpty(
+        Vector2 position,
+        float radius,
+        ContainerShape container,
+        int[] pendingIndices,
+        int pendingCount)
+    {
+        var classification = container.Classify(position);
+        if (!classification.IsInside
+            || classification.DistanceSquared < radius * radius)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            var isPending = false;
+            for (var pending = 0; pending < pendingCount; pending++)
+            {
+                if (pendingIndices[pending] == i)
                 {
-                    completeRing = false;
+                    isPending = true;
                     break;
                 }
-
-                aggregateMembers[directionIndex + 1] = nearest;
             }
 
-            if (!completeRing)
+            if (isPending)
             {
                 continue;
             }
 
-            var containerAssignment = containerAssignments[center];
-            if (containerAssignment > 0)
+            var minimumDistance = radius + GetDropRadius(i);
+            if ((positions[i] - position).sqrMagnitude < minimumDistance * minimumDistance)
             {
-                var classification = containers[containerAssignment - 1].Classify(centerPosition);
-                if (!classification.IsInside
-                    || classification.DistanceSquared < AggregateRadius * AggregateRadius)
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private bool NormalizeDropSizes()
+    {
+        var requiresNormalization = false;
+        for (var assignment = 0; assignment <= containers.Length; assignment++)
+        {
+            var targetVolume = assignment == 0
+                ? 1
+                : GetContainerDropSize(assignment);
+            var eligibleSingleDropCount = 0;
+            for (var i = 0; i < count; i++)
+            {
+                if (dropSizeZoneAssignments[i] != assignment)
                 {
                     continue;
                 }
+
+                var volume = dropVolumes[i];
+                if (targetVolume == 1)
+                {
+                    if (volume != 1)
+                    {
+                        requiresNormalization = true;
+                        break;
+                    }
+                    continue;
+                }
+
+                if (mergeDelayRemaining[i] > 0f)
+                {
+                    if (volume > 1)
+                    {
+                        requiresNormalization = true;
+                        break;
+                    }
+                    continue;
+                }
+
+                if (volume == targetVolume)
+                {
+                    continue;
+                }
+
+                if (volume == 1)
+                {
+                    eligibleSingleDropCount++;
+                    continue;
+                }
+
+                if (volume > targetVolume)
+                {
+                    requiresNormalization = true;
+                    break;
+                }
             }
 
-            if (CountAggregateSupport(
-                    centerPosition,
-                    AggregateRadius,
-                    -1,
-                    aggregateMembers,
-                    AggregateVolume,
-                    AggregateMinimumSupport) < AggregateMinimumSupport)
+            if (eligibleSingleDropCount >= targetVolume)
             {
+                requiresNormalization = true;
+            }
+        }
+
+        if (!requiresNormalization)
+        {
+            return false;
+        }
+
+        var originalDropCount = count;
+        var outputCount = 0;
+        for (var assignment = 0; assignment <= containers.Length; assignment++)
+        {
+            var targetVolume = assignment == 0
+                ? 1
+                : GetContainerDropSize(assignment);
+            if (assignment == 0)
+            {
+                for (var i = 0; i < originalDropCount; i++)
+                {
+                    if (dropSizeZoneAssignments[i] != 0)
+                    {
+                        continue;
+                    }
+
+                    if (dropVolumes[i] == 1)
+                    {
+                        CopyNormalizedDrop(i, outputCount++);
+                        continue;
+                    }
+
+                    WriteSplitDrops(i, 0, ref outputCount);
+                }
+
                 continue;
             }
 
-            var aggregatePosition = Vector2.zero;
-            var aggregatePreviousPosition = Vector2.zero;
-            var aggregateVelocity = Vector2.zero;
-            for (var member = 0; member < AggregateVolume; member++)
+            var pendingCount = 0;
+            for (var i = 0; i < originalDropCount; i++)
             {
-                var index = aggregateMembers[member];
-                aggregationConsumed[index] = true;
-                aggregatePosition += positions[index];
-                aggregatePreviousPosition += previousPositions[index];
-                aggregateVelocity += velocities[index];
+                if (dropSizeZoneAssignments[i] != assignment)
+                {
+                    continue;
+                }
+
+                if (dropVolumes[i] == targetVolume && mergeDelayRemaining[i] <= 0f)
+                {
+                    CopyNormalizedDrop(i, outputCount++);
+                    continue;
+                }
+
+                if (dropVolumes[i] > 1
+                    && dropVolumes[i] < targetVolume
+                    && mergeDelayRemaining[i] <= 0f)
+                {
+                    CopyNormalizedDrop(i, outputCount++);
+                    continue;
+                }
+
+                if (dropVolumes[i] == 1 && mergeDelayRemaining[i] > 0f)
+                {
+                    CopyNormalizedDrop(i, outputCount++);
+                    continue;
+                }
+
+                if (dropVolumes[i] == 1 && targetVolume > 1)
+                {
+                    pendingMergeIndices[pendingCount++] = i;
+                    if (pendingCount == targetVolume)
+                    {
+                        var first = pendingMergeIndices[0];
+                        var aggregatePosition = FindNearestEmptyAggregatePosition(
+                            pendingMergeIndices,
+                            pendingCount,
+                            (byte)assignment,
+                            targetVolume);
+                        WriteNormalizedDrop(
+                            outputCount++,
+                            targetVolume,
+                            containerAssignments[first],
+                            (byte)assignment,
+                            0f,
+                            aggregatePosition,
+                            aggregatePosition,
+                            velocities[first]);
+                        pendingCount = 0;
+                    }
+
+                    continue;
+                }
+
+                WriteSplitDrops(i, (byte)assignment, ref outputCount);
             }
 
-            positions[center] = aggregatePosition / AggregateVolume;
-            previousPositions[center] = aggregatePreviousPosition / AggregateVolume;
-            velocities[center] = aggregateVelocity / AggregateVolume;
-            dropVolumes[center] = AggregateVolume;
-            for (var member = 1; member < AggregateVolume; member++)
+            for (var pending = 0; pending < pendingCount; pending++)
             {
-                dropVolumes[aggregateMembers[member]] = 0;
-            }
-            if (DebugLog.IsFileEnabled)
-            {
-                mergedAggregatesThisInterval++;
-            }
-            mergedCount++;
-            if (mergedCount >= maximumMerges)
-            {
-                break;
-            }
-        }
-
-        if (mergedCount == 0)
-        {
-            return 0;
-        }
-
-        CompactRemovedParticles();
-        graphicsDirty = true;
-        return mergedCount;
-    }
-
-    private int SplitUnsupportedAggregates(int maximumSplits)
-    {
-        if (maximumSplits <= 0)
-        {
-            return 0;
-        }
-
-        var originalCount = count;
-        var splitCount = 0;
-        Array.Clear(aggregationConsumed, 0, originalCount);
-        for (var aggregate = 0; aggregate < originalCount; aggregate++)
-        {
-            if (dropVolumes[aggregate] != AggregateVolume)
-            {
-                continue;
-            }
-
-            var aggregatePosition = positions[aggregate];
-            var supportCount = CountAggregateSupport(
-                aggregatePosition,
-                GetDropRadius(aggregate),
-                aggregate,
-                null,
-                0,
-                AggregateMinimumSplitSupport);
-            if (supportCount >= AggregateMinimumSplitSupport
-                || count + AggregateVolume - 1 > MaximumDrops)
-            {
-                continue;
-            }
-
-            aggregationConsumed[aggregate] = true;
-            splitCount++;
-            if (splitCount >= maximumSplits)
-            {
-                break;
+                CopyNormalizedDrop(pendingMergeIndices[pending], outputCount++);
             }
         }
 
-        var selectedSplitCount = splitCount;
-        splitCount = 0;
-        for (var aggregate = 0;
-             aggregate < originalCount && splitCount < selectedSplitCount;
-             aggregate++)
+        count = outputCount;
+        if (DebugLog.IsFileEnabled)
         {
-            if (!aggregationConsumed[aggregate])
+            var particleCountChange = originalDropCount - outputCount;
+            if (particleCountChange > 0)
             {
-                continue;
+                mergedAggregatesThisInterval += particleCountChange;
             }
-
-            var aggregatePosition = positions[aggregate];
-            var aggregatePreviousPosition = previousPositions[aggregate];
-            dropVolumes[aggregate] = 1;
-            for (var member = 0; member < AggregateRingDirections.Length; member++)
+            else if (particleCountChange < 0)
             {
-                var childPosition = aggregatePosition
-                    + AggregateRingDirections[member] * (DropRadius * 2f);
-                var index = count++;
-                positions[index] = childPosition;
-                previousPositions[index] = aggregatePreviousPosition
-                    + AggregateRingDirections[member] * (DropRadius * 2f);
-                velocities[index] = velocities[aggregate];
-                dropIds[index] = nextDropId++;
-                dropVolumes[index] = 1;
-                containerAssignments[index] = containerAssignments[aggregate];
-            }
-
-            splitCount++;
-        }
-
-        if (splitCount > 0)
-        {
-            if (DebugLog.IsFileEnabled)
-            {
+                var splitCount = -particleCountChange;
                 splitAggregatesThisInterval += splitCount;
                 largestSplitBatchThisInterval = Mathf.Max(largestSplitBatchThisInterval, splitCount);
             }
-            graphicsDirty = true;
         }
 
-        return splitCount;
+        SwapBuffers(ref positions, ref reorderedPositions);
+        SwapBuffers(ref previousPositions, ref reorderedPreviousPositions);
+        SwapBuffers(ref velocities, ref reorderedVelocities);
+        SwapBuffers(ref mergeDelayRemaining, ref reorderedMergeDelayRemaining);
+        SwapBuffers(ref dropIds, ref reorderedDropIds);
+        SwapBuffers(ref dropVolumes, ref reorderedDropVolumes);
+        SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
+        SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
+        graphicsDirty = true;
+        return true;
     }
 
-    private int CountAggregateSupport(
+    private void WriteSplitDrops(int source, byte sizeZoneAssignment, ref int outputCount)
+    {
+        for (var member = 0; member < dropVolumes[source]; member++)
+        {
+            var offset = GetSplitDropOffset(member);
+            WriteNormalizedDrop(
+                outputCount++,
+                1,
+                containerAssignments[source],
+                sizeZoneAssignment,
+                mergeDelayRemaining[source],
+                positions[source] + offset,
+                previousPositions[source] + offset,
+                velocities[source]);
+        }
+    }
+
+    private void CopyNormalizedDrop(int source, int destination)
+    {
+        reorderedPositions[destination] = positions[source];
+        reorderedPreviousPositions[destination] = previousPositions[source];
+        reorderedVelocities[destination] = velocities[source];
+        reorderedMergeDelayRemaining[destination] = mergeDelayRemaining[source];
+        reorderedDropIds[destination] = dropIds[source];
+        reorderedDropVolumes[destination] = dropVolumes[source];
+        reorderedContainerAssignments[destination] = containerAssignments[source];
+        reorderedDropSizeZoneAssignments[destination] = dropSizeZoneAssignments[source];
+    }
+
+    private Vector2 GetSplitDropOffset(int member)
+    {
+        if (member == 0)
+        {
+            return Vector2.zero;
+        }
+
+        var ring = 1;
+        var firstRingMember = 1;
+        while (member >= firstRingMember + ring * 6)
+        {
+            firstRingMember += ring * 6;
+            ring++;
+        }
+
+        var ringIndex = member - firstRingMember;
+        var side = ringIndex / ring;
+        var stepsAlongSide = ringIndex % ring;
+        var axialX = ring;
+        var axialY = 0;
+        for (var currentSide = 0; currentSide < side; currentSide++)
+        {
+            MoveAlongSplitRingSide(currentSide, ring, ref axialX, ref axialY);
+        }
+        MoveAlongSplitRingSide(side, stepsAlongSide, ref axialX, ref axialY);
+
+        return new Vector2(
+            (axialX + axialY * 0.5f) * dropRadius * 2f,
+            axialY * dropRadius * 1.7320508f);
+    }
+
+    private static void MoveAlongSplitRingSide(
+        int side,
+        int steps,
+        ref int axialX,
+        ref int axialY)
+    {
+        switch (side)
+        {
+            case 0:
+                axialX -= steps;
+                axialY += steps;
+                break;
+            case 1:
+                axialX -= steps;
+                break;
+            case 2:
+                axialY -= steps;
+                break;
+            case 3:
+                axialX += steps;
+                axialY -= steps;
+                break;
+            case 4:
+                axialX += steps;
+                break;
+            default:
+                axialY += steps;
+                break;
+        }
+    }
+
+    private int GetContainerDropSize(int assignment)
+    {
+        return containerDropSizes[assignment - 1];
+    }
+
+    private static int GetDropSizeForCapacity(float capacity)
+    {
+        if (float.IsNaN(capacity) || float.IsInfinity(capacity) || capacity < 0f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+        }
+
+        return Mathf.Clamp(
+            Mathf.FloorToInt(capacity / MillilitersPerDropTier) + 1,
+            1,
+            MaximumDropVolume);
+    }
+
+    private void WriteNormalizedDrop(
+        int index,
+        int volume,
+        byte containerAssignment,
+        byte sizeZoneAssignment,
+        float mergeDelay,
         Vector2 position,
-        float radius,
-        int ignoredIndex,
-        int[] excludedIndices,
-        int excludedCount,
-        int requiredSupport)
+        Vector2 previousPosition,
+        Vector2 velocity)
     {
-        var centerCell = GetCell(position);
-        var centerCellX = centerCell % gridColumns;
-        var centerCellY = centerCell / gridColumns;
-        var supportCount = 0;
-        for (var cellY = Mathf.Max(0, centerCellY - 3);
-             cellY <= Mathf.Min(gridRows - 1, centerCellY + 3)
-                && supportCount < requiredSupport;
-             cellY++)
-        {
-            for (var cellX = Mathf.Max(0, centerCellX - 3);
-                 cellX <= Mathf.Min(gridColumns - 1, centerCellX + 3)
-                    && supportCount < requiredSupport;
-                 cellX++)
-            {
-                var cell = cellY * gridColumns + cellX;
-                for (var index = cellOffsets[cell]; index < cellOffsets[cell + 1]; index++)
-                {
-                    if (index == ignoredIndex || dropVolumes[index] == 0)
-                    {
-                        continue;
-                    }
-
-                    var isExcluded = false;
-                    for (var excluded = 0; excluded < excludedCount; excluded++)
-                    {
-                        isExcluded |= excludedIndices[excluded] == index;
-                    }
-
-                    if (isExcluded)
-                    {
-                        continue;
-                    }
-
-                    var supportDistance = radius + GetDropRadius(index) + DropRadius * 0.5f;
-                    if ((positions[index] - position).sqrMagnitude <= supportDistance * supportDistance)
-                    {
-                        supportCount++;
-                        if (supportCount >= requiredSupport)
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        return supportCount;
-    }
-
-    private void CompactRemovedParticles()
-    {
-        for (var i = 0; i < count;)
-        {
-            if (dropVolumes[i] != 0)
-            {
-                i++;
-                continue;
-            }
-
-            count--;
-            positions[i] = positions[count];
-            previousPositions[i] = previousPositions[count];
-            velocities[i] = velocities[count];
-            dropIds[i] = dropIds[count];
-            dropVolumes[i] = dropVolumes[count];
-            containerAssignments[i] = containerAssignments[count];
-        }
+        reorderedPositions[index] = position;
+        reorderedPreviousPositions[index] = previousPosition;
+        reorderedVelocities[index] = velocity;
+        reorderedMergeDelayRemaining[index] = mergeDelay;
+        reorderedDropIds[index] = nextDropId++;
+        reorderedDropVolumes[index] = (byte)volume;
+        reorderedContainerAssignments[index] = containerAssignment;
+        reorderedDropSizeZoneAssignments[index] = sizeZoneAssignment;
     }
 
     private float GetDropRadius(int index)
     {
-        return dropVolumes[index] == AggregateVolume ? AggregateRadius : DropRadius;
+        return dropRadius * Mathf.Sqrt(Mathf.Max(1, dropVolumes[index]));
     }
 
     private void ReorderParticlesByCell()
@@ -1150,17 +1597,21 @@ internal sealed class LiquidSimulation
             reorderedPositions[sortedIndex] = positions[sourceIndex];
             reorderedPreviousPositions[sortedIndex] = previousPositions[sourceIndex];
             reorderedVelocities[sortedIndex] = velocities[sourceIndex];
+            reorderedMergeDelayRemaining[sortedIndex] = mergeDelayRemaining[sourceIndex];
             reorderedDropIds[sortedIndex] = dropIds[sourceIndex];
             reorderedDropVolumes[sortedIndex] = dropVolumes[sourceIndex];
             reorderedContainerAssignments[sortedIndex] = containerAssignments[sourceIndex];
+            reorderedDropSizeZoneAssignments[sortedIndex] = dropSizeZoneAssignments[sourceIndex];
         }
 
         SwapBuffers(ref positions, ref reorderedPositions);
         SwapBuffers(ref previousPositions, ref reorderedPreviousPositions);
         SwapBuffers(ref velocities, ref reorderedVelocities);
+        SwapBuffers(ref mergeDelayRemaining, ref reorderedMergeDelayRemaining);
         SwapBuffers(ref dropIds, ref reorderedDropIds);
         SwapBuffers(ref dropVolumes, ref reorderedDropVolumes);
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
+        SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
     }
 
     private static void SwapBuffers<T>(ref T[] current, ref T[] reordered)
@@ -1176,27 +1627,12 @@ internal sealed class LiquidSimulation
         ResolveSpatialGridPairs(true);
     }
 
-    private void ResolveDropCollisions(ref int mergesRemaining)
+    private void ResolveDropCollisions()
     {
         for (var iteration = 0; iteration < dropCollisionPasses; iteration++)
         {
             var profilingStart = SimulationProfiler.Begin();
             BuildSpatialGrid();
-            if (iteration == 0)
-            {
-                var mergedCount = AggregatePackedDrops(mergesRemaining);
-                mergesRemaining -= mergedCount;
-                if (mergedCount > 0)
-                {
-                    BuildSpatialGrid();
-                }
-
-                var splitCount = SplitUnsupportedAggregates(int.MaxValue);
-                if (splitCount > 0)
-                {
-                    BuildSpatialGrid();
-                }
-            }
             SimulationProfiler.End(SimulationProfileStage.SpatialGrid, profilingStart);
 
             profilingStart = SimulationProfiler.Begin();
@@ -1207,6 +1643,10 @@ internal sealed class LiquidSimulation
             {
                 profilingStart = SimulationProfiler.Begin();
                 EnforceContainerAssignments();
+                if (iteration == dropCollisionPasses - 1)
+                {
+                    NormalizeDropSizes();
+                }
                 SimulationProfiler.End(SimulationProfileStage.AssignmentChecks, profilingStart);
             }
         }
@@ -1261,20 +1701,27 @@ internal sealed class LiquidSimulation
             }
         }
 
-        ResolveAggregatePairs(velocityOnly);
+        ResolveLargeDropPairs(velocityOnly);
     }
 
-    private void ResolveAggregatePairs(bool velocityOnly)
+    private void ResolveLargeDropPairs(bool velocityOnly)
     {
-        var cellRadius = Mathf.CeilToInt(
-            (AggregateRadius * 2f + (velocityOnly ? velocityContactMargin : 0f)) / cellSize);
+        var maximumDropRadius = dropRadius;
+        for (var i = 0; i < count; i++)
+        {
+            maximumDropRadius = Mathf.Max(maximumDropRadius, GetDropRadius(i));
+        }
+
         for (var first = 0; first < count; first++)
         {
-            if (dropVolumes[first] != AggregateVolume)
+            if (dropVolumes[first] <= 1)
             {
                 continue;
             }
 
+            var cellRadius = Mathf.CeilToInt(
+                (GetDropRadius(first) + maximumDropRadius
+                    + (velocityOnly ? velocityContactMargin : 0f)) / cellSize);
             var centerCell = GetCell(positions[first]);
             var centerCellX = centerCell % gridColumns;
             var centerCellY = centerCell / gridColumns;
@@ -1291,18 +1738,18 @@ internal sealed class LiquidSimulation
                     {
                         var second = secondOffset;
                         if (second == first
-                            || (dropVolumes[second] == AggregateVolume && second < first))
+                            || (dropVolumes[second] > 1 && second < first))
                         {
                             continue;
                         }
 
                         if (velocityOnly)
                         {
-                            ResolveAggregatePairVelocity(first, second);
+                            ResolveVariableSizePairVelocity(first, second);
                         }
                         else
                         {
-                            ResolveAggregatePair(first, second);
+                            ResolveVariableSizePair(first, second);
                         }
                     }
                 }
@@ -1358,7 +1805,7 @@ internal sealed class LiquidSimulation
         int second,
         bool velocityOnly)
     {
-        if (dropVolumes[first] == AggregateVolume || dropVolumes[second] == AggregateVolume)
+        if (dropVolumes[first] > 1 || dropVolumes[second] > 1)
         {
             return;
         }
@@ -1379,14 +1826,14 @@ internal sealed class LiquidSimulation
         var secondPosition = positions[second];
         var differenceX = secondPosition.x - firstPosition.x;
         var differenceY = secondPosition.y - firstPosition.y;
-        if (Mathf.Abs(differenceX) >= DropCollisionDistance
-            || Mathf.Abs(differenceY) >= DropCollisionDistance)
+        if (Mathf.Abs(differenceX) >= dropCollisionDistance
+            || Mathf.Abs(differenceY) >= dropCollisionDistance)
         {
             return;
         }
 
         var distanceSquared = differenceX * differenceX + differenceY * differenceY;
-        if (distanceSquared >= DropCollisionDistanceSquared)
+        if (distanceSquared >= dropCollisionDistanceSquared)
         {
             return;
         }
@@ -1396,7 +1843,7 @@ internal sealed class LiquidSimulation
         var normal = distance > 0.0001f
             ? difference / distance
             : new Vector2(1f, 0f);
-        var correction = (DropCollisionDistance - distance)
+        var correction = (dropCollisionDistance - distance)
             * collisionCorrectionStrength
             * 0.5f;
         positions[first] = firstPosition - normal * correction;
@@ -1432,7 +1879,7 @@ internal sealed class LiquidSimulation
         velocities[second] += normal * impulse;
     }
 
-    private void ResolveAggregatePair(int first, int second)
+    private void ResolveVariableSizePair(int first, int second)
     {
         var difference = positions[second] - positions[first];
         var distanceSquared = difference.sqrMagnitude;
@@ -1455,7 +1902,7 @@ internal sealed class LiquidSimulation
         positions[second] += normal * (correction * firstVolume / totalVolume);
     }
 
-    private void ResolveAggregatePairVelocity(int first, int second)
+    private void ResolveVariableSizePairVelocity(int first, int second)
     {
         var difference = positions[second] - positions[first];
         var distanceSquared = difference.sqrMagnitude;
@@ -1510,27 +1957,53 @@ internal sealed class LiquidSimulation
             Mathf.CeilToInt(height * DensityTexturePixelsPerUnit),
             128,
             MaximumDensityTextureDimension);
-        densityPixels = new Color32[densityTextureWidth * densityTextureHeight];
-        densityVelocityFields = new Vector3[densityPixels.Length];
-        activeDensityPixelIndices = new int[densityPixels.Length];
-        for (var i = 0; i < densityPixels.Length; i++)
+        densityComputePixelCount = densityTextureWidth * densityTextureHeight;
+        densityComputeShader = LiquidShaderAssets.DensityComputeShader;
+        useComputeRendering = densityComputeShader
+            && SystemInfo.supportsComputeShaders
+            && SystemInfo.SupportsRandomWriteOnRenderTextureFormat(RenderTextureFormat.ARGB32);
+        if (densityComputeShader && !useComputeRendering)
         {
-            densityPixels[i] = new Color32(0, 128, 128, 0);
+            Debug.LogWarning(
+                "[RealisticLiquidTransfer] This device cannot run the liquid compute renderer; "
+                + "the CPU liquid renderer will be used.");
         }
 
-        densityTexture = new Texture2D(
-            densityTextureWidth,
-            densityTextureHeight,
-            TextureFormat.RGBA32,
-            false,
-            true)
+        if (useComputeRendering)
         {
-            name = "LiquidDensity",
-            filterMode = FilterMode.Bilinear,
-            wrapMode = TextureWrapMode.Clamp
-        };
-        densityTexture.SetPixels32(densityPixels);
-        densityTexture.Apply(false, false);
+            densityRenderTexture = new RenderTexture(
+                densityTextureWidth,
+                densityTextureHeight,
+                0,
+                RenderTextureFormat.ARGB32,
+                RenderTextureReadWrite.Linear)
+            {
+                name = "LiquidDensity",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+                enableRandomWrite = true,
+                useMipMap = false,
+                autoGenerateMips = false
+            };
+            if (!densityRenderTexture.Create())
+            {
+                Debug.LogWarning(
+                    "[RealisticLiquidTransfer] Could not create the compute density texture; "
+                    + "falling back to the CPU liquid renderer.");
+                UnityEngine.Object.Destroy(densityRenderTexture);
+                densityRenderTexture = null;
+                useComputeRendering = false;
+            }
+        }
+
+        if (useComputeRendering)
+        {
+            InitializeComputeRendering();
+        }
+        else
+        {
+            InitializeCpuRendering();
+        }
 
         surfaceGraphic = new GameObject(
             "LiquidSurface",
@@ -1547,7 +2020,15 @@ internal sealed class LiquidSimulation
             (minimumScreenX + maximumScreenX) * 0.5f,
             (minimumScreenY + maximumScreenY) * 0.5f);
         surfaceGraphic.color = new Color(0.16f, 0.5f, 0.95f, 1f);
-        surfaceGraphic.SetDensityTexture(densityTexture);
+        surfaceGraphic.SetDensityTexture(useComputeRendering ? densityRenderTexture : densityTexture);
+        surfaceGraphic.SetDensityUploadTexture(densityUploadTexture);
+        if (useComputeRendering)
+        {
+            surfaceGraphic.SetComputeBuffers(
+                densityAccumulationBuffer,
+                computeDropDataBuffer,
+                computeDropRadiusBuffer);
+        }
         if (LiquidShaderAssets.SurfaceMaterial)
         {
             surfaceGraphic.material = LiquidShaderAssets.SurfaceMaterial;
@@ -1582,7 +2063,74 @@ internal sealed class LiquidSimulation
 
         DebugLog.Write(
             $"Created liquid density surface ({densityTextureWidth}x{densityTextureHeight}) with material "
-            + $"'{(LiquidShaderAssets.SurfaceMaterial ? LiquidShaderAssets.SurfaceMaterial.name : "Unity UI default")}'.");
+            + $"'{(LiquidShaderAssets.SurfaceMaterial ? LiquidShaderAssets.SurfaceMaterial.name : "Unity UI default")}', "
+            + $"compute rendering={(useComputeRendering ? "enabled" : "unavailable")}.");
+    }
+
+    private void InitializeCpuRendering()
+    {
+        densityPixels = new Color32[densityComputePixelCount];
+        densityVelocityFields = new Vector3[densityPixels.Length];
+        activeDensityPixelIndices = new int[densityPixels.Length];
+        for (var i = 0; i < densityPixels.Length; i++)
+        {
+            densityPixels[i] = new Color32(0, 128, 128, 0);
+        }
+
+        densityTexture = new Texture2D(
+            densityTextureWidth,
+            densityTextureHeight,
+            TextureFormat.RGBA32,
+            false,
+            true)
+        {
+            name = "LiquidDensity",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        supportsPartialTextureCopy = SystemInfo.copyTextureSupport != CopyTextureSupport.None;
+        densityTexture.SetPixels32(densityPixels);
+        densityTexture.Apply(false, false);
+    }
+
+    private void InitializeComputeRendering()
+    {
+        clearAccumulationKernel = densityComputeShader.FindKernel("ClearAccumulation");
+        rasterizeDropsKernel = densityComputeShader.FindKernel("RasterizeDrops");
+        resolveDensityKernel = densityComputeShader.FindKernel("ResolveDensity");
+        densityAccumulationBuffer = new ComputeBuffer(
+            densityComputePixelCount,
+            sizeof(int) * 4,
+            ComputeBufferType.Structured);
+        computeDropDataBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
+        computeDropRadiusBuffer = new ComputeBuffer(MaximumDrops, sizeof(float), ComputeBufferType.Structured);
+        computeDropData = new Vector4[MaximumDrops];
+        computeDropRadii = new float[MaximumDrops];
+
+        densityComputeShader.SetBuffer(clearAccumulationKernel, "_Accumulation", densityAccumulationBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_Accumulation", densityAccumulationBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropData", computeDropDataBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropRadii", computeDropRadiusBuffer);
+        densityComputeShader.SetBuffer(resolveDensityKernel, "_Accumulation", densityAccumulationBuffer);
+        densityComputeShader.SetTexture(resolveDensityKernel, "_DensityOutput", densityRenderTexture);
+        densityComputeShader.SetInt("_TextureWidth", densityTextureWidth);
+        densityComputeShader.SetInt("_TextureHeight", densityTextureHeight);
+        densityComputeShader.SetInt("_PixelCount", densityComputePixelCount);
+        densityComputeShader.SetVector(
+            "_ScreenBounds",
+            new Vector4(
+                minimumScreenX,
+                minimumScreenY,
+                maximumScreenX - minimumScreenX,
+                maximumScreenY - minimumScreenY));
+        densityComputeShader.SetFloat(
+            "_XScale",
+            (densityTextureWidth - 1) / (maximumScreenX - minimumScreenX));
+        densityComputeShader.SetFloat(
+            "_YScale",
+            (densityTextureHeight - 1) / (maximumScreenY - minimumScreenY));
+        densityComputeShader.SetFloat("_DensityContribution", DensityContribution);
+        densityComputeShader.SetFloat("_TailSpeedForMaximumLength", TailSpeedForMaximumLength);
     }
 
     private void UpdateGraphics()
@@ -1593,62 +2141,80 @@ internal sealed class LiquidSimulation
             return;
         }
 
+        if (useComputeRendering)
+        {
+            UpdateComputeGraphics();
+            return;
+        }
+
+        var minimumX = densityTextureWidth;
+        var minimumY = densityTextureHeight;
+        var maximumX = -1;
+        var maximumY = -1;
         for (var index = 0; index < activeDensityPixelCount; index++)
         {
             var pixelIndex = activeDensityPixelIndices[index];
             densityPixels[pixelIndex] = new Color32(0, 128, 128, 0);
             densityVelocityFields[pixelIndex] = Vector3.zero;
+            IncludeDensityPixel(pixelIndex, ref minimumX, ref minimumY, ref maximumX, ref maximumY);
         }
         activeDensityPixelCount = 0;
 
         var xScale = (densityTextureWidth - 1) / (maximumScreenX - minimumScreenX);
         var yScale = (densityTextureHeight - 1) / (maximumScreenY - minimumScreenY);
+        var inverseXScale = 1f / xScale;
+        var inverseYScale = 1f / yScale;
         for (var drop = 0; drop < count; drop++)
         {
             var position = positions[drop];
-            var supportRadius = GetDropRadius(drop) * 2.2f;
+            var dropRadius = GetDropRadius(drop);
+            var supportRadius = dropRadius * 2.2f;
             var supportRadiusSquared = supportRadius * supportRadius;
+            var inverseSupportRadiusSquared = 1f / supportRadiusSquared;
             var velocity = velocities[drop];
             var speed = velocity.magnitude;
-            var direction = speed > 0.001f ? velocity / speed : Vector2.zero;
-            var tailLength = direction.sqrMagnitude > 0f
-                ? GetDropRadius(drop) * 2.5f * Mathf.Clamp01(speed / TailSpeedForMaximumLength)
+            var hasDirection = speed > 0.001f;
+            var direction = hasDirection ? velocity / speed : Vector2.zero;
+            var tailLength = hasDirection
+                ? dropRadius * 2.5f * Mathf.Clamp01(speed / TailSpeedForMaximumLength)
                 : 0f;
             var centerX = Mathf.RoundToInt((position.x - minimumScreenX) * xScale);
             var centerY = Mathf.RoundToInt((position.y - minimumScreenY) * yScale);
             var radiusX = (supportRadius + tailLength) * xScale;
             var radiusY = (supportRadius + tailLength) * yScale;
             var majorRadius = supportRadius + tailLength * 0.5f;
-            var majorRadiusSquared = majorRadius * majorRadius;
+            var inverseMajorRadiusSquared = 1f / (majorRadius * majorRadius);
             var firstX = Mathf.Max(0, Mathf.FloorToInt(centerX - radiusX));
             var lastX = Mathf.Min(densityTextureWidth - 1, Mathf.CeilToInt(centerX + radiusX));
             var firstY = Mathf.Max(0, Mathf.FloorToInt(centerY - radiusY));
             var lastY = Mathf.Min(densityTextureHeight - 1, Mathf.CeilToInt(centerY + radiusY));
             for (var y = firstY; y <= lastY; y++)
             {
-                var dy = (y - centerY) / yScale;
+                var dy = (y - centerY) * inverseYScale;
                 var row = y * densityTextureWidth;
                 for (var x = firstX; x <= lastX; x++)
                 {
-                    var dx = (x - centerX) / xScale;
+                    var dx = (x - centerX) * inverseXScale;
                     var along = dx * direction.x + dy * direction.y + tailLength * 0.5f;
                     var across = -dx * direction.y + dy * direction.x;
-                    var normalizedDistanceSquared = direction.sqrMagnitude > 0f
-                        ? along * along / majorRadiusSquared + across * across / supportRadiusSquared
-                        : (dx * dx + dy * dy) / supportRadiusSquared;
-                    var baseRemaining = Mathf.Max(0f, 1f - normalizedDistanceSquared);
-                    var contribution = DensityContribution * baseRemaining * baseRemaining;
-
-                    if (contribution <= 0f)
+                    var normalizedDistanceSquared = hasDirection
+                        ? along * along * inverseMajorRadiusSquared
+                            + across * across * inverseSupportRadiusSquared
+                        : (dx * dx + dy * dy) * inverseSupportRadiusSquared;
+                    if (normalizedDistanceSquared >= 1f)
                     {
                         continue;
                     }
+
+                    var baseRemaining = 1f - normalizedDistanceSquared;
+                    var contribution = DensityContribution * baseRemaining * baseRemaining;
 
                     var pixelIndex = row + x;
                     var velocityField = densityVelocityFields[pixelIndex];
                     if (velocityField.x <= 0f)
                     {
                         activeDensityPixelIndices[activeDensityPixelCount++] = pixelIndex;
+                        IncludeDensityPixel(pixelIndex, ref minimumX, ref minimumY, ref maximumX, ref maximumY);
                     }
 
                     var density = Mathf.Min(
@@ -1681,8 +2247,131 @@ internal sealed class LiquidSimulation
             densityPixels[i].a = byte.MaxValue;
         }
 
-        densityTexture.SetPixels32(densityPixels);
-        densityTexture.Apply(false, false);
+        if (maximumX >= minimumX && maximumY >= minimumY)
+        {
+            UploadDensityRegion(minimumX, minimumY, maximumX, maximumY);
+        }
+    }
+
+    private void UpdateComputeGraphics()
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var position = positions[i];
+            var velocity = velocities[i];
+            computeDropData[i] = new Vector4(position.x, position.y, velocity.x, velocity.y);
+            computeDropRadii[i] = GetDropRadius(i);
+        }
+
+        if (count > 0)
+        {
+            computeDropDataBuffer.SetData(computeDropData, 0, 0, count);
+            computeDropRadiusBuffer.SetData(computeDropRadii, 0, 0, count);
+        }
+
+        densityComputeShader.SetInt("_DropCount", count);
+        densityComputeShader.Dispatch(clearAccumulationKernel, (densityComputePixelCount + 255) / 256, 1, 1);
+        if (count > 0)
+        {
+            densityComputeShader.Dispatch(rasterizeDropsKernel, count, 1, 1);
+        }
+
+        densityComputeShader.Dispatch(
+            resolveDensityKernel,
+            (densityTextureWidth + 7) / 8,
+            (densityTextureHeight + 7) / 8,
+            1);
+    }
+
+    private void IncludeDensityPixel(
+        int pixelIndex,
+        ref int minimumX,
+        ref int minimumY,
+        ref int maximumX,
+        ref int maximumY)
+    {
+        var x = pixelIndex % densityTextureWidth;
+        var y = pixelIndex / densityTextureWidth;
+        minimumX = Mathf.Min(minimumX, x);
+        minimumY = Mathf.Min(minimumY, y);
+        maximumX = Mathf.Max(maximumX, x);
+        maximumY = Mathf.Max(maximumY, y);
+    }
+
+    private void UploadDensityRegion(int minimumX, int minimumY, int maximumX, int maximumY)
+    {
+        var width = maximumX - minimumX + 1;
+        var height = maximumY - minimumY + 1;
+        var textureArea = densityTextureWidth * densityTextureHeight;
+        if (!supportsPartialTextureCopy || width * height >= textureArea)
+        {
+            densityTexture.SetPixels32(densityPixels);
+            densityTexture.Apply(false, false);
+            return;
+        }
+
+        EnsureDensityUploadTexture(width, height);
+        if (densityUploadPixels.Length >= textureArea)
+        {
+            densityTexture.SetPixels32(densityPixels);
+            densityTexture.Apply(false, false);
+            return;
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            Array.Copy(
+                densityPixels,
+                (minimumY + y) * densityTextureWidth + minimumX,
+                densityUploadPixels,
+                y * densityUploadTextureWidth,
+                width);
+        }
+
+        densityUploadTexture.SetPixels32(densityUploadPixels);
+        densityUploadTexture.Apply(false, false);
+        Graphics.CopyTexture(
+            densityUploadTexture,
+            0,
+            0,
+            0,
+            0,
+            width,
+            height,
+            densityTexture,
+            0,
+            0,
+            minimumX,
+            minimumY);
+    }
+
+    private void EnsureDensityUploadTexture(int width, int height)
+    {
+        if (densityUploadTextureWidth >= width && densityUploadTextureHeight >= height)
+        {
+            return;
+        }
+
+        densityUploadTextureWidth = Mathf.Max(densityUploadTextureWidth, width);
+        densityUploadTextureHeight = Mathf.Max(densityUploadTextureHeight, height);
+        densityUploadPixels = new Color32[densityUploadTextureWidth * densityUploadTextureHeight];
+        if (densityUploadTexture)
+        {
+            UnityEngine.Object.Destroy(densityUploadTexture);
+        }
+
+        densityUploadTexture = new Texture2D(
+            densityUploadTextureWidth,
+            densityUploadTextureHeight,
+            TextureFormat.RGBA32,
+            false,
+            true)
+        {
+            name = "LiquidDensityUpload",
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        surfaceGraphic.SetDensityUploadTexture(densityUploadTexture);
     }
 
     private void UpdateIndividualDropGraphics()
@@ -1699,7 +2388,7 @@ internal sealed class LiquidSimulation
                 dropVolumes,
                 start,
                 length,
-                IndividualDropRadius,
+                dropRadius * 0.88f,
                 screenCenter);
         }
     }
@@ -1729,6 +2418,7 @@ internal sealed class LiquidSimulation
      private readonly int distanceFieldRows;
      private readonly float[] signedDistanceField;
      private readonly Vector2[] distanceFieldGradients;
+     private float maximumDropRadius = DefaultDropRadius * 6.3245554f;
      private Matrix4x4 rootToContainerMatrix;
      private Rect paddedInteriorRectangle;
      private float paddedInteriorRectanglePadding = -1f;
@@ -1736,6 +2426,11 @@ internal sealed class LiquidSimulation
      private Vector2 openingEnd;
      private Vector2 openingSegment;
      private float openingLengthSquared;
+     private readonly float sizeZoneDepth;
+     private Vector2 sizeZoneStart;
+     private Vector2 sizeZoneEnd;
+     private Vector2 sizeZoneSegment;
+     private float sizeZoneLengthSquared;
      private float rootUnitsPerLocalUnit = 1f;
      private int boundaryNodeCount;
 
@@ -1744,6 +2439,15 @@ internal sealed class LiquidSimulation
          this.root = root;
          this.transform = transform;
          Outline = outline ?? Array.Empty<Vector2>();
+         var minimumLocalY = Outline.Length > 0 ? Outline[0].y : 0f;
+         var maximumLocalY = minimumLocalY;
+         foreach (var point in Outline)
+         {
+             minimumLocalY = Mathf.Min(minimumLocalY, point.y);
+             maximumLocalY = Mathf.Max(maximumLocalY, point.y);
+         }
+         sizeZoneDepth = (maximumLocalY - minimumLocalY) * 0.02f;
+
          boundaries = new BoundarySegment[Mathf.Max(0, Outline.Length - 1)];
          boundaryNodes = new BoundaryNode[Mathf.Max(0, boundaries.Length * 2 - 1)];
          boundaryOrder = new int[boundaries.Length];
@@ -1799,6 +2503,11 @@ internal sealed class LiquidSimulation
          return root.InverseTransformPoint(transform.TransformPoint(localPoint));
      }
 
+     internal void SetMaximumDropRadius(float radius)
+     {
+         maximumDropRadius = radius;
+     }
+
      internal void RefreshBoundaries()
      {
          rootToContainerMatrix = transform.worldToLocalMatrix * root.localToWorldMatrix;
@@ -1811,7 +2520,7 @@ internal sealed class LiquidSimulation
          var rootUnitsX = (ToRootPoint(Vector2.right) - rootOrigin).magnitude;
          var rootUnitsY = (ToRootPoint(Vector2.up) - rootOrigin).magnitude;
          rootUnitsPerLocalUnit = Mathf.Max(Mathf.Min(rootUnitsX, rootUnitsY), 0.0001f);
-         var rectanglePadding = (DropRadius + 0.01f) / rootUnitsPerLocalUnit;
+         var rectanglePadding = (maximumDropRadius + 0.01f) / rootUnitsPerLocalUnit;
          if (Mathf.Abs(rectanglePadding - paddedInteriorRectanglePadding) > 0.01f)
          {
              paddedInteriorRectangle = FindLargestPaddedInteriorRectangle(rectanglePadding);
@@ -1824,6 +2533,10 @@ internal sealed class LiquidSimulation
          openingEnd = ToRootPoint(Outline[Outline.Length - 1]);
          openingSegment = openingEnd - openingStart;
          openingLengthSquared = openingSegment.sqrMagnitude;
+         sizeZoneStart = ToRootPoint(Outline[0] + Vector2.down * sizeZoneDepth);
+         sizeZoneEnd = ToRootPoint(Outline[Outline.Length - 1] + Vector2.down * sizeZoneDepth);
+         sizeZoneSegment = sizeZoneEnd - sizeZoneStart;
+         sizeZoneLengthSquared = sizeZoneSegment.sqrMagnitude;
          for (var i = 0; i < boundaries.Length; i++)
          {
              var start = ToRootPoint(Outline[i]);
@@ -1959,6 +2672,41 @@ internal sealed class LiquidSimulation
              && openingAmount < 1f;
      }
 
+     internal bool IsPastSizeZone(Vector2 point)
+     {
+         return sizeZoneLengthSquared > Mathf.Epsilon
+             && Cross(sizeZoneSegment, point - sizeZoneStart) * -interiorOrientation >= 0f;
+     }
+
+     internal bool CrossesSizeZone(Vector2 start, Vector2 end, out bool entering)
+     {
+         entering = false;
+         if (sizeZoneLengthSquared <= Mathf.Epsilon)
+         {
+             return false;
+         }
+
+         var movement = end - start;
+         var denominator = Cross(movement, sizeZoneSegment);
+         if (Mathf.Abs(denominator) <= Mathf.Epsilon)
+         {
+             return false;
+         }
+
+         var offset = sizeZoneStart - start;
+         var movementAmount = Cross(offset, sizeZoneSegment) / denominator;
+         var zoneAmount = Cross(offset, movement) / denominator;
+         if (movementAmount < 0f || movementAmount > 1f || zoneAmount < 0f || zoneAmount > 1f)
+         {
+             return false;
+         }
+
+         var startSide = Cross(sizeZoneSegment, start - sizeZoneStart) * -interiorOrientation;
+         var endSide = Cross(sizeZoneSegment, end - sizeZoneStart) * -interiorOrientation;
+         entering = endSide > startSide;
+         return true;
+     }
+
      internal bool IsNearOpening(Vector2 point, float margin)
      {
          if (Outline.Length < 2)
@@ -2002,7 +2750,7 @@ internal sealed class LiquidSimulation
 
          var isInside = signedDistance >= 0f;
          var distance = Mathf.Abs(signedDistance) * rootUnitsPerLocalUnit;
-         if (distance < AggregateRadius + DistanceFieldCellSize * rootUnitsPerLocalUnit)
+         if (distance < maximumDropRadius + DistanceFieldCellSize * rootUnitsPerLocalUnit)
          {
              return ClassifyExact(point);
          }
@@ -2610,14 +3358,35 @@ internal sealed class LiquidSimulation
 
 internal sealed class LiquidSurfaceGraphic : MaskableGraphic
 {
-    private Texture2D densityTexture;
+    private Texture densityTexture;
+    private Texture2D densityUploadTexture;
+    private RenderTexture densityRenderTexture;
+    private ComputeBuffer densityAccumulationBuffer;
+    private ComputeBuffer computeDropDataBuffer;
+    private ComputeBuffer computeDropRadiusBuffer;
 
     public override Texture mainTexture => densityTexture ? densityTexture : s_WhiteTexture;
 
-    internal void SetDensityTexture(Texture2D texture)
+    internal void SetDensityTexture(Texture texture)
     {
         densityTexture = texture;
+        densityRenderTexture = texture as RenderTexture;
         SetVerticesDirty();
+    }
+
+    internal void SetDensityUploadTexture(Texture2D texture)
+    {
+        densityUploadTexture = texture;
+    }
+
+    internal void SetComputeBuffers(
+        ComputeBuffer accumulation,
+        ComputeBuffer dropData,
+        ComputeBuffer dropRadii)
+    {
+        densityAccumulationBuffer = accumulation;
+        computeDropDataBuffer = dropData;
+        computeDropRadiusBuffer = dropRadii;
     }
 
     protected override void OnPopulateMesh(VertexHelper vertexHelper)
@@ -2643,11 +3412,31 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
 
     protected override void OnDestroy()
     {
-        if (densityTexture)
+        if (densityRenderTexture)
+        {
+            densityRenderTexture.Release();
+            Destroy(densityRenderTexture);
+            densityRenderTexture = null;
+            densityTexture = null;
+        }
+        else if (densityTexture)
         {
             Destroy(densityTexture);
             densityTexture = null;
         }
+
+        if (densityUploadTexture)
+        {
+            Destroy(densityUploadTexture);
+            densityUploadTexture = null;
+        }
+
+        densityAccumulationBuffer?.Release();
+        densityAccumulationBuffer = null;
+        computeDropDataBuffer?.Release();
+        computeDropDataBuffer = null;
+        computeDropRadiusBuffer?.Release();
+        computeDropRadiusBuffer = null;
 
         base.OnDestroy();
     }
@@ -2692,7 +3481,7 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
         for (var drop = 0; drop < count; drop++)
         {
             var center = positions[start + drop] - localOffset;
-            var dropRadius = radius * (volumes[start + drop] > 1 ? 2.6457513f : 1f);
+            var dropRadius = radius * Mathf.Sqrt(Mathf.Max(1, volumes[start + drop]));
             var centerIndex = vertexHelper.currentVertCount;
             AddVertex(vertexHelper, center);
             for (var segment = 0; segment < UnitCircle.Length; segment++)

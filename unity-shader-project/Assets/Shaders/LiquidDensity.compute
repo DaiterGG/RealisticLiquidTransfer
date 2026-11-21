@@ -1,0 +1,131 @@
+#pragma kernel ClearAccumulation
+#pragma kernel RasterizeDrops
+#pragma kernel ResolveDensity
+
+#define VELOCITY_SCALE 4096.0
+#define MAX_ENCODED_VELOCITY 800.0
+#define MAX_VELOCITY_RATIO 8.0
+
+StructuredBuffer<float4> _DropData;
+StructuredBuffer<float> _DropRadii;
+RWStructuredBuffer<int4> _Accumulation;
+RWTexture2D<float4> _DensityOutput;
+
+int _TextureWidth;
+int _TextureHeight;
+int _PixelCount;
+int _DropCount;
+float4 _ScreenBounds;
+float _XScale;
+float _YScale;
+float _DensityContribution;
+float _TailSpeedForMaximumLength;
+
+[numthreads(256, 1, 1)]
+void ClearAccumulation(uint3 dispatchId : SV_DispatchThreadID)
+{
+    if (dispatchId.x >= (uint)_PixelCount)
+    {
+        return;
+    }
+
+    _Accumulation[dispatchId.x] = int4(0, 0, 0, 0);
+}
+
+[numthreads(8, 8, 1)]
+void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
+{
+    uint dropIndex = groupId.x;
+    if (dropIndex >= (uint)_DropCount)
+    {
+        return;
+    }
+
+    float4 drop = _DropData[dropIndex];
+    float2 position = drop.xy;
+    float2 velocity = drop.zw;
+    float dropRadius = _DropRadii[dropIndex];
+    float supportRadius = dropRadius * 2.2;
+    float inverseSupportRadiusSquared = 1.0 / (supportRadius * supportRadius);
+    float speed = length(velocity);
+    bool hasDirection = speed > 0.001;
+    float2 direction = hasDirection ? velocity / speed : 0.0;
+    float tailLength = hasDirection
+        ? dropRadius * 2.5 * saturate(speed / _TailSpeedForMaximumLength)
+        : 0.0;
+    float2 velocityRatio = clamp(
+        velocity / MAX_ENCODED_VELOCITY,
+        -MAX_VELOCITY_RATIO,
+        MAX_VELOCITY_RATIO);
+    int2 center = (int2)round((position - _ScreenBounds.xy) * float2(_XScale, _YScale));
+    float2 radii = (supportRadius + tailLength) * float2(_XScale, _YScale);
+    float majorRadius = supportRadius + tailLength * 0.5;
+    float inverseMajorRadiusSquared = 1.0 / (majorRadius * majorRadius);
+    int2 firstPixel = max(int2(0, 0), (int2)floor(center - radii));
+    int2 lastPixel = min(
+        int2(_TextureWidth - 1, _TextureHeight - 1),
+        (int2)ceil(center + radii));
+
+    for (int tileY = firstPixel.y; tileY <= lastPixel.y; tileY += 8)
+    {
+        for (int tileX = firstPixel.x; tileX <= lastPixel.x; tileX += 8)
+        {
+            int2 pixel = int2(tileX, tileY) + int2(threadId.xy);
+            if (pixel.x > lastPixel.x || pixel.y > lastPixel.y)
+            {
+                continue;
+            }
+
+            float2 offset = (float2(pixel - center)) / float2(_XScale, _YScale);
+            float normalizedDistanceSquared;
+            if (hasDirection)
+            {
+                float along = dot(offset, direction) + tailLength * 0.5;
+                float across = -offset.x * direction.y + offset.y * direction.x;
+                normalizedDistanceSquared = along * along * inverseMajorRadiusSquared
+                    + across * across * inverseSupportRadiusSquared;
+            }
+            else
+            {
+                normalizedDistanceSquared = dot(offset, offset) * inverseSupportRadiusSquared;
+            }
+
+            if (normalizedDistanceSquared >= 1.0)
+            {
+                continue;
+            }
+
+            float remaining = 1.0 - normalizedDistanceSquared;
+            float contribution = _DensityContribution * remaining * remaining;
+            int densityIncrement = (int)round(contribution * 255.0);
+            int weight = (int)round(contribution * VELOCITY_SCALE);
+            int velocityX = (int)round(velocityRatio.x * contribution * VELOCITY_SCALE);
+            int velocityY = (int)round(velocityRatio.y * contribution * VELOCITY_SCALE);
+            uint pixelIndex = (uint)(pixel.y * _TextureWidth + pixel.x);
+            int ignored;
+            InterlockedAdd(_Accumulation[pixelIndex].x, densityIncrement, ignored);
+            InterlockedAdd(_Accumulation[pixelIndex].y, weight, ignored);
+            InterlockedAdd(_Accumulation[pixelIndex].z, velocityX, ignored);
+            InterlockedAdd(_Accumulation[pixelIndex].w, velocityY, ignored);
+        }
+    }
+}
+
+[numthreads(8, 8, 1)]
+void ResolveDensity(uint3 dispatchId : SV_DispatchThreadID)
+{
+    if (dispatchId.x >= (uint)_TextureWidth || dispatchId.y >= (uint)_TextureHeight)
+    {
+        return;
+    }
+
+    uint pixelIndex = dispatchId.y * _TextureWidth + dispatchId.x;
+    int4 accumulated = _Accumulation[pixelIndex];
+    float2 encodedVelocity = accumulated.y > 0
+        ? clamp((float2)accumulated.zw / accumulated.y, -1.0, 1.0)
+        : 0.0;
+    _DensityOutput[dispatchId.xy] = float4(
+        min(accumulated.x, 255) / 255.0,
+        round((encodedVelocity * 0.5 + 0.5) * 255.0) / 255.0,
+        accumulated.y > 0 ? 1.0 : 0.0);
+}
