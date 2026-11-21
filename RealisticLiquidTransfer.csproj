@@ -28,6 +28,7 @@
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
     <Compile Include="Patches.cs" />
+    <Compile Include="DebugLaunchSetup.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="resources\*.png">
