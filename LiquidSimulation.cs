@@ -128,8 +128,6 @@ internal sealed class LiquidSimulation
     private int mergedAggregatesThisInterval;
     private int splitAggregatesThisInterval;
     private int largestSplitBatchThisInterval;
-    private int aggregateOpeningBypassesThisInterval;
-    private int openingBypassSamplesThisInterval;
     private uint randomState = 0xA341316Cu;
 
     internal LiquidSimulation(
@@ -549,7 +547,6 @@ internal sealed class LiquidSimulation
                 + $"{invalidVolumeParticles} invalid), merged/split this interval="
                 + $"{mergedAggregatesThisInterval}/{splitAggregatesThisInterval} "
                 + $"(largest split batch={largestSplitBatchThisInterval}), "
-                + $"rim bypasses={aggregateOpeningBypassesThisInterval}, "
                 + $"off-screen deleted this interval={offscreenDeletedThisInterval} particles/"
                 + $"{offscreenUnitsDeletedThisInterval} units (total={offscreenDeleted}), "
                 + $"assignment corrections={assignmentCorrections}.");
@@ -560,8 +557,6 @@ internal sealed class LiquidSimulation
             mergedAggregatesThisInterval = 0;
             splitAggregatesThisInterval = 0;
             largestSplitBatchThisInterval = 0;
-            aggregateOpeningBypassesThisInterval = 0;
-            openingBypassSamplesThisInterval = 0;
             diagnosticTimer %= 1f;
         }
 
@@ -1041,27 +1036,8 @@ internal sealed class LiquidSimulation
                     }
                 }
 
-                var crossesOpening = container.CrossesOpening(previousPosition, position);
-                var nearOpeningBefore = container.IsNearOpening(previousPosition, radius * 2f);
-                var nearOpeningAfter = container.IsNearOpening(position, radius * 2f);
                 openingTransitions[containerIndex] =
-                    crossesOpening || nearOpeningBefore || nearOpeningAfter;
-                if (dropVolumes[i] > 1
-                    && !crossesOpening
-                    && (nearOpeningBefore || nearOpeningAfter)
-                    && DebugLog.IsFileEnabled)
-                {
-                    aggregateOpeningBypassesThisInterval++;
-                    if (openingBypassSamplesThisInterval < 2)
-                    {
-                        DebugLog.Write(
-                            $"Aggregate near-rim exemption: id={dropIds[i]}, "
-                            + $"container={containerIndex + 1}, position=({position.x:F2},{position.y:F2}), "
-                            + $"previous=({previousPosition.x:F2},{previousPosition.y:F2}), "
-                            + $"radius={radius:F2}, openingDistance={container.GetOpeningDistance(position):F2}.");
-                        openingBypassSamplesThisInterval++;
-                    }
-                }
+                    container.CrossesOpening(previousPosition, position);
                 anyOpeningTransition |= openingTransitions[containerIndex];
             }
 
@@ -2680,21 +2656,10 @@ internal sealed class LiquidSimulation
              return false;
          }
 
-         var movement = end - start;
-         var opening = openingEnd - openingStart;
-         var denominator = Cross(movement, opening);
-         if (Mathf.Abs(denominator) <= Mathf.Epsilon)
-         {
-             return false;
-         }
-
-         var offset = openingStart - start;
-         var movementAmount = Cross(offset, opening) / denominator;
-         var openingAmount = Cross(offset, movement) / denominator;
-         return movementAmount >= 0f
-             && movementAmount <= 1f
-             && openingAmount > 0f
-             && openingAmount < 1f;
+         var startSide = Cross(openingSegment, start - openingStart);
+         var endSide = Cross(openingSegment, end - openingStart);
+         return startSide <= 0f && endSide > 0f
+             || startSide >= 0f && endSide < 0f;
      }
 
      internal bool IsPastSizeZone(Vector2 point)
@@ -2765,34 +2730,6 @@ internal sealed class LiquidSimulation
          var endSide = Cross(mergeSizeZoneSegment, end - mergeSizeZoneStart) * -interiorOrientation;
          entering = endSide > startSide;
          return true;
-     }
-
-     internal bool IsNearOpening(Vector2 point, float margin)
-     {
-         if (Outline.Length < 2)
-         {
-             return false;
-         }
-
-         var amount = openingLengthSquared <= Mathf.Epsilon
-             ? 0f
-             : Mathf.Clamp01(Vector2.Dot(point - openingStart, openingSegment) / openingLengthSquared);
-         var nearestPoint = openingStart + openingSegment * amount;
-         return (point - nearestPoint).sqrMagnitude <= margin * margin;
-     }
-
-     internal float GetOpeningDistance(Vector2 point)
-     {
-         if (Outline.Length < 2)
-         {
-             return float.PositiveInfinity;
-         }
-
-         var amount = openingLengthSquared <= Mathf.Epsilon
-             ? 0f
-             : Mathf.Clamp01(Vector2.Dot(point - openingStart, openingSegment) / openingLengthSquared);
-         var nearestPoint = openingStart + openingSegment * amount;
-         return (point - nearestPoint).magnitude;
      }
 
      private static float Cross(Vector2 first, Vector2 second)
