@@ -9,6 +9,20 @@ namespace RealisticLiquidTransfer;
 [HarmonyPatch(typeof(PlayerCamera), nameof(PlayerCamera.StartLiquidTransfer))]
 internal static class StartLiquidTransferPatch
 {
+    private static readonly HashSet<string> SyringeMinigameItemIds =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "morphine",
+            "syringe",
+            "opium",
+            "heroin",
+            "naloxone",
+            "fentanyl",
+            "ceftriaxone",
+            "saline",
+            "ringersolution"
+        };
+
     [HarmonyPrefix]
     private static bool Prefix(WaterContainerItem wat1, WaterContainerItem wat2)
     {
@@ -131,6 +145,12 @@ internal static class StartLiquidTransferPatch
         {
             Plugin.LogWarning($"Could not read the {containerLabel} liquid-transfer container sprite: container is unavailable.");
             return "Unavailable";
+        }
+
+        if (container.TryGetComponent<Item>(out var item)
+            && SyringeMinigameItemIds.Contains(item.id))
+        {
+            return "syringe";
         }
 
         var spriteRenderer = container.GetComponent<SpriteRenderer>();
