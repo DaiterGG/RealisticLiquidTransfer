@@ -65,9 +65,46 @@ internal static class ModSprites
             return matchingSprite;
         }
 
+        var baseSpriteName = RemoveTrailingStateNumber(originalSpriteName);
+        if (!string.Equals(baseSpriteName, originalSpriteName, StringComparison.Ordinal)
+            && ContainerSprites.TryGetValue(baseSpriteName, out matchingSprite))
+        {
+            return matchingSprite;
+        }
+
         Plugin.LogWarning(
             $"No container sprite resource matched '{originalSpriteName ?? "null"}'; using {DefaultContainerName}.png.");
         return defaultContainer;
+    }
+
+    private static string RemoveTrailingStateNumber(string spriteName)
+    {
+        if (string.IsNullOrWhiteSpace(spriteName))
+        {
+            return spriteName;
+        }
+
+        var end = spriteName.Length;
+        while (end > 0 && char.IsDigit(spriteName[end - 1]))
+        {
+            end--;
+        }
+
+        if (end == spriteName.Length)
+        {
+            return spriteName;
+        }
+
+        if (end > 0 && spriteName[end - 1] == ')')
+        {
+            end--;
+            if (end > 0 && spriteName[end - 1] == '(')
+            {
+                end--;
+            }
+        }
+
+        return spriteName.Substring(0, end).TrimEnd(' ', '_', '-');
     }
 
     internal static void Unload()
