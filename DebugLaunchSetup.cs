@@ -71,39 +71,28 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }, equip: true, barrelIndex: -1);
-        GiveContainer(body, "minibarrel", EqualDensityMixture, equip: true, barrelIndex: -1);
-        GiveContainer(
-            body,
-            "waterbottle",
-            System.Array.Empty<LiquidMix>(),
-            equip: true,
-            barrelIndex: -1);
-        for (var index = 1; index < TestBarrelMixtures.Length; index++)
+        var bottleCount = 0;
+        foreach (var mixture in TestBottleMixtures)
         {
-            GiveContainer(
-                body,
-                "minibarrel",
-                TestBarrelMixtures[index],
-                equip: false,
-                barrelIndex: index);
+            if (!GiveContainer(body, "waterbottle", mixture))
+            {
+                break;
+            }
+
+            bottleCount++;
         }
 
-        Plugin.LogInfo(
-            "Debug startup: equipped a full water jug, equal-density mini barrel, and empty water bottle; "
-            + $"spawned {TestBarrelMixtures.Length - 1} additional mixed-liquid mini barrels nearby.");
+        Plugin.LogInfo($"Debug startup: equipped {bottleCount} mixed-liquid water bottles in inventory.");
     }
 
-    private static readonly LiquidMix[] EqualDensityMixture =
+    private static readonly LiquidMix[][] TestBottleMixtures =
     {
-        new LiquidMix("Clean water", 0.34f),
-        new LiquidMix("Coffee", 0.33f),
-        new LiquidMix("Dirty water", 0.33f)
-    };
-
-    private static readonly LiquidMix[][] TestBarrelMixtures =
-    {
-        EqualDensityMixture,
+        new[]
+        {
+            new LiquidMix("Clean water", 0.34f),
+            new LiquidMix("Coffee", 0.33f),
+            new LiquidMix("Dirty water", 0.33f)
+        },
         new[]
         {
             new LiquidMix("Alcohol", 0.30f),
@@ -124,31 +113,31 @@ internal static class DebugLaunchTutorialPatch
         }
     };
 
-    private static void GiveContainer(
-        Body body,
-        string itemId,
-        LiquidMix[] mixture,
-        bool equip,
-        int barrelIndex)
+    private static bool GiveContainer(Body body, string itemId, LiquidMix[] mixture)
     {
-        var spawnPosition = equip
-            ? body.transform.position
-            : body.transform.position + new Vector3(1.25f + barrelIndex * 1.1f, 1.25f, 0f);
         var prefab = Resources.Load<GameObject>(itemId);
         if (!prefab)
         {
             Plugin.LogError($"Debug startup: item prefab '{itemId}' was not found.");
-            return;
+            return false;
         }
 
-        var instance = Object.Instantiate(prefab, spawnPosition, Quaternion.identity);
+        var instance = Object.Instantiate(prefab, body.transform.position, Quaternion.identity);
         var item = instance.GetComponent<Item>();
         var container = instance.GetComponent<WaterContainerItem>();
         if (!item || !container)
         {
             Object.Destroy(instance);
             Plugin.LogError($"Debug startup: '{itemId}' is missing its item or liquid-container component.");
-            return;
+            return false;
+        }
+
+        var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
+        if (slotIndex < 0)
+        {
+            Object.Destroy(instance);
+            Plugin.LogWarning($"Debug startup: no compatible inventory slot remains for '{itemId}'.");
+            return false;
         }
 
         container.DrainAll();
@@ -157,7 +146,7 @@ internal static class DebugLaunchTutorialPatch
             if (!TryResolveLiquidId(portion.LiquidName, out var liquidId))
             {
                 Object.Destroy(instance);
-                return;
+                return false;
             }
 
             var amount = container.Capacity * portion.Fraction;
@@ -168,24 +157,8 @@ internal static class DebugLaunchTutorialPatch
                 Plugin.LogError(
                     $"Debug startup: '{itemId}' accepted {added:0.###} of {amount:0.###} mL "
                     + $"of '{liquidId}'.");
-                return;
+                return false;
             }
-        }
-
-        if (!equip)
-        {
-            Plugin.LogInfo(
-                $"Debug startup: spawned mixed-liquid '{itemId}' at {spawnPosition} "
-                + $"with {container.CurrentTotal:0} mL.");
-            return;
-        }
-
-        var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
-        if (slotIndex < 0)
-        {
-            Object.Destroy(instance);
-            Plugin.LogError($"Debug startup: no compatible empty inventory slot for '{itemId}'.");
-            return;
         }
 
         body.PickUpItem(item, slotIndex, force: true);
@@ -193,11 +166,12 @@ internal static class DebugLaunchTutorialPatch
         {
             Object.Destroy(instance);
             Plugin.LogError($"Debug startup: could not equip '{itemId}'.");
-            return;
+            return false;
         }
 
         Plugin.LogInfo(
             $"Debug startup: equipped '{itemId}' in slot {slotIndex} with {container.CurrentTotal:0} mL.");
+        return true;
     }
 
     private static bool TryResolveLiquidId(string liquidName, out string liquidId)
