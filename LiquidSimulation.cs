@@ -200,6 +200,20 @@ internal sealed class LiquidSimulation
     private int densitySwapScanCursor;
     private int activeDensitySwapCount;
     private float densitySwapCooldownRemaining;
+    private float densitySwapDiagnosticsTimer;
+    private int densitySwapScansSinceDiagnostic;
+    private int densitySwapCandidatesSinceDiagnostic;
+    private int densitySwapUnqualifiedSinceDiagnostic;
+    private int densitySwapEligibleSinceDiagnostic;
+    private int densitySwapOutsideContainerSinceDiagnostic;
+    private int densitySwapTooFastSinceDiagnostic;
+    private int densitySwapNoHigherDensitySinceDiagnostic;
+    private int densitySwapUnsupportedSinceDiagnostic;
+    private int densitySwapBlockedPathSinceDiagnostic;
+    private int densitySwapDeferredByCooldownSinceDiagnostic;
+    private int densitySwapDeferredByConcurrencySinceDiagnostic;
+    private int densitySwapStartedSinceDiagnostic;
+    private int densitySwapCompletedSinceDiagnostic;
     private uint randomState = 0xA341316Cu;
 
     internal LiquidSimulation(
@@ -1487,6 +1501,11 @@ internal sealed class LiquidSimulation
                     densitySwapProgress[i] = -1f;
                     densitySwapCooldownRemaining = DensitySwapCooldown;
                     activeDensitySwapCount--;
+                    if (DebugLog.IsFileEnabled)
+                    {
+                        densitySwapCompletedSinceDiagnostic++;
+                        DebugLog.Write($"Density swap completed: drop id={dropIds[i]}.");
+                    }
                 }
 
                 continue;
@@ -1526,6 +1545,7 @@ internal sealed class LiquidSimulation
         profilingStart = SimulationProfiler.Begin();
         RemoveOffscreenDrops();
         SimulationProfiler.End(SimulationProfileStage.OffscreenCleanup, profilingStart);
+        UpdateDensitySwapDiagnostics(deltaTime);
         graphicsDirty = true;
     }
 
@@ -2444,10 +2464,28 @@ internal sealed class LiquidSimulation
 
     private void TryStartDensitySwaps()
     {
-        if (count == 0
-            || activeDensitySwapCount >= MaximumConcurrentDensitySwapDrops
-            || densitySwapCooldownRemaining > 0f)
+        if (count == 0)
         {
+            return;
+        }
+
+        if (activeDensitySwapCount >= MaximumConcurrentDensitySwapDrops)
+        {
+            if (DebugLog.IsFileEnabled)
+            {
+                densitySwapDeferredByConcurrencySinceDiagnostic++;
+            }
+
+            return;
+        }
+
+        if (densitySwapCooldownRemaining > 0f)
+        {
+            if (DebugLog.IsFileEnabled)
+            {
+                densitySwapDeferredByCooldownSinceDiagnostic++;
+            }
+
             return;
         }
 
@@ -2458,8 +2496,19 @@ internal sealed class LiquidSimulation
         }
 
         densitySwapCheckTimer %= DensitySwapCheckInterval;
+        var diagnosticsEnabled = DebugLog.IsFileEnabled;
+        if (diagnosticsEnabled)
+        {
+            densitySwapScansSinceDiagnostic++;
+        }
+
         densitySwapScanCursor %= count;
         var candidatesToCheck = Mathf.Min(count, DensitySwapCandidateBudget);
+        if (diagnosticsEnabled)
+        {
+            densitySwapCandidatesSinceDiagnostic += candidatesToCheck;
+        }
+
         var maximumSpeedSquared = DensitySwapMaximumSpeed * DensitySwapMaximumSpeed;
         for (var candidateIndex = 0; candidateIndex < candidatesToCheck; candidateIndex++)
         {
@@ -2477,9 +2526,23 @@ internal sealed class LiquidSimulation
             if (densitySwapProgress[drop] >= 0f
                 || dropVolumes[drop] != 1
                 || containerAssignments[drop] == 0
-                || containerAssignments[drop] > containers.Length
-                || velocities[drop].sqrMagnitude > maximumSpeedSquared)
+                || containerAssignments[drop] > containers.Length)
             {
+                if (diagnosticsEnabled)
+                {
+                    densitySwapUnqualifiedSinceDiagnostic++;
+                }
+
+                continue;
+            }
+
+            if (velocities[drop].sqrMagnitude > maximumSpeedSquared)
+            {
+                if (diagnosticsEnabled)
+                {
+                    densitySwapTooFastSinceDiagnostic++;
+                }
+
                 continue;
             }
 
@@ -2487,7 +2550,17 @@ internal sealed class LiquidSimulation
             var position = positions[drop];
             if (!containers[containerIndex].Contains(position))
             {
+                if (diagnosticsEnabled)
+                {
+                    densitySwapOutsideContainerSinceDiagnostic++;
+                }
+
                 continue;
+            }
+
+            if (diagnosticsEnabled)
+            {
+                densitySwapEligibleSinceDiagnostic++;
             }
 
             var dropDensity = GetDensityForDrop(drop);
@@ -2497,22 +2570,47 @@ internal sealed class LiquidSimulation
                     dropDensity,
                     out var higherDensityDrop))
             {
+                if (diagnosticsEnabled)
+                {
+                    densitySwapNoHigherDensitySinceDiagnostic++;
+                }
+
                 continue;
             }
 
             var radius = GetDropRadius(drop);
-            if (!HasDenseNeighbors(drop, higherDensityDrop, containerAssignments[drop], radius)
-                || !HasDenseNeighbors(
+            var hasFirstSupport = HasDenseNeighbors(
+                drop,
+                higherDensityDrop,
+                containerAssignments[drop],
+                radius);
+            var hasSecondSupport = hasFirstSupport
+                && HasDenseNeighbors(
                     higherDensityDrop,
                     drop,
                     containerAssignments[drop],
-                    radius)
-                || !IsDensitySwapPathClear(
+                    radius);
+            if (!hasFirstSupport || !hasSecondSupport)
+            {
+                if (diagnosticsEnabled)
+                {
+                    densitySwapUnsupportedSinceDiagnostic++;
+                }
+
+                continue;
+            }
+
+            if (!IsDensitySwapPathClear(
                     containerIndex,
                     position,
                     positions[higherDensityDrop],
                     radius))
             {
+                if (diagnosticsEnabled)
+                {
+                    densitySwapBlockedPathSinceDiagnostic++;
+                }
+
                 continue;
             }
 
@@ -2530,7 +2628,61 @@ internal sealed class LiquidSimulation
             densitySwapProgress[drop] = 0f;
             densitySwapProgress[higherDensityDrop] = 0f;
             activeDensitySwapCount += 2;
+            if (diagnosticsEnabled)
+            {
+                densitySwapStartedSinceDiagnostic++;
+                DebugLog.Write(
+                    $"Density swap started: low id={dropIds[drop]}, density={dropDensity:F3}, "
+                    + $"position=({position.x:F1},{position.y:F1}); "
+                    + $"high id={dropIds[higherDensityDrop]}, "
+                    + $"density={GetDensityForDrop(higherDensityDrop):F3}, "
+                    + $"position=({higherPosition.x:F1},{higherPosition.y:F1}), "
+                    + $"speed={velocities[drop].magnitude:F2}.");
+            }
         }
+    }
+
+    private void UpdateDensitySwapDiagnostics(float deltaTime)
+    {
+        if (!DebugLog.IsFileEnabled)
+        {
+            return;
+        }
+
+        densitySwapDiagnosticsTimer += deltaTime;
+        if (densitySwapDiagnosticsTimer < 1f)
+        {
+            return;
+        }
+
+        densitySwapDiagnosticsTimer %= 1f;
+        DebugLog.Write(
+            $"Density swap diagnostics: drops={count}, collisionActiveDrops={activeDropCount}, "
+            + $"activeSwapDrops={activeDensitySwapCount}, cooldown={densitySwapCooldownRemaining:F2}s, "
+            + $"scans={densitySwapScansSinceDiagnostic}, candidates={densitySwapCandidatesSinceDiagnostic}, "
+            + $"unqualified={densitySwapUnqualifiedSinceDiagnostic}, "
+            + $"outsideContainer={densitySwapOutsideContainerSinceDiagnostic}, "
+            + $"eligible={densitySwapEligibleSinceDiagnostic}, tooFast={densitySwapTooFastSinceDiagnostic}, "
+            + $"noHigherDensity={densitySwapNoHigherDensitySinceDiagnostic}, "
+            + $"unsupported={densitySwapUnsupportedSinceDiagnostic}, "
+            + $"blockedPath={densitySwapBlockedPathSinceDiagnostic}, "
+            + $"deferredCooldown={densitySwapDeferredByCooldownSinceDiagnostic}, "
+            + $"deferredConcurrency={densitySwapDeferredByConcurrencySinceDiagnostic}, "
+            + $"started={densitySwapStartedSinceDiagnostic}, "
+            + $"completed={densitySwapCompletedSinceDiagnostic}.");
+        densitySwapScansSinceDiagnostic = 0;
+        densitySwapCandidatesSinceDiagnostic = 0;
+        densitySwapUnqualifiedSinceDiagnostic = 0;
+        densitySwapEligibleSinceDiagnostic = 0;
+        densitySwapOutsideContainerSinceDiagnostic = 0;
+        densitySwapTooFastSinceDiagnostic = 0;
+        densitySwapNoHigherDensitySinceDiagnostic = 0;
+        densitySwapUnsupportedSinceDiagnostic = 0;
+        densitySwapBlockedPathSinceDiagnostic = 0;
+        densitySwapDeferredByCooldownSinceDiagnostic = 0;
+        densitySwapDeferredByConcurrencySinceDiagnostic = 0;
+        densitySwapStartedSinceDiagnostic = 0;
+        densitySwapCompletedSinceDiagnostic = 0;
     }
 
     private bool TryFindHigherDensityDrop(
