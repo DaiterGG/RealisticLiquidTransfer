@@ -44,12 +44,11 @@ internal sealed class LiquidSimulation
     private const float Gravity = 420f;
     private const float GravityMultiplier = 2f;
     private const float FixedStep = 1f / 30f;
-    private const float DensitySwapCheckInterval = 0.1f;
-    private const float DensitySwapDuration = 0.75f;
-    private const float DensitySwapCooldown = 1f;
+    private const float DensitySwapDuration = 1f;
     private const float DensitySwapMaximumSpeed = 8f;
     private const float DensitySwapComparisonTolerance = 0.005f;
     private const int DensitySwapCandidateBudget = 96;
+    private const int MaximumDensitySwapPairsPerFrame = 2;
     private const float VelocityRampDuration = 2f;
     private const float OutsideDropExtraBoundsPadding = 1f;
     internal const int MinimumDropCollisionPasses = 2;
@@ -197,10 +196,8 @@ internal sealed class LiquidSimulation
     private int mergedAggregatesThisInterval;
     private int splitAggregatesThisInterval;
     private int largestSplitBatchThisInterval;
-    private float densitySwapCheckTimer;
     private int densitySwapScanCursor;
     private int activeDensitySwapCount;
-    private float densitySwapCooldownRemaining;
     private float densitySwapDiagnosticsTimer;
     private int densitySwapScansSinceDiagnostic;
     private int densitySwapCandidatesSinceDiagnostic;
@@ -209,7 +206,6 @@ internal sealed class LiquidSimulation
     private int densitySwapOutsideContainerSinceDiagnostic;
     private int densitySwapTooFastSinceDiagnostic;
     private int densitySwapNoHigherDensitySinceDiagnostic;
-    private int densitySwapDeferredByCooldownSinceDiagnostic;
     private int densitySwapStartedSinceDiagnostic;
     private int densitySwapCompletedSinceDiagnostic;
     private uint randomState = 0xA341316Cu;
@@ -1474,9 +1470,6 @@ internal sealed class LiquidSimulation
             1f,
             Mathf.Clamp01(velocityRampElapsed / VelocityRampDuration));
         UpdateOutsideDropFastPath(deltaTime, velocityRampRatio);
-        densitySwapCooldownRemaining = Mathf.Max(
-            0f,
-            densitySwapCooldownRemaining - deltaTime);
         for (var i = 0; i < count; i++)
         {
             previousPositions[i] = positions[i];
@@ -1490,7 +1483,6 @@ internal sealed class LiquidSimulation
                 if (progress >= 1f)
                 {
                     densitySwapProgress[i] = -1f;
-                    densitySwapCooldownRemaining = DensitySwapCooldown;
                     activeDensitySwapCount--;
                     if (DebugLog.IsFileEnabled)
                     {
@@ -2451,23 +2443,6 @@ internal sealed class LiquidSimulation
             return;
         }
 
-        if (densitySwapCooldownRemaining > 0f)
-        {
-            if (DebugLog.IsFileEnabled)
-            {
-                densitySwapDeferredByCooldownSinceDiagnostic++;
-            }
-
-            return;
-        }
-
-        densitySwapCheckTimer += FixedStep;
-        if (densitySwapCheckTimer < DensitySwapCheckInterval)
-        {
-            return;
-        }
-
-        densitySwapCheckTimer %= DensitySwapCheckInterval;
         var diagnosticsEnabled = DebugLog.IsFileEnabled;
         if (diagnosticsEnabled)
         {
@@ -2476,15 +2451,16 @@ internal sealed class LiquidSimulation
 
         densitySwapScanCursor %= count;
         var candidatesToCheck = Mathf.Min(count, DensitySwapCandidateBudget);
-        if (diagnosticsEnabled)
-        {
-            densitySwapCandidatesSinceDiagnostic += candidatesToCheck;
-        }
 
         var maximumSpeedSquared = DensitySwapMaximumSpeed * DensitySwapMaximumSpeed;
         var pendingDensitySwapCount = 0;
         for (var candidateIndex = 0; candidateIndex < candidatesToCheck; candidateIndex++)
         {
+            if (diagnosticsEnabled)
+            {
+                densitySwapCandidatesSinceDiagnostic++;
+            }
+
             var drop = densitySwapScanCursor++;
             if (densitySwapScanCursor >= count)
             {
@@ -2562,6 +2538,10 @@ internal sealed class LiquidSimulation
             pendingDensitySwapFirstDrops[pendingDensitySwapCount] = drop;
             pendingDensitySwapSecondDrops[pendingDensitySwapCount] = higherDensityDrop;
             pendingDensitySwapCount++;
+            if (pendingDensitySwapCount >= MaximumDensitySwapPairsPerFrame)
+            {
+                break;
+            }
         }
 
         for (var pair = 0; pair < pendingDensitySwapCount; pair++)
@@ -2609,13 +2589,12 @@ internal sealed class LiquidSimulation
         densitySwapDiagnosticsTimer %= 1f;
         DebugLog.Write(
             $"Density swap diagnostics: drops={count}, collisionActiveDrops={activeDropCount}, "
-            + $"activeSwapDrops={activeDensitySwapCount}, cooldown={densitySwapCooldownRemaining:F2}s, "
+            + $"activeSwapDrops={activeDensitySwapCount}, "
             + $"scans={densitySwapScansSinceDiagnostic}, candidates={densitySwapCandidatesSinceDiagnostic}, "
             + $"unqualified={densitySwapUnqualifiedSinceDiagnostic}, "
             + $"outsideContainer={densitySwapOutsideContainerSinceDiagnostic}, "
             + $"eligible={densitySwapEligibleSinceDiagnostic}, tooFast={densitySwapTooFastSinceDiagnostic}, "
             + $"noHigherDensity={densitySwapNoHigherDensitySinceDiagnostic}, "
-            + $"deferredCooldown={densitySwapDeferredByCooldownSinceDiagnostic}, "
             + $"started={densitySwapStartedSinceDiagnostic}, "
             + $"completed={densitySwapCompletedSinceDiagnostic}.");
         densitySwapScansSinceDiagnostic = 0;
@@ -2625,7 +2604,6 @@ internal sealed class LiquidSimulation
         densitySwapOutsideContainerSinceDiagnostic = 0;
         densitySwapTooFastSinceDiagnostic = 0;
         densitySwapNoHigherDensitySinceDiagnostic = 0;
-        densitySwapDeferredByCooldownSinceDiagnostic = 0;
         densitySwapStartedSinceDiagnostic = 0;
         densitySwapCompletedSinceDiagnostic = 0;
     }
@@ -3352,6 +3330,13 @@ internal sealed class LiquidSimulation
         for (var drop = 0; drop < count; drop++)
         {
             var position = GetDensitySwapVisualPosition(drop);
+            var transitioning = densitySwapProgress[drop] >= 0f;
+            var path = densitySwapPaths[drop];
+            var transitionStart = transitioning
+                ? new Vector2(path.x, path.y)
+                : position;
+            var transitionSegment = position - transitionStart;
+            var transitionSegmentLengthSquared = transitionSegment.sqrMagnitude;
             var dropRadius = GetDropRadius(drop);
             var supportRadius = dropRadius * 2.2f;
             var supportRadiusSquared = supportRadius * supportRadius;
@@ -3373,6 +3358,26 @@ internal sealed class LiquidSimulation
             var lastX = Mathf.Min(densityTextureWidth - 1, Mathf.CeilToInt(centerX + radiusX));
             var firstY = Mathf.Max(0, Mathf.FloorToInt(centerY - radiusY));
             var lastY = Mathf.Min(densityTextureHeight - 1, Mathf.CeilToInt(centerY + radiusY));
+            if (transitioning)
+            {
+                var startCenterX = (transitionStart.x - minimumScreenX) * xScale;
+                var startCenterY = (transitionStart.y - minimumScreenY) * yScale;
+                var bridgeRadiusX = supportRadius * xScale;
+                var bridgeRadiusY = supportRadius * yScale;
+                firstX = Mathf.Min(
+                    firstX,
+                    Mathf.Max(0, Mathf.FloorToInt(startCenterX - bridgeRadiusX)));
+                lastX = Mathf.Max(
+                    lastX,
+                    Mathf.Min(densityTextureWidth - 1, Mathf.CeilToInt(startCenterX + bridgeRadiusX)));
+                firstY = Mathf.Min(
+                    firstY,
+                    Mathf.Max(0, Mathf.FloorToInt(startCenterY - bridgeRadiusY)));
+                lastY = Mathf.Max(
+                    lastY,
+                    Mathf.Min(densityTextureHeight - 1, Mathf.CeilToInt(startCenterY + bridgeRadiusY)));
+            }
+
             for (var y = firstY; y <= lastY; y++)
             {
                 var dy = (y - centerY) * inverseYScale;
@@ -3386,13 +3391,36 @@ internal sealed class LiquidSimulation
                         ? along * along * inverseMajorRadiusSquared
                             + across * across * inverseSupportRadiusSquared
                         : (dx * dx + dy * dy) * inverseSupportRadiusSquared;
-                    if (normalizedDistanceSquared >= 1f)
+                    var contribution = 0f;
+                    if (normalizedDistanceSquared < 1f)
+                    {
+                        var baseRemaining = 1f - normalizedDistanceSquared;
+                        contribution = DensityContribution * baseRemaining * baseRemaining;
+                    }
+
+                    if (transitioning && transitionSegmentLengthSquared > 0.0001f)
+                    {
+                        var worldPosition = position + new Vector2(dx, dy);
+                        var segmentProgress = Mathf.Clamp01(
+                            Vector2.Dot(worldPosition - transitionStart, transitionSegment)
+                                / transitionSegmentLengthSquared);
+                        var nearestPathPosition = transitionStart + transitionSegment * segmentProgress;
+                        var bridgeOffset = worldPosition - nearestPathPosition;
+                        var bridgeDistanceSquared =
+                            bridgeOffset.sqrMagnitude * inverseSupportRadiusSquared;
+                        if (bridgeDistanceSquared < 1f)
+                        {
+                            var bridgeRemaining = 1f - bridgeDistanceSquared;
+                            contribution = Mathf.Max(
+                                contribution,
+                                DensityContribution * bridgeRemaining * bridgeRemaining);
+                        }
+                    }
+
+                    if (contribution <= 0f)
                     {
                         continue;
                     }
-
-                    var baseRemaining = 1f - normalizedDistanceSquared;
-                    var contribution = DensityContribution * baseRemaining * baseRemaining;
 
                     var pixelIndex = row + x;
                     var velocityField = densityVelocityFields[pixelIndex];
@@ -4857,18 +4885,62 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
             var center = GetVisualPosition(dropIndex) - localOffset;
             var dropRadius = radius * Mathf.Sqrt(Mathf.Max(1, volumes[start + drop]));
             var dropColor = colors[start + drop];
-            var centerIndex = vertexHelper.currentVertCount;
-            AddVertex(vertexHelper, center, dropColor);
-            for (var segment = 0; segment < UnitCircle.Length; segment++)
+            if (swapProgress[dropIndex] >= 0f)
             {
-                AddVertex(vertexHelper, center + UnitCircle[segment] * dropRadius, dropColor);
+                var path = swapPaths[dropIndex];
+                var transitionStart = new Vector2(path.x, path.y) - localOffset;
+                var transition = center - transitionStart;
+                if (transition.sqrMagnitude > 0.0001f)
+                {
+                    AddTransitionBridge(
+                        vertexHelper,
+                        transitionStart,
+                        center,
+                        dropRadius,
+                        dropColor);
+                    AddDropCircle(vertexHelper, transitionStart, dropRadius, dropColor);
+                }
             }
 
-            for (var segment = 0; segment < UnitCircle.Length; segment++)
-            {
-                var next = (segment + 1) % UnitCircle.Length;
-                vertexHelper.AddTriangle(centerIndex, centerIndex + 1 + segment, centerIndex + 1 + next);
-            }
+            AddDropCircle(vertexHelper, center, dropRadius, dropColor);
+        }
+    }
+
+    private void AddTransitionBridge(
+        VertexHelper vertexHelper,
+        Vector2 startPosition,
+        Vector2 endPosition,
+        float dropRadius,
+        Vector4 dropColor)
+    {
+        var direction = (endPosition - startPosition).normalized;
+        var perpendicular = new Vector2(-direction.y, direction.x) * dropRadius;
+        var firstVertex = vertexHelper.currentVertCount;
+        AddVertex(vertexHelper, startPosition + perpendicular, dropColor);
+        AddVertex(vertexHelper, startPosition - perpendicular, dropColor);
+        AddVertex(vertexHelper, endPosition - perpendicular, dropColor);
+        AddVertex(vertexHelper, endPosition + perpendicular, dropColor);
+        vertexHelper.AddTriangle(firstVertex, firstVertex + 1, firstVertex + 2);
+        vertexHelper.AddTriangle(firstVertex, firstVertex + 2, firstVertex + 3);
+    }
+
+    private void AddDropCircle(
+        VertexHelper vertexHelper,
+        Vector2 center,
+        float dropRadius,
+        Vector4 dropColor)
+    {
+        var centerIndex = vertexHelper.currentVertCount;
+        AddVertex(vertexHelper, center, dropColor);
+        for (var segment = 0; segment < UnitCircle.Length; segment++)
+        {
+            AddVertex(vertexHelper, center + UnitCircle[segment] * dropRadius, dropColor);
+        }
+
+        for (var segment = 0; segment < UnitCircle.Length; segment++)
+        {
+            var next = (segment + 1) % UnitCircle.Length;
+            vertexHelper.AddTriangle(centerIndex, centerIndex + 1 + segment, centerIndex + 1 + next);
         }
     }
 

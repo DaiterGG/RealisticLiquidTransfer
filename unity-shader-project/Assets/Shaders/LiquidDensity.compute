@@ -51,11 +51,14 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
     float2 velocity = drop.zw;
     float dropRadius = _DropRadii[dropIndex];
     float4 dropColor = _DropColors[dropIndex];
-    if (dropColor.a < 1.0)
+    bool transitioning = dropColor.a < 1.0;
+    float2 transitionStart = position;
+    if (transitioning)
     {
         float progress = saturate(dropColor.a);
         progress = progress * progress * (3.0 - 2.0 * progress);
         float4 swapPath = _DropSwapPaths[dropIndex];
+        transitionStart = swapPath.xy;
         position = lerp(swapPath.xy, swapPath.zw, progress);
     }
 
@@ -79,6 +82,20 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
     int2 lastPixel = min(
         int2(_TextureWidth - 1, _TextureHeight - 1),
         (int2)ceil(center + radii));
+    float2 transitionSegment = position - transitionStart;
+    float transitionSegmentLengthSquared = dot(transitionSegment, transitionSegment);
+    if (transitioning)
+    {
+        float2 startCenter =
+            (transitionStart - _ScreenBounds.xy) * float2(_XScale, _YScale);
+        float2 bridgeRadii = supportRadius * float2(_XScale, _YScale);
+        firstPixel = max(
+            int2(0, 0),
+            min(firstPixel, (int2)floor(startCenter - bridgeRadii)));
+        lastPixel = min(
+            int2(_TextureWidth - 1, _TextureHeight - 1),
+            max(lastPixel, (int2)ceil(startCenter + bridgeRadii)));
+    }
 
     for (int tileY = firstPixel.y; tileY <= lastPixel.y; tileY += 8)
     {
@@ -104,13 +121,38 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
                 normalizedDistanceSquared = dot(offset, offset) * inverseSupportRadiusSquared;
             }
 
-            if (normalizedDistanceSquared >= 1.0)
+            float contribution = 0.0;
+            if (normalizedDistanceSquared < 1.0)
+            {
+                float remaining = 1.0 - normalizedDistanceSquared;
+                contribution = _DensityContribution * remaining * remaining;
+            }
+
+            if (transitioning && transitionSegmentLengthSquared > 0.0001)
+            {
+                float2 worldPosition = position + offset;
+                float segmentProgress = saturate(
+                    dot(worldPosition - transitionStart, transitionSegment)
+                        / transitionSegmentLengthSquared);
+                float2 nearestPathPosition = transitionStart
+                    + transitionSegment * segmentProgress;
+                float2 bridgeOffset = worldPosition - nearestPathPosition;
+                float bridgeDistanceSquared =
+                    dot(bridgeOffset, bridgeOffset) * inverseSupportRadiusSquared;
+                if (bridgeDistanceSquared < 1.0)
+                {
+                    float bridgeRemaining = 1.0 - bridgeDistanceSquared;
+                    float bridgeContribution =
+                        _DensityContribution * bridgeRemaining * bridgeRemaining;
+                    contribution = max(contribution, bridgeContribution);
+                }
+            }
+
+            if (contribution <= 0.0)
             {
                 continue;
             }
 
-            float remaining = 1.0 - normalizedDistanceSquared;
-            float contribution = _DensityContribution * remaining * remaining;
             int densityIncrement = (int)round(contribution * 255.0);
             int weight = (int)round(contribution * VELOCITY_SCALE);
             int velocityX = (int)round(velocityRatio.x * contribution * VELOCITY_SCALE);
