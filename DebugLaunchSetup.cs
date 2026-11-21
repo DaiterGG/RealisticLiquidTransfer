@@ -71,47 +71,23 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        var bottleCount = 0;
-        foreach (var mixture in TestBottleMixtures)
-        {
-            if (!GiveContainer(body, "waterbottle", mixture))
+        GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) });
+        GiveContainer(body, "waterbottle", System.Array.Empty<LiquidMix>());
+        GiveContainer(
+            body,
+            "minibarrel",
+            new[]
             {
-                break;
-            }
-
-            bottleCount++;
-        }
-
-        Plugin.LogInfo($"Debug startup: equipped {bottleCount} mixed-liquid water bottles in inventory.");
+                new LiquidMix("Alcohol", 0.20f),
+                new LiquidMix("Oil", 0.20f),
+                new LiquidMix("Clean water", 0.20f),
+                new LiquidMix("Coffee", 0.20f),
+                new LiquidMix("Milk", 0.20f)
+            });
+        Plugin.LogInfo(
+            "Debug startup: equipped one water jug, one empty water bottle, "
+            + "and one mini barrel with a five-liquid density test mixture.");
     }
-
-    private static readonly LiquidMix[][] TestBottleMixtures =
-    {
-        new[]
-        {
-            new LiquidMix("Clean water", 0.34f),
-            new LiquidMix("Coffee", 0.33f),
-            new LiquidMix("Dirty water", 0.33f)
-        },
-        new[]
-        {
-            new LiquidMix("Alcohol", 0.30f),
-            new LiquidMix("Oil", 0.30f),
-            new LiquidMix("Clean water", 0.40f)
-        },
-        new[]
-        {
-            new LiquidMix("Coffee", 0.35f),
-            new LiquidMix("Milk", 0.35f),
-            new LiquidMix("Red blood", 0.30f)
-        },
-        new[]
-        {
-            new LiquidMix("Clean water", 0.60f),
-            new LiquidMix("Red sludge", 0.20f),
-            new LiquidMix("Mercury", 0.20f)
-        }
-    };
 
     private static bool GiveContainer(Body body, string itemId, LiquidMix[] mixture)
     {
