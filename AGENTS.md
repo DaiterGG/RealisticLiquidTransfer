@@ -3,4 +3,4 @@ when player tries to transfer luqids by dragging one container into another, ins
 player then can drag one container to spill into another, transfered liquid get calculated into in game liqid transfer
 
 Before making changes, create a Git branch from the currently selected commit.
-After making changes, build and verify them, then commit all task changes on that branch.
+After making changes, build and verify them, run `debug.ps1`, then commit all task changes on that branch.
