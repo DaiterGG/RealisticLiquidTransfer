@@ -18,7 +18,7 @@ internal sealed class LiquidSimulation
     internal const int DefaultDropRadiusTenths = 95;
     internal const int MinimumPackingTenths = 120;
     internal const int MaximumPackingTenths = 220;
-    internal const int DefaultPackingTenths = 175;
+    internal const int DefaultPackingTenths = 185;
     private const float DensityTexturePixelsPerUnit = 0.5f;
     private const int MaximumDensityTextureDimension = 1024;
     private const float DensityContribution = 1.2f;
@@ -33,6 +33,7 @@ internal sealed class LiquidSimulation
     private const float VelocityRampDuration = 5f;
     internal const int MinimumDropCollisionPasses = 2;
     internal const int MaximumDropCollisionPasses = 6;
+    internal const int DefaultDropCollisionPasses = 6;
     internal const int MinimumCollisionCorrectionPercent = 25;
     internal const int MaximumCollisionCorrectionPercent = 100;
     internal const int DefaultCollisionCorrectionPercent = 100;

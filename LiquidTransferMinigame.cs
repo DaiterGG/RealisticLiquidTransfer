@@ -30,7 +30,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private static bool savedShaderEnabled = true;
     private static bool savedClickSpawnEnabled;
-    private static int savedCollisionPasses = LiquidSimulation.MinimumDropCollisionPasses;
+    private static int savedCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
     private static int savedCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
     private static int savedVelocityContactMargin =
         LiquidSimulation.DefaultVelocityContactMarginTenths;
@@ -560,7 +560,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         savedShaderEnabled = PlayerPrefs.GetInt(ShaderEnabledPref, 1) != 0;
         savedClickSpawnEnabled = PlayerPrefs.GetInt(ClickSpawnEnabledPref, 0) != 0;
         savedCollisionPasses = Mathf.Clamp(
-            PlayerPrefs.GetInt(CollisionPassesPref, LiquidSimulation.MinimumDropCollisionPasses),
+            PlayerPrefs.GetInt(CollisionPassesPref, LiquidSimulation.DefaultDropCollisionPasses),
             LiquidSimulation.MinimumDropCollisionPasses,
             LiquidSimulation.MaximumDropCollisionPasses);
         savedCollisionCorrection = Mathf.Clamp(
