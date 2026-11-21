@@ -855,8 +855,9 @@ internal sealed class LiquidSimulation
             && containers[assignment - 1].IsPastSizeZone(position)
                 ? assignment
                 : (byte)0;
-        mergeDelayRemaining[count] = containerAssignment == 0
-            && dropSizeZoneAssignments[count] > 0
+        mergeDelayRemaining[count] = volume == 1
+            && assignment > 0
+            && containers[assignment - 1].IsPastMergeSizeZone(position)
                 ? MergeDelaySeconds
                 : 0f;
         count++;
@@ -1021,11 +1022,21 @@ internal sealed class LiquidSimulation
                     if (enteringSizeZone)
                     {
                         sizeZoneAssignment = containerAssignment;
-                        mergeDelayRemaining[i] = MergeDelaySeconds;
                     }
                     else if (sizeZoneAssignment == containerAssignment)
                     {
                         sizeZoneAssignment = 0;
+                    }
+                }
+
+                if (container.CrossesMergeSizeZone(previousPosition, position, out var enteringMergeZone))
+                {
+                    if (enteringMergeZone)
+                    {
+                        mergeDelayRemaining[i] = MergeDelaySeconds;
+                    }
+                    else
+                    {
                         mergeDelayRemaining[i] = 0f;
                     }
                 }
@@ -1393,7 +1404,10 @@ internal sealed class LiquidSimulation
                     continue;
                 }
 
-                if (dropVolumes[i] == 1 && targetVolume > 1)
+                if (dropVolumes[i] == 1
+                    && targetVolume > 1
+                    && mergeDelayRemaining[i] <= 0f
+                    && containers[assignment - 1].IsPastMergeSizeZone(positions[i]))
                 {
                     pendingMergeIndices[pendingCount++] = i;
                     if (pendingCount == targetVolume)
@@ -2427,11 +2441,16 @@ internal sealed class LiquidSimulation
      private Vector2 openingEnd;
      private Vector2 openingSegment;
      private float openingLengthSquared;
-     private readonly float sizeZoneDepth;
+     private readonly float splitSizeZoneDepth;
+     private readonly float mergeSizeZoneDepth;
      private Vector2 sizeZoneStart;
      private Vector2 sizeZoneEnd;
      private Vector2 sizeZoneSegment;
      private float sizeZoneLengthSquared;
+     private Vector2 mergeSizeZoneStart;
+     private Vector2 mergeSizeZoneEnd;
+     private Vector2 mergeSizeZoneSegment;
+     private float mergeSizeZoneLengthSquared;
      private float rootUnitsPerLocalUnit = 1f;
      private int boundaryNodeCount;
 
@@ -2447,7 +2466,8 @@ internal sealed class LiquidSimulation
              minimumLocalY = Mathf.Min(minimumLocalY, point.y);
              maximumLocalY = Mathf.Max(maximumLocalY, point.y);
          }
-         sizeZoneDepth = (maximumLocalY - minimumLocalY) * 0.02f;
+         splitSizeZoneDepth = (maximumLocalY - minimumLocalY) * 0.05f;
+         mergeSizeZoneDepth = (maximumLocalY - minimumLocalY) * 0.07f;
 
          boundaries = new BoundarySegment[Mathf.Max(0, Outline.Length - 1)];
          boundaryNodes = new BoundaryNode[Mathf.Max(0, boundaries.Length * 2 - 1)];
@@ -2534,10 +2554,14 @@ internal sealed class LiquidSimulation
          openingEnd = ToRootPoint(Outline[Outline.Length - 1]);
          openingSegment = openingEnd - openingStart;
          openingLengthSquared = openingSegment.sqrMagnitude;
-         sizeZoneStart = ToRootPoint(Outline[0] + Vector2.down * sizeZoneDepth);
-         sizeZoneEnd = ToRootPoint(Outline[Outline.Length - 1] + Vector2.down * sizeZoneDepth);
+         sizeZoneStart = ToRootPoint(Outline[0] + Vector2.down * splitSizeZoneDepth);
+         sizeZoneEnd = ToRootPoint(Outline[Outline.Length - 1] + Vector2.down * splitSizeZoneDepth);
          sizeZoneSegment = sizeZoneEnd - sizeZoneStart;
          sizeZoneLengthSquared = sizeZoneSegment.sqrMagnitude;
+         mergeSizeZoneStart = ToRootPoint(Outline[0] + Vector2.down * mergeSizeZoneDepth);
+         mergeSizeZoneEnd = ToRootPoint(Outline[Outline.Length - 1] + Vector2.down * mergeSizeZoneDepth);
+         mergeSizeZoneSegment = mergeSizeZoneEnd - mergeSizeZoneStart;
+         mergeSizeZoneLengthSquared = mergeSizeZoneSegment.sqrMagnitude;
          for (var i = 0; i < boundaries.Length; i++)
          {
              var start = ToRootPoint(Outline[i]);
@@ -2679,6 +2703,12 @@ internal sealed class LiquidSimulation
              && Cross(sizeZoneSegment, point - sizeZoneStart) * -interiorOrientation >= 0f;
      }
 
+     internal bool IsPastMergeSizeZone(Vector2 point)
+     {
+         return mergeSizeZoneLengthSquared > Mathf.Epsilon
+             && Cross(mergeSizeZoneSegment, point - mergeSizeZoneStart) * -interiorOrientation >= 0f;
+     }
+
      internal bool CrossesSizeZone(Vector2 start, Vector2 end, out bool entering)
      {
          entering = false;
@@ -2704,6 +2734,35 @@ internal sealed class LiquidSimulation
 
          var startSide = Cross(sizeZoneSegment, start - sizeZoneStart) * -interiorOrientation;
          var endSide = Cross(sizeZoneSegment, end - sizeZoneStart) * -interiorOrientation;
+         entering = endSide > startSide;
+         return true;
+     }
+
+     internal bool CrossesMergeSizeZone(Vector2 start, Vector2 end, out bool entering)
+     {
+         entering = false;
+         if (mergeSizeZoneLengthSquared <= Mathf.Epsilon)
+         {
+             return false;
+         }
+
+         var movement = end - start;
+         var denominator = Cross(movement, mergeSizeZoneSegment);
+         if (Mathf.Abs(denominator) <= Mathf.Epsilon)
+         {
+             return false;
+         }
+
+         var offset = mergeSizeZoneStart - start;
+         var movementAmount = Cross(offset, mergeSizeZoneSegment) / denominator;
+         var zoneAmount = Cross(offset, movement) / denominator;
+         if (movementAmount < 0f || movementAmount > 1f || zoneAmount < 0f || zoneAmount > 1f)
+         {
+             return false;
+         }
+
+         var startSide = Cross(mergeSizeZoneSegment, start - mergeSizeZoneStart) * -interiorOrientation;
+         var endSide = Cross(mergeSizeZoneSegment, end - mergeSizeZoneStart) * -interiorOrientation;
          entering = endSide > startSide;
          return true;
      }
