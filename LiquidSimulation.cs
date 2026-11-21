@@ -31,6 +31,7 @@ internal sealed class LiquidSimulation
     private const float GravityMultiplier = 2f;
     private const float FixedStep = 1f / 30f;
     private const float VelocityRampDuration = 2f;
+    private const float OutsideDropExtraBoundsPadding = 1f;
     internal const int MinimumDropCollisionPasses = 2;
     internal const int MaximumDropCollisionPasses = 6;
     internal const int DefaultDropCollisionPasses = 6;
@@ -48,6 +49,7 @@ internal sealed class LiquidSimulation
     private Vector2[] positions = new Vector2[MaximumDrops];
     private Vector2[] previousPositions = new Vector2[MaximumDrops];
     private Vector2[] velocities = new Vector2[MaximumDrops];
+    private bool[] fastOutsideDrops = new bool[MaximumDrops];
     private float[] mergeDelayRemaining = new float[MaximumDrops];
     private int[] dropIds = new int[MaximumDrops];
     private byte[] dropVolumes = new byte[MaximumDrops];
@@ -56,6 +58,7 @@ internal sealed class LiquidSimulation
     private Vector2[] reorderedPositions = new Vector2[MaximumDrops];
     private Vector2[] reorderedPreviousPositions = new Vector2[MaximumDrops];
     private Vector2[] reorderedVelocities = new Vector2[MaximumDrops];
+    private bool[] reorderedFastOutsideDrops = new bool[MaximumDrops];
     private float[] reorderedMergeDelayRemaining = new float[MaximumDrops];
     private int[] reorderedDropIds = new int[MaximumDrops];
     private byte[] reorderedDropVolumes = new byte[MaximumDrops];
@@ -95,11 +98,15 @@ internal sealed class LiquidSimulation
     private int gridColumns;
     private int gridRows;
     private int[] cellCounts;
+    private int[] cellActiveDropCounts;
     private int[] cellOffsets;
     private int[] cellWriteOffsets;
+    private int[] cellSafeWriteOffsets;
     private int[] cellParticleIndices;
     private int[] activeCells;
     private int activeCellCount;
+    private int activeDropCount;
+    private bool hasUnassignedAggregate;
     private float cellSize;
     private float dropRadius = DefaultDropRadius;
     private float initialPacking = DefaultPackingTenths / 100f;
@@ -241,8 +248,10 @@ internal sealed class LiquidSimulation
         gridRows = Mathf.Max(1, Mathf.CeilToInt((maximumScreenY - minimumScreenY) / cellSize));
         var cellCount = gridColumns * gridRows;
         cellCounts = new int[cellCount];
+        cellActiveDropCounts = new int[cellCount];
         cellOffsets = new int[cellCount + 1];
         cellWriteOffsets = new int[cellCount];
+        cellSafeWriteOffsets = new int[cellCount];
         cellParticleIndices = new int[MaximumDrops];
         activeCells = new int[cellCount];
         activeCellCount = 0;
@@ -840,6 +849,7 @@ internal sealed class LiquidSimulation
         positions[count] = position;
         previousPositions[count] = position;
         velocities[count] = velocity;
+        fastOutsideDrops[count] = false;
         dropIds[count] = nextDropId++;
         dropVolumes[count] = (byte)volume;
         var assignment = containerAssignment == 0
@@ -868,6 +878,7 @@ internal sealed class LiquidSimulation
             0f,
             1f,
             Mathf.Clamp01(velocityRampElapsed / VelocityRampDuration));
+        UpdateOutsideDropFastPath(deltaTime, velocityRampRatio);
         for (var i = 0; i < count; i++)
         {
             previousPositions[i] = positions[i];
@@ -877,7 +888,10 @@ internal sealed class LiquidSimulation
             positions[i] += velocities[i] * deltaTime;
         }
         SimulationProfiler.End(SimulationProfileStage.GeometryRefreshAndIntegration, profilingStart);
-        ResolveDropCollisions();
+        if (activeDropCount > 0)
+        {
+            ResolveDropCollisions();
+        }
 
         profilingStart = SimulationProfiler.Begin();
         for (var i = 0; i < count; i++)
@@ -886,9 +900,19 @@ internal sealed class LiquidSimulation
         }
         SimulationProfiler.End(SimulationProfileStage.VelocityReconstruction, profilingStart);
 
-        profilingStart = SimulationProfiler.Begin();
-        ResolveDropVelocities();
-        SimulationProfiler.End(SimulationProfileStage.VelocityConstraints, profilingStart);
+        if (activeDropCount > 0)
+        {
+            profilingStart = SimulationProfiler.Begin();
+            ResolveDropVelocities();
+            SimulationProfiler.End(SimulationProfileStage.VelocityConstraints, profilingStart);
+        }
+        else
+        {
+            if (hasUnassignedAggregate)
+            {
+                NormalizeDropSizes();
+            }
+        }
 
         profilingStart = SimulationProfiler.Begin();
         RemoveOffscreenDrops();
@@ -901,6 +925,51 @@ internal sealed class LiquidSimulation
         foreach (var container in containers)
         {
             container.RefreshBoundaries();
+        }
+    }
+
+    private void UpdateOutsideDropFastPath(float deltaTime, float velocityRampRatio)
+    {
+        activeDropCount = 0;
+        hasUnassignedAggregate = false;
+        for (var i = 0; i < count; i++)
+        {
+            fastOutsideDrops[i] = false;
+            if (containerAssignments[i] != 0)
+            {
+                activeDropCount++;
+                continue;
+            }
+            if (dropVolumes[i] > 1)
+            {
+                hasUnassignedAggregate = true;
+            }
+
+            var position = positions[i];
+            var radius = GetDropRadius(i);
+            var predictedVelocity = velocities[i];
+            predictedVelocity.y -= Gravity * GravityMultiplier * deltaTime;
+            predictedVelocity *= velocityRampRatio;
+            var predictedPosition = position + predictedVelocity * deltaTime;
+            var boundsPadding = radius + dropRadius * OutsideDropExtraBoundsPadding;
+            var safelyOutside = true;
+            foreach (var container in containers)
+            {
+                if (container.SweptBoundsOverlap(position, predictedPosition, boundsPadding)
+                    || Vector2.Dot(
+                        position - container.Center,
+                        predictedPosition - position) <= 0f)
+                {
+                    safelyOutside = false;
+                    break;
+                }
+            }
+
+            fastOutsideDrops[i] = safelyOutside;
+            if (!safelyOutside)
+            {
+                activeDropCount++;
+            }
         }
     }
 
@@ -941,6 +1010,7 @@ internal sealed class LiquidSimulation
             containerAssignments[i] = containerAssignments[count];
             dropSizeZoneAssignments[i] = dropSizeZoneAssignments[count];
             mergeDelayRemaining[i] = mergeDelayRemaining[count];
+            fastOutsideDrops[i] = fastOutsideDrops[count];
             offscreenDeleted++;
         }
     }
@@ -1001,6 +1071,11 @@ internal sealed class LiquidSimulation
     {
         for (var i = 0; i < count; i++)
         {
+            if (fastOutsideDrops[i])
+            {
+                continue;
+            }
+
             var position = positions[i];
             var radius = GetDropRadius(i);
             var previousPosition = previousPositions[i];
@@ -1129,9 +1204,15 @@ internal sealed class LiquidSimulation
     private void BuildSpatialGrid()
     {
         Array.Clear(cellCounts, 0, cellCounts.Length);
+        Array.Clear(cellActiveDropCounts, 0, cellActiveDropCounts.Length);
         for (var i = 0; i < count; i++)
         {
-            cellCounts[GetCell(positions[i])]++;
+            var cell = GetCell(positions[i]);
+            cellCounts[cell]++;
+            if (!fastOutsideDrops[i])
+            {
+                cellActiveDropCounts[cell]++;
+            }
         }
 
         var particleOffset = 0;
@@ -1140,6 +1221,7 @@ internal sealed class LiquidSimulation
         {
             cellOffsets[cell] = particleOffset;
             cellWriteOffsets[cell] = particleOffset;
+            cellSafeWriteOffsets[cell] = particleOffset + cellActiveDropCounts[cell];
             if (cellCounts[cell] > 0)
             {
                 activeCells[activeCellCount++] = cell;
@@ -1151,7 +1233,14 @@ internal sealed class LiquidSimulation
         for (var i = 0; i < count; i++)
         {
             var cell = GetCell(positions[i]);
-            cellParticleIndices[cellWriteOffsets[cell]++] = i;
+            if (fastOutsideDrops[i])
+            {
+                cellParticleIndices[cellSafeWriteOffsets[cell]++] = i;
+            }
+            else
+            {
+                cellParticleIndices[cellWriteOffsets[cell]++] = i;
+            }
         }
 
         ReorderParticlesByCell();
@@ -1448,6 +1537,7 @@ internal sealed class LiquidSimulation
         SwapBuffers(ref dropVolumes, ref reorderedDropVolumes);
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
         SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
+        SwapBuffers(ref fastOutsideDrops, ref reorderedFastOutsideDrops);
         graphicsDirty = true;
         return true;
     }
@@ -1479,6 +1569,7 @@ internal sealed class LiquidSimulation
         reorderedDropVolumes[destination] = dropVolumes[source];
         reorderedContainerAssignments[destination] = containerAssignments[source];
         reorderedDropSizeZoneAssignments[destination] = dropSizeZoneAssignments[source];
+        reorderedFastOutsideDrops[destination] = fastOutsideDrops[source];
     }
 
     private Vector2 GetSplitDropOffset(int member)
@@ -1579,6 +1670,7 @@ internal sealed class LiquidSimulation
         reorderedDropVolumes[index] = (byte)volume;
         reorderedContainerAssignments[index] = containerAssignment;
         reorderedDropSizeZoneAssignments[index] = sizeZoneAssignment;
+        reorderedFastOutsideDrops[index] = false;
     }
 
     private float GetDropRadius(int index)
@@ -1599,6 +1691,7 @@ internal sealed class LiquidSimulation
             reorderedDropVolumes[sortedIndex] = dropVolumes[sourceIndex];
             reorderedContainerAssignments[sortedIndex] = containerAssignments[sourceIndex];
             reorderedDropSizeZoneAssignments[sortedIndex] = dropSizeZoneAssignments[sourceIndex];
+            reorderedFastOutsideDrops[sortedIndex] = fastOutsideDrops[sourceIndex];
         }
 
         SwapBuffers(ref positions, ref reorderedPositions);
@@ -1609,6 +1702,7 @@ internal sealed class LiquidSimulation
         SwapBuffers(ref dropVolumes, ref reorderedDropVolumes);
         SwapBuffers(ref containerAssignments, ref reorderedContainerAssignments);
         SwapBuffers(ref dropSizeZoneAssignments, ref reorderedDropSizeZoneAssignments);
+        SwapBuffers(ref fastOutsideDrops, ref reorderedFastOutsideDrops);
     }
 
     private static void SwapBuffers<T>(ref T[] current, ref T[] reordered)
@@ -1661,12 +1755,15 @@ internal sealed class LiquidSimulation
             var cell = activeCells[activeCellIndex];
             var cellX = cell % gridColumns;
             var cellY = cell / gridColumns;
-            if (cellCounts[cell] > 1)
+            if (cellActiveDropCounts[cell] > 0 && cellCounts[cell] > 1)
             {
                 ResolveCellPair(cell, cell, velocityOnly);
             }
 
-            if (cellX + 1 < gridColumns && cellCounts[cell + 1] > 0)
+            if (cellX + 1 < gridColumns
+                && cellCounts[cell + 1] > 0
+                && cellActiveDropCounts[cell] > 0
+                && cellActiveDropCounts[cell + 1] > 0)
             {
                 ResolveCellPair(cell, cell + 1, velocityOnly);
             }
@@ -1676,24 +1773,35 @@ internal sealed class LiquidSimulation
                 continue;
             }
 
-            if (cellX > 0 && cellCounts[cell + gridColumns - 1] > 0)
+            var downLeftCell = cell + gridColumns - 1;
+            if (cellX > 0
+                && cellCounts[downLeftCell] > 0
+                && cellActiveDropCounts[cell] > 0
+                && cellActiveDropCounts[downLeftCell] > 0)
             {
                 ResolveCellPair(
                     cell,
-                    cell + gridColumns - 1,
+                    downLeftCell,
                     velocityOnly);
             }
 
-            if (cellCounts[cell + gridColumns] > 0)
+            var belowCell = cell + gridColumns;
+            if (cellCounts[belowCell] > 0
+                && cellActiveDropCounts[cell] > 0
+                && cellActiveDropCounts[belowCell] > 0)
             {
-                ResolveCellPair(cell, cell + gridColumns, velocityOnly);
+                ResolveCellPair(cell, belowCell, velocityOnly);
             }
 
-            if (cellX + 1 < gridColumns && cellCounts[cell + gridColumns + 1] > 0)
+            var downRightCell = cell + gridColumns + 1;
+            if (cellX + 1 < gridColumns
+                && cellCounts[downRightCell] > 0
+                && cellActiveDropCounts[cell] > 0
+                && cellActiveDropCounts[downRightCell] > 0)
             {
                 ResolveCellPair(
                     cell,
-                    cell + gridColumns + 1,
+                    downRightCell,
                     velocityOnly);
             }
         }
@@ -1706,12 +1814,15 @@ internal sealed class LiquidSimulation
         var maximumDropRadius = dropRadius;
         for (var i = 0; i < count; i++)
         {
-            maximumDropRadius = Mathf.Max(maximumDropRadius, GetDropRadius(i));
+            if (!fastOutsideDrops[i])
+            {
+                maximumDropRadius = Mathf.Max(maximumDropRadius, GetDropRadius(i));
+            }
         }
 
         for (var first = 0; first < count; first++)
         {
-            if (dropVolumes[first] <= 1)
+            if (fastOutsideDrops[first] || dropVolumes[first] <= 1)
             {
                 continue;
             }
@@ -1731,10 +1842,18 @@ internal sealed class LiquidSimulation
                      cellX++)
                 {
                     var cell = cellY * gridColumns + cellX;
-                    for (var secondOffset = cellOffsets[cell]; secondOffset < cellOffsets[cell + 1]; secondOffset++)
+                    if (cellActiveDropCounts[cell] == 0)
+                    {
+                        continue;
+                    }
+
+                    for (var secondOffset = cellOffsets[cell];
+                         secondOffset < cellOffsets[cell] + cellActiveDropCounts[cell];
+                         secondOffset++)
                     {
                         var second = secondOffset;
-                        if (second == first
+                        if (fastOutsideDrops[second]
+                            || second == first
                             || (dropVolumes[second] > 1 && second < first))
                         {
                             continue;
@@ -1762,12 +1881,12 @@ internal sealed class LiquidSimulation
         if (firstCell == secondCell)
         {
             for (var firstIndex = cellOffsets[firstCell];
-                 firstIndex < cellOffsets[firstCell + 1];
+                 firstIndex < cellOffsets[firstCell] + cellActiveDropCounts[firstCell];
                  firstIndex++)
             {
                 var first = firstIndex;
                 for (var secondIndex = firstIndex + 1;
-                     secondIndex < cellOffsets[firstCell + 1];
+                     secondIndex < cellOffsets[firstCell] + cellActiveDropCounts[firstCell];
                      secondIndex++)
                 {
                     ResolvePairForPass(
@@ -1781,12 +1900,12 @@ internal sealed class LiquidSimulation
         }
 
         for (var firstIndex = cellOffsets[firstCell];
-             firstIndex < cellOffsets[firstCell + 1];
+             firstIndex < cellOffsets[firstCell] + cellActiveDropCounts[firstCell];
              firstIndex++)
         {
             var first = firstIndex;
             for (var secondIndex = cellOffsets[secondCell];
-                 secondIndex < cellOffsets[secondCell + 1];
+                 secondIndex < cellOffsets[secondCell] + cellActiveDropCounts[secondCell];
                  secondIndex++)
             {
                 ResolvePairForPass(
@@ -1802,7 +1921,10 @@ internal sealed class LiquidSimulation
         int second,
         bool velocityOnly)
     {
-        if (dropVolumes[first] > 1 || dropVolumes[second] > 1)
+        if (fastOutsideDrops[first]
+            || fastOutsideDrops[second]
+            || dropVolumes[first] > 1
+            || dropVolumes[second] > 1)
         {
             return;
         }
@@ -2500,6 +2622,7 @@ internal sealed class LiquidSimulation
      internal RectTransform Transform => transform;
      internal Vector2 Minimum { get; private set; }
      internal Vector2 Maximum { get; private set; }
+     internal Vector2 Center { get; private set; }
 
      internal Vector2 ToRootPoint(Vector2 localPoint)
      {
@@ -2514,6 +2637,7 @@ internal sealed class LiquidSimulation
      internal void RefreshBoundaries()
      {
          rootToContainerMatrix = transform.worldToLocalMatrix * root.localToWorldMatrix;
+         Center = ToRootPoint(Vector2.zero);
          if (Outline.Length == 0)
          {
              return;
@@ -2560,6 +2684,16 @@ internal sealed class LiquidSimulation
          {
              RefitBoundaryTree();
          }
+     }
+
+     internal bool SweptBoundsOverlap(Vector2 start, Vector2 end, float padding)
+     {
+         var pathMinimum = Vector2.Min(start, end);
+         var pathMaximum = Vector2.Max(start, end);
+         return pathMinimum.x <= Maximum.x + padding
+             && pathMaximum.x >= Minimum.x - padding
+             && pathMinimum.y <= Maximum.y + padding
+             && pathMaximum.y >= Minimum.y - padding;
      }
 
      internal bool IsInsidePaddedRectangle(Vector2 rootPoint)
