@@ -332,9 +332,11 @@ internal sealed class LiquidTransferMinigame : Minigame
             screenRoot,
             receivingContainer.Transform,
             receivingContainer.OutlinePoints,
+            receivingContainer.InteriorWalls,
             firstOriginalContainerCapacity,
             sourceContainer.Transform,
             sourceContainer.OutlinePoints,
+            sourceContainer.InteriorWalls,
             secondOriginalContainerCapacity,
             firstOriginalContainerAmount,
             secondOriginalContainerAmount,
@@ -843,7 +845,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     {
         var scale = container.Transform.localScale;
         var scaleArea = System.Math.Abs((double)scale.x * scale.y);
-        return EstimateOutlineArea(container.OutlinePoints) * scaleArea;
+        return EstimateContainerArea(container.OutlinePoints, container.InteriorWalls) * scaleArea;
     }
 
     private static void ApplyAreaScale(
@@ -852,7 +854,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         double referenceArea,
         string originalSpriteName)
     {
-        var spriteArea = EstimateOutlineArea(container.OutlinePoints);
+        var spriteArea = EstimateContainerArea(container.OutlinePoints, container.InteriorWalls);
         if (targetCapacity <= 0f || referenceArea <= 0d || spriteArea <= 0d)
         {
             Plugin.LogWarning(
@@ -882,7 +884,20 @@ internal sealed class LiquidTransferMinigame : Minigame
             return 0d;
         }
 
-        return EstimateOutlineArea(outline);
+        return EstimateContainerArea(
+            outline,
+            ModSprites.FindInteriorWalls(sprite, openingPosition, openingWidth));
+    }
+
+    private static double EstimateContainerArea(Vector2[] outline, Vector2[][] interiorWalls)
+    {
+        var area = EstimateOutlineArea(outline);
+        foreach (var wall in interiorWalls)
+        {
+            area -= EstimateOutlineArea(wall);
+        }
+
+        return System.Math.Max(0d, area);
     }
 
     private static double EstimateOutlineArea(Vector2[] outline)
@@ -1559,6 +1574,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var openingLeft = Vector2.zero;
         var openingRight = Vector2.zero;
         var outlinePoints = System.Array.Empty<Vector2>();
+        var interiorWalls = System.Array.Empty<Vector2[]>();
         if (!hasOpening)
         {
             Plugin.LogWarning($"Could not detect the open rim of container sprite '{sprite.name}'.");
@@ -1583,6 +1599,25 @@ internal sealed class LiquidTransferMinigame : Minigame
                 outline.color = Color.blue;
                 outline.raycastTarget = false;
                 outline.SetPoints(outlinePoints);
+
+                interiorWalls = ModSprites.FindInteriorWalls(sprite, openingPosition, openingWidth);
+                for (var index = 0; index < interiorWalls.Length; index++)
+                {
+                    var wall = new GameObject(
+                        $"{name}InteriorWallDebugLine{index}",
+                        typeof(RectTransform),
+                        typeof(CanvasRenderer),
+                        typeof(DebugPolylineGraphic)).GetComponent<DebugPolylineGraphic>();
+                    var wallRect = wall.rectTransform;
+                    wallRect.SetParent(rect, false);
+                    wallRect.anchorMin = new Vector2(0.5f, 0.5f);
+                    wallRect.anchorMax = new Vector2(0.5f, 0.5f);
+                    wallRect.pivot = new Vector2(0.5f, 0.5f);
+                    wallRect.sizeDelta = rect.sizeDelta;
+                    wall.color = Color.blue;
+                    wall.raycastTarget = false;
+                    wall.SetPoints(interiorWalls[index]);
+                }
             }
             else
             {
@@ -1608,7 +1643,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             openingLeft,
             openingRight,
             hasOpening,
-            outlinePoints);
+            outlinePoints,
+            interiorWalls);
     }
 
     private void StartDragging(ContainerVisual container, Vector2 handPosition)
@@ -1906,7 +1942,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             Vector2 leftOpeningPoint,
             Vector2 rightOpeningPoint,
             bool hasOpening,
-            Vector2[] outlinePoints)
+            Vector2[] outlinePoints,
+            Vector2[][] interiorWalls)
         {
             Transform = transform;
             OpeningCenterPoint = openingCenterPoint;
@@ -1914,6 +1951,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             RightOpeningPoint = rightOpeningPoint;
             HasOpening = hasOpening;
             OutlinePoints = outlinePoints;
+            InteriorWalls = interiorWalls;
         }
 
         internal RectTransform Transform { get; }
@@ -1922,6 +1960,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal Vector2 RightOpeningPoint { get; }
         internal bool HasOpening { get; }
         internal Vector2[] OutlinePoints { get; }
+        internal Vector2[][] InteriorWalls { get; }
         internal bool HasRotationPivot { get; set; }
         internal bool PivotIsRight { get; set; }
     }

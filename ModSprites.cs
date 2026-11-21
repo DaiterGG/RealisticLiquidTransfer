@@ -293,6 +293,261 @@ internal static class ModSprites
         return points.Length >= 2;
     }
 
+    internal static Vector2[][] FindInteriorWalls(
+        Sprite sprite,
+        Vector2 openingPosition,
+        float openingWidth)
+    {
+        if (!sprite || !sprite.texture)
+        {
+            return Array.Empty<Vector2[]>();
+        }
+
+        var spriteWidth = Mathf.RoundToInt(sprite.rect.width);
+        var spriteHeight = Mathf.RoundToInt(sprite.rect.height);
+        var originX = Mathf.RoundToInt(sprite.rect.x);
+        var originY = Mathf.RoundToInt(sprite.rect.y);
+        var textureWidth = sprite.texture.width;
+        var pixels = sprite.texture.GetPixels32();
+        var opaque = new bool[spriteWidth * spriteHeight];
+        for (var y = 0; y < spriteHeight; y++)
+        {
+            var rowStart = (originY + y) * textureWidth + originX;
+            var maskRowStart = y * spriteWidth;
+            for (var x = 0; x < spriteWidth; x++)
+            {
+                opaque[maskRowStart + x] = pixels[rowStart + x].a >= MinimumVisibleAlpha;
+            }
+        }
+
+        var leftOpening = openingPosition - new Vector2(openingWidth * 0.5f, 0f);
+        var mainWallPixel = FindNearestOpaquePixel(
+            opaque,
+            spriteWidth,
+            spriteHeight,
+            leftOpening + sprite.pivot);
+        if (mainWallPixel < 0)
+        {
+            return Array.Empty<Vector2[]>();
+        }
+
+        var componentIds = new int[opaque.Length];
+        var components = new List<List<int>>();
+        var frontier = new List<int>();
+        var componentId = 0;
+        for (var start = 0; start < opaque.Length; start++)
+        {
+            if (!opaque[start] || componentIds[start] != 0)
+            {
+                continue;
+            }
+
+            componentId++;
+            var component = new List<int>();
+            componentIds[start] = componentId;
+            frontier.Add(start);
+            for (var frontierIndex = 0; frontierIndex < frontier.Count; frontierIndex++)
+            {
+                var current = frontier[frontierIndex];
+                component.Add(current);
+                var currentX = current % spriteWidth;
+                var currentY = current / spriteWidth;
+                for (var offsetY = -1; offsetY <= 1; offsetY++)
+                {
+                    var nextY = currentY + offsetY;
+                    if (nextY < 0 || nextY >= spriteHeight)
+                    {
+                        continue;
+                    }
+
+                    for (var offsetX = -1; offsetX <= 1; offsetX++)
+                    {
+                        if (offsetX == 0 && offsetY == 0)
+                        {
+                            continue;
+                        }
+
+                        var nextX = currentX + offsetX;
+                        if (nextX < 0 || nextX >= spriteWidth)
+                        {
+                            continue;
+                        }
+
+                        var next = nextY * spriteWidth + nextX;
+                        if (!opaque[next] || componentIds[next] != 0)
+                        {
+                            continue;
+                        }
+
+                        componentIds[next] = componentId;
+                        frontier.Add(next);
+                    }
+                }
+            }
+
+            components.Add(component);
+            frontier.Clear();
+        }
+
+        var mainComponentId = componentIds[mainWallPixel];
+        var walls = new List<Vector2[]>();
+        for (var index = 0; index < components.Count; index++)
+        {
+            var component = components[index];
+            if (index + 1 == mainComponentId
+                || !HasEnclosedRegion(opaque, component, spriteWidth, spriteHeight))
+            {
+                continue;
+            }
+
+            var hull = CreateConvexHull(component, spriteWidth, sprite.pivot);
+            if (hull.Count < 3)
+            {
+                continue;
+            }
+
+            hull.Add(hull[0]);
+            walls.Add(hull.ToArray());
+        }
+
+        return walls.ToArray();
+    }
+
+    private static bool HasEnclosedRegion(
+        bool[] opaque,
+        List<int> component,
+        int width,
+        int height)
+    {
+        var minimumX = width;
+        var minimumY = height;
+        var maximumX = -1;
+        var maximumY = -1;
+        foreach (var pixel in component)
+        {
+            minimumX = Mathf.Min(minimumX, pixel % width);
+            minimumY = Mathf.Min(minimumY, pixel / width);
+            maximumX = Mathf.Max(maximumX, pixel % width);
+            maximumY = Mathf.Max(maximumY, pixel / width);
+        }
+
+        var boundsWidth = maximumX - minimumX + 1;
+        var boundsHeight = maximumY - minimumY + 1;
+        var outside = new bool[boundsWidth * boundsHeight];
+        var frontier = new List<int>();
+        for (var x = 0; x < boundsWidth; x++)
+        {
+            EnqueueOutside(x, 0);
+            EnqueueOutside(x, boundsHeight - 1);
+        }
+
+        for (var y = 0; y < boundsHeight; y++)
+        {
+            EnqueueOutside(0, y);
+            EnqueueOutside(boundsWidth - 1, y);
+        }
+
+        for (var frontierIndex = 0; frontierIndex < frontier.Count; frontierIndex++)
+        {
+            var current = frontier[frontierIndex];
+            var x = current % boundsWidth;
+            var y = current / boundsWidth;
+            EnqueueOutside(x - 1, y);
+            EnqueueOutside(x + 1, y);
+            EnqueueOutside(x, y - 1);
+            EnqueueOutside(x, y + 1);
+        }
+
+        for (var y = 0; y < boundsHeight; y++)
+        {
+            for (var x = 0; x < boundsWidth; x++)
+            {
+                var index = y * boundsWidth + x;
+                if (!outside[index] && !opaque[(minimumY + y) * width + minimumX + x])
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+
+        void EnqueueOutside(int x, int y)
+        {
+            if (x < 0 || x >= boundsWidth || y < 0 || y >= boundsHeight)
+            {
+                return;
+            }
+
+            var localIndex = y * boundsWidth + x;
+            var pixelIndex = (minimumY + y) * width + minimumX + x;
+            if (outside[localIndex] || opaque[pixelIndex])
+            {
+                return;
+            }
+
+            outside[localIndex] = true;
+            frontier.Add(localIndex);
+        }
+    }
+
+    private static List<Vector2> CreateConvexHull(
+        List<int> component,
+        int width,
+        Vector2 pivot)
+    {
+        var points = new List<Vector2>(component.Count);
+        foreach (var pixel in component)
+        {
+            points.Add(new Vector2(
+                pixel % width + 0.5f - pivot.x,
+                pixel / width + 0.5f - pivot.y));
+        }
+
+        points.Sort((first, second) =>
+        {
+            var xOrder = first.x.CompareTo(second.x);
+            return xOrder != 0 ? xOrder : first.y.CompareTo(second.y);
+        });
+
+        var hull = new List<Vector2>();
+        foreach (var point in points)
+        {
+            while (hull.Count >= 2
+                && CrossProduct(hull[hull.Count - 1] - hull[hull.Count - 2], point - hull[hull.Count - 1]) <= 0f)
+            {
+                hull.RemoveAt(hull.Count - 1);
+            }
+
+            hull.Add(point);
+        }
+
+        var lowerHullCount = hull.Count;
+        for (var index = points.Count - 2; index >= 0; index--)
+        {
+            var point = points[index];
+            while (hull.Count > lowerHullCount
+                && CrossProduct(hull[hull.Count - 1] - hull[hull.Count - 2], point - hull[hull.Count - 1]) <= 0f)
+            {
+                hull.RemoveAt(hull.Count - 1);
+            }
+
+            hull.Add(point);
+        }
+
+        if (hull.Count > 1)
+        {
+            hull.RemoveAt(hull.Count - 1);
+        }
+
+        return hull;
+    }
+
+    private static float CrossProduct(Vector2 first, Vector2 second)
+    {
+        return first.x * second.y - first.y * second.x;
+    }
+
     private static Sprite LoadSprite(string resourceName)
     {
         using var resource = typeof(ModSprites).Assembly.GetManifestResourceStream(resourceName);

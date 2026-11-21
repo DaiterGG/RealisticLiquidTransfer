@@ -214,9 +214,11 @@ internal sealed class LiquidSimulation
         RectTransform root,
         RectTransform firstContainer,
         Vector2[] firstOutline,
+        Vector2[][] firstInteriorWalls,
         float firstCapacity,
         RectTransform secondContainer,
         Vector2[] secondOutline,
+        Vector2[][] secondInteriorWalls,
         float secondCapacity,
         float firstAmount,
         float secondAmount,
@@ -281,8 +283,8 @@ internal sealed class LiquidSimulation
         SetInitialPacking(initialPacking);
         containers = new[]
         {
-            new ContainerShape(root, firstContainer, firstOutline),
-            new ContainerShape(root, secondContainer, secondOutline)
+            new ContainerShape(root, firstContainer, firstOutline, firstInteriorWalls),
+            new ContainerShape(root, secondContainer, secondOutline, secondInteriorWalls)
         };
         openingTransitions = new bool[containers.Length];
         containerDropSizes = new[]
@@ -3745,6 +3747,7 @@ internal sealed class LiquidSimulation
      private const float DistanceFieldPadding = 64f;
      private readonly RectTransform root;
      private readonly RectTransform transform;
+     private readonly Vector2[][] interiorWalls;
      private readonly BoundarySegment[] boundaries;
      private readonly BoundaryNode[] boundaryNodes;
      private readonly int[] boundaryOrder;
@@ -3756,6 +3759,7 @@ internal sealed class LiquidSimulation
      private readonly int distanceFieldRows;
      private readonly float[] signedDistanceField;
      private readonly Vector2[] distanceFieldGradients;
+     private readonly int outerBoundaryCount;
      private float maximumDropRadius = DefaultDropRadius * 6.3245554f;
      private Matrix4x4 rootToContainerMatrix;
      private Rect paddedInteriorRectangle;
@@ -3777,11 +3781,17 @@ internal sealed class LiquidSimulation
      private float rootUnitsPerLocalUnit = 1f;
      private int boundaryNodeCount;
 
-     internal ContainerShape(RectTransform root, RectTransform transform, Vector2[] outline)
+     internal ContainerShape(
+         RectTransform root,
+         RectTransform transform,
+         Vector2[] outline,
+         Vector2[][] interiorWalls)
      {
          this.root = root;
          this.transform = transform;
          Outline = outline ?? Array.Empty<Vector2>();
+         this.interiorWalls = interiorWalls ?? Array.Empty<Vector2[]>();
+         outerBoundaryCount = Mathf.Max(0, Outline.Length - 1);
          var minimumLocalY = Outline.Length > 0 ? Outline[0].y : 0f;
          var maximumLocalY = minimumLocalY;
          foreach (var point in Outline)
@@ -3792,7 +3802,16 @@ internal sealed class LiquidSimulation
          splitSizeZoneDepth = (maximumLocalY - minimumLocalY) * 0.05f;
          mergeSizeZoneDepth = (maximumLocalY - minimumLocalY) * 0.07f;
 
-         boundaries = new BoundarySegment[Mathf.Max(0, Outline.Length - 1)];
+         var boundaryCount = outerBoundaryCount;
+         foreach (var wall in this.interiorWalls)
+         {
+             if (wall != null && wall.Length > 1)
+             {
+                 boundaryCount += wall.Length - 1;
+             }
+         }
+
+         boundaries = new BoundarySegment[boundaryCount];
          boundaryNodes = new BoundaryNode[Mathf.Max(0, boundaries.Length * 2 - 1)];
          boundaryOrder = new int[boundaries.Length];
          boundaryQueryStack = new int[boundaryNodes.Length];
@@ -3887,13 +3906,38 @@ internal sealed class LiquidSimulation
          mergeSizeZoneEnd = ToRootPoint(Outline[Outline.Length - 1] + Vector2.down * mergeSizeZoneDepth);
          mergeSizeZoneSegment = mergeSizeZoneEnd - mergeSizeZoneStart;
          mergeSizeZoneLengthSquared = mergeSizeZoneSegment.sqrMagnitude;
-         for (var i = 0; i < boundaries.Length; i++)
+         var boundaryIndex = 0;
+         for (var i = 0; i < outerBoundaryCount; i++)
          {
              var start = ToRootPoint(Outline[i]);
              var end = ToRootPoint(Outline[i + 1]);
              Minimum = Vector2.Min(Minimum, start);
              Maximum = Vector2.Max(Maximum, start);
-             boundaries[i] = new BoundarySegment(start, end, interiorOrientation);
+             boundaries[boundaryIndex++] = new BoundarySegment(start, end, interiorOrientation);
+         }
+
+         foreach (var wall in interiorWalls)
+         {
+             if (wall == null || wall.Length < 2)
+             {
+                 continue;
+             }
+
+             var wallTwiceArea = 0f;
+             for (var i = 0; i < wall.Length - 1; i++)
+             {
+                 wallTwiceArea += wall[i].x * wall[i + 1].y - wall[i + 1].x * wall[i].y;
+             }
+
+             var wallOrientation = wallTwiceArea >= 0f ? -1f : 1f;
+             for (var i = 0; i < wall.Length - 1; i++)
+             {
+                 var start = ToRootPoint(wall[i]);
+                 var end = ToRootPoint(wall[i + 1]);
+                 Minimum = Vector2.Min(Minimum, start);
+                 Maximum = Vector2.Max(Maximum, start);
+                 boundaries[boundaryIndex++] = new BoundarySegment(start, end, wallOrientation);
+             }
          }
 
          var lastPoint = ToRootPoint(Outline[Outline.Length - 1]);
@@ -4226,7 +4270,7 @@ internal sealed class LiquidSimulation
 
      internal bool IsNearOpenRimEndpoint(PointClassification classification, float margin)
      {
-         if (boundaries.Length == 0 || classification.BoundaryIndex < 0)
+         if (outerBoundaryCount == 0 || classification.BoundaryIndex < 0)
          {
              return false;
          }
@@ -4237,7 +4281,7 @@ internal sealed class LiquidSimulation
              return true;
          }
 
-         return classification.BoundaryIndex == boundaries.Length - 1
+         return classification.BoundaryIndex == outerBoundaryCount - 1
              && (classification.NearestPoint - openingEnd).sqrMagnitude <= margin * margin;
      }
 
@@ -4282,21 +4326,12 @@ internal sealed class LiquidSimulation
              {
                  var point = distanceFieldMinimum
                      + new Vector2(x * DistanceFieldCellSize, y * DistanceFieldCellSize);
-                 var inside = false;
+                 var inside = ContainsLocal(point);
                  var nearestDistanceSquared = float.PositiveInfinity;
                  for (int i = 0, previous = Outline.Length - 1; i < Outline.Length; previous = i++)
                  {
                      var start = Outline[previous];
                      var end = Outline[i];
-                     if ((end.y > point.y) != (start.y > point.y)
-                         && point.x < (start.x - end.x)
-                         * (point.y - end.y)
-                         / (start.y - end.y)
-                         + end.x)
-                     {
-                         inside = !inside;
-                     }
-
                      if (i == 0)
                      {
                          continue;
@@ -4314,6 +4349,32 @@ internal sealed class LiquidSimulation
                      nearestDistanceSquared = Mathf.Min(
                          nearestDistanceSquared,
                          (point - nearestPoint).sqrMagnitude);
+                 }
+
+                 foreach (var wall in interiorWalls)
+                 {
+                     if (wall == null || wall.Length < 2)
+                     {
+                         continue;
+                     }
+
+                     for (var i = 0; i < wall.Length - 1; i++)
+                     {
+                         var start = wall[i];
+                         var end = wall[i + 1];
+                         var segment = end - start;
+                         var lengthSquared = segment.sqrMagnitude;
+                         if (lengthSquared <= Mathf.Epsilon)
+                         {
+                             continue;
+                         }
+
+                         var along = Mathf.Clamp01(Vector2.Dot(point - start, segment) / lengthSquared);
+                         var nearestPoint = start + segment * along;
+                         nearestDistanceSquared = Mathf.Min(
+                             nearestDistanceSquared,
+                             (point - nearestPoint).sqrMagnitude);
+                     }
                  }
 
                  var index = y * distanceFieldColumns + x;
@@ -4643,7 +4704,24 @@ internal sealed class LiquidSimulation
 
      private bool ContainsLocal(Vector2 point)
      {
-         var outline = Outline;
+         if (!IsInsidePolygon(point, Outline))
+         {
+             return false;
+         }
+
+         foreach (var wall in interiorWalls)
+         {
+             if (wall != null && wall.Length >= 3 && IsInsidePolygon(point, wall))
+             {
+                 return false;
+             }
+         }
+
+         return true;
+     }
+
+     private static bool IsInsidePolygon(Vector2 point, Vector2[] outline)
+     {
          var inside = false;
          for (int i = 0, previous = outline.Length - 1; i < outline.Length; previous = i++)
          {
