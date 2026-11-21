@@ -1008,8 +1008,12 @@ internal sealed class LiquidSimulation
             var assignment = containerAssignments[i];
             var sizeZoneAssignment = dropSizeZoneAssignments[i];
             var anyOpeningTransition = false;
-            for (var containerIndex = 0; containerIndex < containers.Length; containerIndex++)
+            var firstContainerIndex = assignment > 0 && assignment <= containers.Length
+                ? assignment - 1
+                : 0;
+            for (var containerOffset = 0; containerOffset < containers.Length; containerOffset++)
             {
+                var containerIndex = (firstContainerIndex + containerOffset) % containers.Length;
                 var container = containers[containerIndex];
                 if (container.CrossesSizeZone(previousPosition, position, out var enteringSizeZone))
                 {
@@ -1037,7 +1041,9 @@ internal sealed class LiquidSimulation
                 }
 
                 openingTransitions[containerIndex] =
-                    container.CrossesOpening(previousPosition, position);
+                    container.CrossesOpening(previousPosition, position)
+                    || container.IsNearOpening(previousPosition, radius)
+                    || container.IsNearOpening(position, radius);
                 anyOpeningTransition |= openingTransitions[containerIndex];
             }
 
@@ -2660,6 +2666,19 @@ internal sealed class LiquidSimulation
          var endSide = Cross(openingSegment, end - openingStart);
          return startSide <= 0f && endSide > 0f
              || startSide >= 0f && endSide < 0f;
+     }
+
+     internal bool IsNearOpening(Vector2 point, float margin)
+     {
+         if (Outline.Length < 2 || openingLengthSquared <= Mathf.Epsilon)
+         {
+             return false;
+         }
+
+         var amount = Mathf.Clamp01(
+             Vector2.Dot(point - openingStart, openingSegment) / openingLengthSquared);
+         var nearestPoint = openingStart + openingSegment * amount;
+         return (point - nearestPoint).sqrMagnitude <= margin * margin;
      }
 
      internal bool IsPastSizeZone(Vector2 point)
