@@ -50,7 +50,6 @@ internal sealed class LiquidSimulation
     private const float DensitySwapMaximumSpeed = 8f;
     private const float DensitySwapComparisonTolerance = 0.005f;
     private const int DensitySwapCandidateBudget = 96;
-    private const int MaximumConcurrentDensitySwapDrops = 4;
     private const float VelocityRampDuration = 2f;
     private const float OutsideDropExtraBoundsPadding = 1f;
     internal const int MinimumDropCollisionPasses = 2;
@@ -90,6 +89,8 @@ internal sealed class LiquidSimulation
     private Vector4[] dropColors = new Vector4[MaximumDrops];
     private Vector4[] densitySwapPaths = new Vector4[MaximumDrops];
     private float[] densitySwapProgress = new float[MaximumDrops];
+    private readonly int[] pendingDensitySwapFirstDrops = new int[DensitySwapCandidateBudget];
+    private readonly int[] pendingDensitySwapSecondDrops = new int[DensitySwapCandidateBudget];
     private int[] dropUnitHeads = new int[MaximumDrops];
     private int[] dropUnitTails = new int[MaximumDrops];
     private Vector2[] reorderedPositions = new Vector2[MaximumDrops];
@@ -209,7 +210,6 @@ internal sealed class LiquidSimulation
     private int densitySwapTooFastSinceDiagnostic;
     private int densitySwapNoHigherDensitySinceDiagnostic;
     private int densitySwapDeferredByCooldownSinceDiagnostic;
-    private int densitySwapDeferredByConcurrencySinceDiagnostic;
     private int densitySwapStartedSinceDiagnostic;
     private int densitySwapCompletedSinceDiagnostic;
     private uint randomState = 0xA341316Cu;
@@ -2451,16 +2451,6 @@ internal sealed class LiquidSimulation
             return;
         }
 
-        if (activeDensitySwapCount >= MaximumConcurrentDensitySwapDrops)
-        {
-            if (DebugLog.IsFileEnabled)
-            {
-                densitySwapDeferredByConcurrencySinceDiagnostic++;
-            }
-
-            return;
-        }
-
         if (densitySwapCooldownRemaining > 0f)
         {
             if (DebugLog.IsFileEnabled)
@@ -2492,17 +2482,13 @@ internal sealed class LiquidSimulation
         }
 
         var maximumSpeedSquared = DensitySwapMaximumSpeed * DensitySwapMaximumSpeed;
+        var pendingDensitySwapCount = 0;
         for (var candidateIndex = 0; candidateIndex < candidatesToCheck; candidateIndex++)
         {
             var drop = densitySwapScanCursor++;
             if (densitySwapScanCursor >= count)
             {
                 densitySwapScanCursor = 0;
-            }
-
-            if (activeDensitySwapCount >= MaximumConcurrentDensitySwapDrops)
-            {
-                break;
             }
 
             if (densitySwapProgress[drop] >= 0f
@@ -2571,14 +2557,27 @@ internal sealed class LiquidSimulation
                 higherPosition.y,
                 position.x,
                 position.y);
+            densitySwapProgress[drop] = 0f;
+            densitySwapProgress[higherDensityDrop] = 0f;
+            pendingDensitySwapFirstDrops[pendingDensitySwapCount] = drop;
+            pendingDensitySwapSecondDrops[pendingDensitySwapCount] = higherDensityDrop;
+            pendingDensitySwapCount++;
+        }
+
+        for (var pair = 0; pair < pendingDensitySwapCount; pair++)
+        {
+            var drop = pendingDensitySwapFirstDrops[pair];
+            var higherDensityDrop = pendingDensitySwapSecondDrops[pair];
+            var position = positions[drop];
+            var higherPosition = positions[higherDensityDrop];
+            var dropSpeed = velocities[drop].magnitude;
+            var dropDensity = GetDensityForDrop(drop);
             positions[drop] = higherPosition;
             positions[higherDensityDrop] = position;
             previousPositions[drop] = higherPosition;
             previousPositions[higherDensityDrop] = position;
             velocities[drop] = Vector2.zero;
             velocities[higherDensityDrop] = Vector2.zero;
-            densitySwapProgress[drop] = 0f;
-            densitySwapProgress[higherDensityDrop] = 0f;
             activeDensitySwapCount += 2;
             if (diagnosticsEnabled)
             {
@@ -2591,8 +2590,6 @@ internal sealed class LiquidSimulation
                     + $"position=({higherPosition.x:F1},{higherPosition.y:F1}), "
                     + $"speed={dropSpeed:F2}.");
             }
-
-            break;
         }
     }
 
@@ -2619,7 +2616,6 @@ internal sealed class LiquidSimulation
             + $"eligible={densitySwapEligibleSinceDiagnostic}, tooFast={densitySwapTooFastSinceDiagnostic}, "
             + $"noHigherDensity={densitySwapNoHigherDensitySinceDiagnostic}, "
             + $"deferredCooldown={densitySwapDeferredByCooldownSinceDiagnostic}, "
-            + $"deferredConcurrency={densitySwapDeferredByConcurrencySinceDiagnostic}, "
             + $"started={densitySwapStartedSinceDiagnostic}, "
             + $"completed={densitySwapCompletedSinceDiagnostic}.");
         densitySwapScansSinceDiagnostic = 0;
@@ -2630,7 +2626,6 @@ internal sealed class LiquidSimulation
         densitySwapTooFastSinceDiagnostic = 0;
         densitySwapNoHigherDensitySinceDiagnostic = 0;
         densitySwapDeferredByCooldownSinceDiagnostic = 0;
-        densitySwapDeferredByConcurrencySinceDiagnostic = 0;
         densitySwapStartedSinceDiagnostic = 0;
         densitySwapCompletedSinceDiagnostic = 0;
     }
