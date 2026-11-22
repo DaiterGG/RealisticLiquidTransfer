@@ -25,7 +25,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private static float referenceCapacity = ReferenceCapacity;
 
     private static bool sessionShaderEnabled = true;
-    private static float sessionColorTransitionSharpness = 1f;
+    private static float sessionColorTransitionSharpness = 2f;
     private static bool sessionClickSpawnEnabled;
     private static int sessionCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
     private static int sessionCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
