@@ -93,39 +93,79 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 return output;
             }
 
-            float4 SampleSharpLiquidColor(float2 uv)
+            void ConsiderLiquidColorBoundary(
+                float2 uv,
+                float2 offset,
+                inout float strongestContrast,
+                inout float4 colorBefore,
+                inout float4 colorAfter)
             {
-                float2 colorSize = _LiquidSharpColorTex_TexelSize.zw;
-                float2 colorPixel = clamp(
-                    floor(uv * colorSize),
-                    float2(0.0, 0.0),
-                    colorSize - 1.0);
-                float2 colorUv =
-                    (colorPixel + 0.5) * _LiquidSharpColorTex_TexelSize.xy;
-                return tex2D(_LiquidSharpColorTex, colorUv);
+                float4 before = tex2D(_LiquidColorTex, uv - offset);
+                float4 after = tex2D(_LiquidColorTex, uv + offset);
+                float3 colorDifference = after.rgb - before.rgb;
+                float contrast = dot(colorDifference, colorDifference);
+                if (contrast > strongestContrast)
+                {
+                    strongestContrast = contrast;
+                    colorBefore = before;
+                    colorAfter = after;
+                }
             }
 
-            float4 SampleSoftSharpLiquidColor(float2 uv)
+            float4 SampleSplineLiquidColor(float2 uv, float2 screenDx, float2 screenDy)
             {
-                float2 texel = _LiquidSharpColorTex_TexelSize.xy;
-                float2 diagonal = texel;
-                float2 doubleTexel = texel * 2.0;
-                float4 color = SampleSharpLiquidColor(uv) * 6.0;
-                color += (
-                    SampleSharpLiquidColor(uv + float2(texel.x, 0.0))
-                    + SampleSharpLiquidColor(uv - float2(texel.x, 0.0))
-                    + SampleSharpLiquidColor(uv + float2(0.0, texel.y))
-                    + SampleSharpLiquidColor(uv - float2(0.0, texel.y))) * 4.0;
-                color += SampleSharpLiquidColor(uv + float2(doubleTexel.x, 0.0));
-                color += SampleSharpLiquidColor(uv - float2(doubleTexel.x, 0.0));
-                color += SampleSharpLiquidColor(uv + float2(0.0, doubleTexel.y));
-                color += SampleSharpLiquidColor(uv - float2(0.0, doubleTexel.y));
-                color += (
-                    SampleSharpLiquidColor(uv + diagonal)
-                    + SampleSharpLiquidColor(uv - diagonal)
-                    + SampleSharpLiquidColor(uv + float2(diagonal.x, -diagonal.y))
-                    + SampleSharpLiquidColor(uv + float2(-diagonal.x, diagonal.y))) * 2.0;
-                return color / 34.0;
+                const float boundaryRadiusPixels = 2.75;
+                const float inverseSqrtTwo = 0.70710678;
+                float2 horizontalOffset = screenDx * boundaryRadiusPixels;
+                float2 verticalOffset = screenDy * boundaryRadiusPixels;
+                float2 diagonalOffset = (screenDx + screenDy)
+                    * (boundaryRadiusPixels * inverseSqrtTwo);
+                float2 oppositeDiagonalOffset = (screenDx - screenDy)
+                    * (boundaryRadiusPixels * inverseSqrtTwo);
+                float strongestContrast = 0.0;
+                float4 colorBefore = tex2D(_LiquidColorTex, uv);
+                float4 colorAfter = colorBefore;
+                ConsiderLiquidColorBoundary(
+                    uv,
+                    horizontalOffset,
+                    strongestContrast,
+                    colorBefore,
+                    colorAfter);
+                ConsiderLiquidColorBoundary(
+                    uv,
+                    verticalOffset,
+                    strongestContrast,
+                    colorBefore,
+                    colorAfter);
+                ConsiderLiquidColorBoundary(
+                    uv,
+                    diagonalOffset,
+                    strongestContrast,
+                    colorBefore,
+                    colorAfter);
+                ConsiderLiquidColorBoundary(
+                    uv,
+                    oppositeDiagonalOffset,
+                    strongestContrast,
+                    colorBefore,
+                    colorAfter);
+
+                float4 centerColor = tex2D(_LiquidColorTex, uv);
+                if (strongestContrast < 0.0001)
+                {
+                    return float4(
+                        centerColor.rgb,
+                        tex2D(_LiquidSharpColorTex, uv).a);
+                }
+
+                float3 colorSpan = colorAfter.rgb - colorBefore.rgb;
+                float blend = saturate(
+                    dot(centerColor.rgb - colorBefore.rgb, colorSpan)
+                    / strongestContrast);
+                float splineBlend = smoothstep(0.0, 1.0, blend);
+                return float4(
+                    lerp(colorBefore.rgb, colorAfter.rgb, splineBlend),
+                    tex2D(_LiquidSharpColorTex, uv).a);
             }
 
             fixed4 frag(v2f input) : SV_Target
@@ -134,7 +174,10 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float4 sampledLiquidColor;
                 if (_SharpLiquidColors > 0.5)
                 {
-                    sampledLiquidColor = SampleSoftSharpLiquidColor(input.uv);
+                    sampledLiquidColor = SampleSplineLiquidColor(
+                        input.uv,
+                        ddx(input.uv),
+                        ddy(input.uv));
                 }
                 else
                 {
