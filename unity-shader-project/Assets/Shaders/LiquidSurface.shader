@@ -4,9 +4,8 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
     {
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
         _LiquidColorTex ("Liquid Color Texture", 2D) = "white" {}
-        _LiquidSharpColorTex ("Sharp Liquid Color Texture", 2D) = "white" {}
         _Color ("Liquid Color", Color) = (0.16, 0.5, 0.95, 1)
-        _SharpLiquidColors ("Sharp Liquid Colors", Float) = 0
+        _ColorTransitionSharpness ("Color Transition Sharpness", Float) = 1
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -61,12 +60,10 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
 
             sampler2D _MainTex;
             sampler2D _LiquidColorTex;
-            sampler2D _LiquidSharpColorTex;
             float4 _MainTex_TexelSize;
-            float4 _LiquidSharpColorTex_TexelSize;
             float4 _Color;
             float4 _ClipRect;
-            float _SharpLiquidColors;
+            float _ColorTransitionSharpness;
 
             struct appdata
             {
@@ -93,96 +90,24 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 return output;
             }
 
-            void ConsiderLiquidColorBoundary(
-                float2 uv,
-                float2 offset,
-                inout float strongestContrast,
-                inout float4 colorBefore,
-                inout float4 colorAfter)
-            {
-                float4 before = tex2D(_LiquidColorTex, uv - offset);
-                float4 after = tex2D(_LiquidColorTex, uv + offset);
-                float3 colorDifference = after.rgb - before.rgb;
-                float contrast = dot(colorDifference, colorDifference);
-                if (contrast > strongestContrast)
-                {
-                    strongestContrast = contrast;
-                    colorBefore = before;
-                    colorAfter = after;
-                }
-            }
-
-            float4 SampleSplineLiquidColor(float2 uv, float2 screenDx, float2 screenDy)
-            {
-                const float boundaryRadiusPixels = 2.75;
-                const float inverseSqrtTwo = 0.70710678;
-                float2 horizontalOffset = screenDx * boundaryRadiusPixels;
-                float2 verticalOffset = screenDy * boundaryRadiusPixels;
-                float2 diagonalOffset = (screenDx + screenDy)
-                    * (boundaryRadiusPixels * inverseSqrtTwo);
-                float2 oppositeDiagonalOffset = (screenDx - screenDy)
-                    * (boundaryRadiusPixels * inverseSqrtTwo);
-                float strongestContrast = 0.0;
-                float4 colorBefore = tex2D(_LiquidColorTex, uv);
-                float4 colorAfter = colorBefore;
-                ConsiderLiquidColorBoundary(
-                    uv,
-                    horizontalOffset,
-                    strongestContrast,
-                    colorBefore,
-                    colorAfter);
-                ConsiderLiquidColorBoundary(
-                    uv,
-                    verticalOffset,
-                    strongestContrast,
-                    colorBefore,
-                    colorAfter);
-                ConsiderLiquidColorBoundary(
-                    uv,
-                    diagonalOffset,
-                    strongestContrast,
-                    colorBefore,
-                    colorAfter);
-                ConsiderLiquidColorBoundary(
-                    uv,
-                    oppositeDiagonalOffset,
-                    strongestContrast,
-                    colorBefore,
-                    colorAfter);
-
-                float4 centerColor = tex2D(_LiquidColorTex, uv);
-                if (strongestContrast < 0.0001)
-                {
-                    return float4(
-                        centerColor.rgb,
-                        tex2D(_LiquidSharpColorTex, uv).a);
-                }
-
-                float3 colorSpan = colorAfter.rgb - colorBefore.rgb;
-                float blend = saturate(
-                    dot(centerColor.rgb - colorBefore.rgb, colorSpan)
-                    / strongestContrast);
-                float splineBlend = smoothstep(0.0, 1.0, blend);
-                return float4(
-                    lerp(colorBefore.rgb, colorAfter.rgb, splineBlend),
-                    tex2D(_LiquidSharpColorTex, uv).a);
-            }
-
             fixed4 frag(v2f input) : SV_Target
             {
                 float density = tex2D(_MainTex, input.uv).r;
-                float4 sampledLiquidColor;
-                if (_SharpLiquidColors > 0.5)
+                float4 sampledLiquidColor = tex2D(_LiquidColorTex, input.uv);
+                float2 screenDx = ddx(input.uv) * 2.0;
+                float2 screenDy = ddy(input.uv) * 2.0;
+                if (_ColorTransitionSharpness > 0.0)
                 {
-                    sampledLiquidColor = SampleSplineLiquidColor(
-                        input.uv,
-                        ddx(input.uv),
-                        ddy(input.uv));
+                    float3 neighborColor = (
+                        tex2D(_LiquidColorTex, input.uv + screenDx).rgb
+                        + tex2D(_LiquidColorTex, input.uv - screenDx).rgb
+                        + tex2D(_LiquidColorTex, input.uv + screenDy).rgb
+                        + tex2D(_LiquidColorTex, input.uv - screenDy).rgb) * 0.25;
+                    sampledLiquidColor.rgb = saturate(
+                        sampledLiquidColor.rgb
+                        + (sampledLiquidColor.rgb - neighborColor) * _ColorTransitionSharpness);
                 }
-                else
-                {
-                    sampledLiquidColor = tex2D(_LiquidColorTex, input.uv);
-                }
+
                 float leftDensity = tex2D(_MainTex, input.uv - float2(_MainTex_TexelSize.x, 0.0)).r;
                 float rightDensity = tex2D(_MainTex, input.uv + float2(_MainTex_TexelSize.x, 0.0)).r;
                 float downDensity = tex2D(_MainTex, input.uv - float2(0.0, _MainTex_TexelSize.y)).r;

@@ -13,10 +13,8 @@ StructuredBuffer<float> _DropOpacities;
 StructuredBuffer<float4> _DropSwapPaths;
 RWStructuredBuffer<int4> _Accumulation;
 RWStructuredBuffer<int4> _ColorAccumulation;
-RWStructuredBuffer<uint> _DominantColorKeys;
 RWTexture2D<float4> _DensityOutput;
 RWTexture2D<float4> _ColorOutput;
-RWTexture2D<float4> _SharpColorOutput;
 
 int _TextureWidth;
 int _TextureHeight;
@@ -38,7 +36,6 @@ void ClearAccumulation(uint3 dispatchId : SV_DispatchThreadID)
 
     _Accumulation[dispatchId.x] = int4(0, 0, 0, 0);
     _ColorAccumulation[dispatchId.x] = int4(0, 0, 0, 0);
-    _DominantColorKeys[dispatchId.x] = 0;
 }
 
 [numthreads(8, 8, 1)]
@@ -176,13 +173,6 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
             InterlockedAdd(_ColorAccumulation[pixelIndex].y, colorG, ignored);
             InterlockedAdd(_ColorAccumulation[pixelIndex].z, colorB, ignored);
             InterlockedAdd(_ColorAccumulation[pixelIndex].w, colorA, ignored);
-            uint colorPriority = (uint)round(saturate(contribution) * 65535.0);
-            uint dominantColorKey = (colorPriority << 16) | (65535u - dropIndex);
-            uint ignoredDominantColorKey;
-            InterlockedMax(
-                _DominantColorKeys[pixelIndex],
-                dominantColorKey,
-                ignoredDominantColorKey);
         }
     }
 }
@@ -213,11 +203,4 @@ void ResolveDensity(uint3 dispatchId : SV_DispatchThreadID)
             saturate((float)colorAccumulated.w / accumulated.y))
         : float4(0.16, 0.5, 0.95, 1.0);
     _ColorOutput[dispatchId.xy] = liquidColor;
-
-    uint dominantColorKey = _DominantColorKeys[pixelIndex];
-    uint dominantDropIndex = 65535u - (dominantColorKey & 65535u);
-    float4 sharpLiquidColor = accumulated.y > 0 && dominantDropIndex < (uint)_DropCount
-        ? float4(_DropColors[dominantDropIndex].rgb, _DropOpacities[dominantDropIndex])
-        : float4(0.16, 0.5, 0.95, 1.0);
-    _SharpColorOutput[dispatchId.xy] = sharpLiquidColor;
 }

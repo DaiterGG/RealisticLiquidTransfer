@@ -125,16 +125,12 @@ internal sealed class LiquidSimulation
     private RenderTexture densityRenderTexture;
     private Texture2D densityColorTexture;
     private RenderTexture densityColorRenderTexture;
-    private Texture2D densitySharpColorTexture;
-    private RenderTexture densitySharpColorRenderTexture;
     private Texture2D densityUploadTexture;
     private Color32[] densityPixels;
     private Color32[] densityUploadPixels;
     private Vector3[] densityVelocityFields;
     private Vector4[] densityWeightedColors;
-    private float[] densityStrongestColorContributions;
     private Color32[] densityColorPixels;
-    private Color32[] densitySharpColorPixels;
     private Vector4[] computeDropData;
     private float[] computeDropRadii;
     private Vector4[] computeDropColors;
@@ -151,7 +147,6 @@ internal sealed class LiquidSimulation
     private int resolveDensityKernel;
     private ComputeBuffer densityAccumulationBuffer;
     private ComputeBuffer colorAccumulationBuffer;
-    private ComputeBuffer dominantColorKeyBuffer;
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
     private ComputeBuffer computeDropColorBuffer;
@@ -955,9 +950,9 @@ internal sealed class LiquidSimulation
             + $"individual drop rendering {(surfaceShaderEnabled ? "disabled" : "enabled")}.");
     }
 
-    internal void SetSharpLiquidColorsEnabled(bool enabled)
+    internal void SetColorTransitionSharpness(float sharpness)
     {
-        surfaceGraphic.SetSharpLiquidColorsEnabled(enabled);
+        surfaceGraphic.SetColorTransitionSharpness(sharpness);
     }
 
     internal int GetContainerDropCount(int containerIndex)
@@ -3419,36 +3414,6 @@ internal sealed class LiquidSimulation
                     useComputeRendering = false;
                 }
             }
-            if (useComputeRendering)
-            {
-                densitySharpColorRenderTexture = new RenderTexture(
-                    densityTextureWidth,
-                    densityTextureHeight,
-                    0,
-                    RenderTextureFormat.ARGB32,
-                    RenderTextureReadWrite.Linear)
-                {
-                    name = "LiquidSharpColor",
-                    filterMode = FilterMode.Point,
-                    wrapMode = TextureWrapMode.Clamp,
-                    enableRandomWrite = true,
-                    useMipMap = false,
-                    autoGenerateMips = false
-                };
-                if (!densitySharpColorRenderTexture.Create())
-                {
-                    Debug.LogWarning(
-                        "[RealisticLiquidTransfer] Could not create the sharp liquid color texture; "
-                        + "falling back to the CPU liquid renderer.");
-                    UnityEngine.Object.Destroy(densityRenderTexture);
-                    densityRenderTexture = null;
-                    UnityEngine.Object.Destroy(densityColorRenderTexture);
-                    densityColorRenderTexture = null;
-                    UnityEngine.Object.Destroy(densitySharpColorRenderTexture);
-                    densitySharpColorRenderTexture = null;
-                    useComputeRendering = false;
-                }
-            }
         }
 
         if (useComputeRendering)
@@ -3478,8 +3443,6 @@ internal sealed class LiquidSimulation
         surfaceGraphic.SetDensityTexture(useComputeRendering ? densityRenderTexture : densityTexture);
         surfaceGraphic.SetLiquidColorTexture(
             useComputeRendering ? densityColorRenderTexture : densityColorTexture);
-        surfaceGraphic.SetSharpLiquidColorTexture(
-            useComputeRendering ? densitySharpColorRenderTexture : densitySharpColorTexture);
         surfaceGraphic.SetDensityUploadTexture(densityUploadTexture);
         if (useComputeRendering)
         {
@@ -3490,8 +3453,7 @@ internal sealed class LiquidSimulation
                 computeDropColorBuffer,
                 computeDropOpacityBuffer,
                 computeDropSwapPathBuffer,
-                colorAccumulationBuffer,
-                dominantColorKeyBuffer);
+                colorAccumulationBuffer);
         }
         if (LiquidShaderAssets.SurfaceMaterial)
         {
@@ -3536,15 +3498,12 @@ internal sealed class LiquidSimulation
         densityPixels = new Color32[densityComputePixelCount];
         densityVelocityFields = new Vector3[densityPixels.Length];
         densityWeightedColors = new Vector4[densityPixels.Length];
-        densityStrongestColorContributions = new float[densityPixels.Length];
         densityColorPixels = new Color32[densityPixels.Length];
-        densitySharpColorPixels = new Color32[densityPixels.Length];
         activeDensityPixelIndices = new int[densityPixels.Length];
         for (var i = 0; i < densityPixels.Length; i++)
         {
             densityPixels[i] = new Color32(0, 128, 128, 0);
             densityColorPixels[i] = new Color32(41, 128, 243, 255);
-            densitySharpColorPixels[i] = new Color32(41, 128, 243, 255);
         }
 
         densityTexture = new Texture2D(
@@ -3575,20 +3534,6 @@ internal sealed class LiquidSimulation
         };
         densityColorTexture.SetPixels32(densityColorPixels);
         densityColorTexture.Apply(false, false);
-
-        densitySharpColorTexture = new Texture2D(
-            densityTextureWidth,
-            densityTextureHeight,
-            TextureFormat.RGBA32,
-            false,
-            true)
-        {
-            name = "LiquidSharpColor",
-            filterMode = FilterMode.Point,
-            wrapMode = TextureWrapMode.Clamp
-        };
-        densitySharpColorTexture.SetPixels32(densitySharpColorPixels);
-        densitySharpColorTexture.Apply(false, false);
     }
 
     private void InitializeComputeRendering()
@@ -3603,10 +3548,6 @@ internal sealed class LiquidSimulation
         colorAccumulationBuffer = new ComputeBuffer(
             densityComputePixelCount,
             sizeof(int) * 4,
-            ComputeBufferType.Structured);
-        dominantColorKeyBuffer = new ComputeBuffer(
-            densityComputePixelCount,
-            sizeof(uint),
             ComputeBufferType.Structured);
         computeDropDataBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
         computeDropRadiusBuffer = new ComputeBuffer(MaximumDrops, sizeof(float), ComputeBufferType.Structured);
@@ -3624,9 +3565,7 @@ internal sealed class LiquidSimulation
         densityComputeShader.SetBuffer(clearAccumulationKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(clearAccumulationKernel, "_ColorAccumulation", colorAccumulationBuffer);
-        densityComputeShader.SetBuffer(clearAccumulationKernel, "_DominantColorKeys", dominantColorKeyBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_ColorAccumulation", colorAccumulationBuffer);
-        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DominantColorKeys", dominantColorKeyBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropData", computeDropDataBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropRadii", computeDropRadiusBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropColors", computeDropColorBuffer);
@@ -3634,15 +3573,8 @@ internal sealed class LiquidSimulation
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropSwapPaths", computeDropSwapPathBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_ColorAccumulation", colorAccumulationBuffer);
-        densityComputeShader.SetBuffer(resolveDensityKernel, "_DominantColorKeys", dominantColorKeyBuffer);
-        densityComputeShader.SetBuffer(resolveDensityKernel, "_DropColors", computeDropColorBuffer);
-        densityComputeShader.SetBuffer(resolveDensityKernel, "_DropOpacities", computeDropOpacityBuffer);
         densityComputeShader.SetTexture(resolveDensityKernel, "_DensityOutput", densityRenderTexture);
         densityComputeShader.SetTexture(resolveDensityKernel, "_ColorOutput", densityColorRenderTexture);
-        densityComputeShader.SetTexture(
-            resolveDensityKernel,
-            "_SharpColorOutput",
-            densitySharpColorRenderTexture);
         densityComputeShader.SetInt("_TextureWidth", densityTextureWidth);
         densityComputeShader.SetInt("_TextureHeight", densityTextureHeight);
         densityComputeShader.SetInt("_PixelCount", densityComputePixelCount);
@@ -3687,9 +3619,7 @@ internal sealed class LiquidSimulation
             densityPixels[pixelIndex] = new Color32(0, 128, 128, 0);
             densityVelocityFields[pixelIndex] = Vector3.zero;
             densityWeightedColors[pixelIndex] = Vector4.zero;
-            densityStrongestColorContributions[pixelIndex] = 0f;
             densityColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
-            densitySharpColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
             IncludeDensityPixel(pixelIndex, ref minimumX, ref minimumY, ref maximumX, ref maximumY);
         }
         activeDensityPixelCount = 0;
@@ -3709,12 +3639,6 @@ internal sealed class LiquidSimulation
             var transitionSegment = position - transitionStart;
             var transitionSegmentLengthSquared = transitionSegment.sqrMagnitude;
             var dropRadius = GetDropRadius(drop);
-            var dropColor = dropColors[drop];
-            var sharpDropColor = new Color32(
-                (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.x) * byte.MaxValue),
-                (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.y) * byte.MaxValue),
-                (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.z) * byte.MaxValue),
-                byte.MaxValue);
             var supportRadius = dropRadius * 2.2f;
             var supportRadiusSquared = supportRadius * supportRadius;
             var inverseSupportRadiusSquared = 1f / supportRadiusSquared;
@@ -3822,11 +3746,6 @@ internal sealed class LiquidSimulation
                     weightedColor.z += dropColors[drop].z * contribution;
                     weightedColor.w += contribution;
                     densityWeightedColors[pixelIndex] = weightedColor;
-                    if (contribution > densityStrongestColorContributions[pixelIndex])
-                    {
-                        densityStrongestColorContributions[pixelIndex] = contribution;
-                        densitySharpColorPixels[pixelIndex] = sharpDropColor;
-                    }
                 }
             }
         }
@@ -3861,7 +3780,6 @@ internal sealed class LiquidSimulation
         {
             UploadDensityRegion(minimumX, minimumY, maximumX, maximumY);
             UploadLiquidColorRegion(minimumX, minimumY, maximumX, maximumY);
-            UploadLiquidSharpColorRegion(minimumX, minimumY, maximumX, maximumY);
         }
     }
 
@@ -3995,21 +3913,6 @@ internal sealed class LiquidSimulation
         UploadColorTextureRegion(
             densityColorTexture,
             densityColorPixels,
-            minimumX,
-            minimumY,
-            maximumX,
-            maximumY);
-    }
-
-    private void UploadLiquidSharpColorRegion(
-        int minimumX,
-        int minimumY,
-        int maximumX,
-        int maximumY)
-    {
-        UploadColorTextureRegion(
-            densitySharpColorTexture,
-            densitySharpColorPixels,
             minimumX,
             minimumY,
             maximumX,
@@ -5213,12 +5116,10 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
 {
     private Texture densityTexture;
     private Texture liquidColorTexture;
-    private Texture sharpLiquidColorTexture;
     private Texture2D densityUploadTexture;
     private RenderTexture densityRenderTexture;
     private ComputeBuffer densityAccumulationBuffer;
     private ComputeBuffer colorAccumulationBuffer;
-    private ComputeBuffer dominantColorKeyBuffer;
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
     private ComputeBuffer computeDropColorBuffer;
@@ -5244,15 +5145,6 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         }
     }
 
-    internal void SetSharpLiquidColorTexture(Texture texture)
-    {
-        sharpLiquidColorTexture = texture;
-        if (surfaceMaterial)
-        {
-            surfaceMaterial.SetTexture("_LiquidSharpColorTex", texture);
-        }
-    }
-
     internal void SetSurfaceMaterial(Material material)
     {
         surfaceMaterial = material;
@@ -5261,17 +5153,13 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         {
             surfaceMaterial.SetTexture("_LiquidColorTex", liquidColorTexture);
         }
-        if (sharpLiquidColorTexture)
-        {
-            surfaceMaterial.SetTexture("_LiquidSharpColorTex", sharpLiquidColorTexture);
-        }
     }
 
-    internal void SetSharpLiquidColorsEnabled(bool enabled)
+    internal void SetColorTransitionSharpness(float sharpness)
     {
         if (surfaceMaterial)
         {
-            surfaceMaterial.SetFloat("_SharpLiquidColors", enabled ? 1f : 0f);
+            surfaceMaterial.SetFloat("_ColorTransitionSharpness", sharpness);
             SetMaterialDirty();
         }
     }
@@ -5288,8 +5176,7 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         ComputeBuffer dropColors,
         ComputeBuffer dropOpacities,
         ComputeBuffer dropSwapPaths,
-        ComputeBuffer colorAccumulation,
-        ComputeBuffer dominantColorKeys)
+        ComputeBuffer colorAccumulation)
     {
         densityAccumulationBuffer = accumulation;
         computeDropDataBuffer = dropData;
@@ -5298,7 +5185,6 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         computeDropOpacityBuffer = dropOpacities;
         computeDropSwapPathBuffer = dropSwapPaths;
         colorAccumulationBuffer = colorAccumulation;
-        dominantColorKeyBuffer = dominantColorKeys;
     }
 
     protected override void OnPopulateMesh(VertexHelper vertexHelper)
@@ -5352,23 +5238,11 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
             Destroy(liquidColorTexture);
         }
         liquidColorTexture = null;
-        if (sharpLiquidColorTexture is RenderTexture sharpColorRenderTexture)
-        {
-            sharpColorRenderTexture.Release();
-            Destroy(sharpColorRenderTexture);
-        }
-        else if (sharpLiquidColorTexture)
-        {
-            Destroy(sharpLiquidColorTexture);
-        }
-        sharpLiquidColorTexture = null;
 
         densityAccumulationBuffer?.Release();
         densityAccumulationBuffer = null;
         colorAccumulationBuffer?.Release();
         colorAccumulationBuffer = null;
-        dominantColorKeyBuffer?.Release();
-        dominantColorKeyBuffer = null;
         computeDropDataBuffer?.Release();
         computeDropDataBuffer = null;
         computeDropRadiusBuffer?.Release();

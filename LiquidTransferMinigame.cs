@@ -25,7 +25,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private static float referenceCapacity = ReferenceCapacity;
 
     private static bool sessionShaderEnabled = true;
-    private static bool sessionSharpLiquidColorsEnabled;
+    private static float sessionColorTransitionSharpness = 1f;
     private static bool sessionClickSpawnEnabled;
     private static int sessionCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
     private static int sessionCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
@@ -53,8 +53,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Text volumeText;
     private RectTransform screenRoot;
     private Toggle shaderToggle;
-    private Toggle sharpLiquidColorsToggle;
     private Toggle spawnToggle;
+    private Slider colorTransitionSharpnessSlider;
+    private Text colorTransitionSharpnessText;
     private Slider collisionPassSlider;
     private Text collisionPassText;
     private Slider collisionCorrectionSlider;
@@ -240,24 +241,29 @@ internal sealed class LiquidTransferMinigame : Minigame
             "Spawn drops on click",
             new Vector2(rightControlsX, -52f));
         spawnToggle.isOn = sessionClickSpawnEnabled;
-        sharpLiquidColorsToggle = CreateToggle(
+        colorTransitionSharpnessSlider = CreateTuningSlider(
             debugTextRoot,
-            "SharpLiquidColorsToggle",
-            "Sharp liquid colors",
-            new Vector2(rightControlsX, -80f));
-        sharpLiquidColorsToggle.isOn = sessionSharpLiquidColorsEnabled;
+            "ColorTransitionSharpness",
+            "Color transition sharpness",
+            new Vector2(rightControlsX, -78f),
+            new Vector2(rightControlsX, -104f),
+            0f,
+            3f,
+            sessionColorTransitionSharpness,
+            false,
+            out colorTransitionSharpnessText);
         freezeToggle = CreateToggle(
             debugTextRoot,
             "FreezeSimulationToggle",
             "Freeze simulation",
-            new Vector2(rightControlsX, -326f));
+            new Vector2(rightControlsX, -352f));
         freezeToggle.isOn = sessionFreezeSimulation;
         collisionPassSlider = CreateTuningSlider(
             debugTextRoot,
             "CollisionPasses",
             "Collision passes",
-            new Vector2(rightControlsX, -106f),
             new Vector2(rightControlsX, -132f),
+            new Vector2(rightControlsX, -158f),
             LiquidSimulation.MinimumDropCollisionPasses,
             LiquidSimulation.MaximumDropCollisionPasses,
             sessionCollisionPasses,
@@ -267,8 +273,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "CollisionCorrection",
             "Position correction",
-            new Vector2(rightControlsX, -160f),
             new Vector2(rightControlsX, -186f),
+            new Vector2(rightControlsX, -212f),
             LiquidSimulation.MinimumCollisionCorrectionPercent,
             LiquidSimulation.MaximumCollisionCorrectionPercent,
             sessionCollisionCorrection,
@@ -278,8 +284,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "VelocityContactMargin",
             "Velocity contact margin",
-            new Vector2(rightControlsX, -214f),
             new Vector2(rightControlsX, -240f),
+            new Vector2(rightControlsX, -266f),
             LiquidSimulation.MinimumVelocityContactMarginTenths,
             LiquidSimulation.MaximumVelocityContactMarginTenths,
             sessionVelocityContactMargin,
@@ -289,8 +295,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "DropRadius",
             "Base drop radius",
-            new Vector2(rightControlsX, -268f),
             new Vector2(rightControlsX, -294f),
+            new Vector2(rightControlsX, -320f),
             LiquidSimulation.MinimumDropRadiusTenths,
             LiquidSimulation.MaximumDropRadiusTenths,
             sessionDropRadiusTenths,
@@ -300,8 +306,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "InitialPacking",
             "Initial packing",
-            new Vector2(rightControlsX, -348f),
             new Vector2(rightControlsX, -374f),
+            new Vector2(rightControlsX, -400f),
             LiquidSimulation.MinimumPackingTenths,
             LiquidSimulation.MaximumPackingTenths,
             sessionInitialPackingTenths,
@@ -399,14 +405,15 @@ internal sealed class LiquidTransferMinigame : Minigame
         UpdateSyringeHandlePositions();
         shaderToggle.onValueChanged.AddListener(SetLiquidShaderEnabled);
         SetLiquidShaderEnabled(shaderToggle.isOn);
-        sharpLiquidColorsToggle.onValueChanged.AddListener(SetSharpLiquidColorsEnabled);
-        SetSharpLiquidColorsEnabled(sharpLiquidColorsToggle.isOn);
+        colorTransitionSharpnessSlider.onValueChanged.AddListener(SetColorTransitionSharpness);
+        SetColorTransitionSharpness(colorTransitionSharpnessSlider.value);
         spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
         SetClickSpawnEnabled(spawnToggle.isOn);
         freezeToggle.onValueChanged.AddListener(SetFreezeSimulation);
         SetFreezeSimulation(freezeToggle.isOn);
         collisionTuningSliders = new[]
         {
+            colorTransitionSharpnessSlider,
             collisionPassSlider,
             collisionCorrectionSlider,
             velocityContactMarginSlider,
@@ -676,10 +683,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         liquidSimulation.SetSurfaceShaderEnabled(enabled);
     }
 
-    private void SetSharpLiquidColorsEnabled(bool enabled)
+    private void SetColorTransitionSharpness(float sharpness)
     {
-        sessionSharpLiquidColorsEnabled = enabled;
-        liquidSimulation.SetSharpLiquidColorsEnabled(enabled);
+        sessionColorTransitionSharpness = sharpness;
+        liquidSimulation.SetColorTransitionSharpness(sharpness);
+        colorTransitionSharpnessText.text =
+            $"Color transition sharpness: {sharpness:F1}";
     }
 
     private void SetCollisionPasses(float passes)
@@ -743,7 +752,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
             if (selectable == shaderToggle
-                || selectable == sharpLiquidColorsToggle
                 || selectable == spawnToggle
                 || selectable == freezeToggle)
             {
@@ -766,10 +774,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         var pointer = Input.mousePosition;
         return RectTransformUtility.RectangleContainsScreenPoint(
                 shaderToggle.GetComponent<RectTransform>(),
-                pointer,
-                eventCamera)
-            || RectTransformUtility.RectangleContainsScreenPoint(
-                sharpLiquidColorsToggle.GetComponent<RectTransform>(),
                 pointer,
                 eventCamera)
             || RectTransformUtility.RectangleContainsScreenPoint(
