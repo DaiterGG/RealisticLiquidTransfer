@@ -1049,7 +1049,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             LiquidSimulation.DefaultDropRadius * 2f);
         var deltaTime = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.1f);
         float handleY;
-        if (requestedHandleY < currentHandleY
+        if (requestedHandleY <= geometry.FluidBottom.y + 0.01f)
+        {
+            handleY = geometry.FluidBottom.y;
+            syringe.HandleVelocity = 0f;
+        }
+        else if (requestedHandleY < currentHandleY
             && hasLiquidAtOutlet
             && syringe.Capacity > 0f)
         {
@@ -1085,6 +1090,36 @@ internal sealed class LiquidTransferMinigame : Minigame
         var needleDirection3D = syringe.Container.Transform.localRotation
             * Vector3.Scale(Vector2.down, syringe.Container.Transform.localScale);
         var needleDirection = new Vector2(needleDirection3D.x, needleDirection3D.y).normalized;
+        if (handleY <= geometry.FluidBottom.y + 0.01f)
+        {
+            syringe.EjectionVolumeCredit = 0f;
+            var destinationIndex = otherContainerIndex >= 0
+                && liquidSimulation.ContainsContainer(otherContainerIndex, needlePoint)
+                    ? otherContainerIndex
+                    : -1;
+            var remainingUnits = liquidSimulation.GetContainerDropCount(syringe.ContainerIndex);
+            while (remainingUnits > 0)
+            {
+                var moved = liquidSimulation.TryTransferNearestDrop(
+                    syringe.ContainerIndex,
+                    destinationIndex,
+                    outletPoint,
+                    float.PositiveInfinity,
+                    needlePoint,
+                    int.MaxValue,
+                    needleDirection * SyringeEjectionSpeed,
+                    destinationIndex >= 0);
+                if (moved <= 0)
+                {
+                    break;
+                }
+
+                remainingUnits -= moved;
+            }
+
+            return;
+        }
+
         if (difference < 0f)
         {
             if (hasLiquidAtOutlet)
@@ -1130,9 +1165,11 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (transferUnits > 0)
             {
                 var sourceIndex = otherContainerIndex;
+                var localDropRadius = LiquidSimulation.DefaultDropRadius
+                    / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
                 var destinationPoint = ToRootPoint(
                     syringe.Container,
-                    new Vector2(0f, geometry.FluidBottom.y + LiquidSimulation.DefaultDropRadius));
+                    new Vector2(0f, geometry.FluidBottom.y + localDropRadius));
                 var maximumSourceDistance = LiquidSimulation.DefaultDropRadius * 3f;
                 var remainingUnits = transferUnits;
                 while (remainingUnits > 0)
