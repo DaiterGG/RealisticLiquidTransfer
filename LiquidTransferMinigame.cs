@@ -16,6 +16,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
+    private const float SyringeHandleSmoothTime = 0.04f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
@@ -807,11 +808,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             {
                 heldContainer = null;
                 heldVisual = null;
-                if (!container.IsSyringe)
-                {
-                    StartRotating(container, game.handPos);
-                    rotatingWithRightMouse = true;
-                }
+                StartRotating(container, game.handPos);
+                rotatingWithRightMouse = true;
             }
         }
 
@@ -948,6 +946,11 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
+        if (syringe == activeSyringe && Minigame.game.handClicking)
+        {
+            return;
+        }
+
         var amount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
         var fillRatio = syringe.Capacity > 0f
             ? Mathf.Clamp01(amount / syringe.Capacity)
@@ -958,6 +961,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 syringe.Container.Geometry.FluidBottom.y,
                 syringe.Container.Geometry.FluidTop.y,
                 fillRatio));
+        syringe.HandleVelocity = 0f;
     }
 
     private SyringeVisual GetSyringeHandleUnderPointer(Vector2 pointerPosition)
@@ -980,8 +984,13 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         var localPointer = ToContainerLocalPoint(syringe.Container, pointerPosition);
-        return syringe.HandleTransform.rect.Contains(
-            localPointer - syringe.HandleTransform.anchoredPosition);
+        var handlePoint = localPointer - syringe.HandleTransform.anchoredPosition;
+        var hitbox = syringe.HandleTransform.rect;
+        hitbox.xMin -= 8f;
+        hitbox.xMax += 8f;
+        hitbox.yMin -= 8f;
+        hitbox.yMax += 8f;
+        return hitbox.Contains(handlePoint);
     }
 
     private Vector2 ToContainerLocalPoint(ContainerVisual container, Vector2 rootPoint)
@@ -1001,21 +1010,26 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private void UpdateSyringePlunger(SyringeVisual syringe, Vector2 pointerPosition)
     {
-        if (syringe.Capacity <= 0f)
-        {
-            return;
-        }
-
         var geometry = syringe.Container.Geometry;
         var pointerLocal = ToContainerLocalPoint(syringe.Container, pointerPosition);
         var requestedHandleY = Mathf.Clamp(
             pointerLocal.y + syringeHandlePointerOffset,
             geometry.FluidBottom.y,
             geometry.FluidTop.y);
+        var handleVelocity = syringe.HandleVelocity;
+        var handleY = Mathf.SmoothDamp(
+            syringe.HandleTransform.anchoredPosition.y,
+            requestedHandleY,
+            ref handleVelocity,
+            SyringeHandleSmoothTime,
+            Mathf.Infinity,
+            Time.unscaledDeltaTime);
+        syringe.HandleVelocity = handleVelocity;
+        syringe.HandleTransform.anchoredPosition = new Vector2(0f, handleY);
         var fillRatio = Mathf.InverseLerp(
             geometry.FluidBottom.y,
             geometry.FluidTop.y,
-            requestedHandleY);
+            handleY);
         var requestedAmount = fillRatio * syringe.Capacity;
         var currentAmount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
         var difference = requestedAmount - currentAmount;
@@ -1120,6 +1134,11 @@ internal sealed class LiquidTransferMinigame : Minigame
             bodyBottomLeft,
             bodyTopLeft
         };
+        var bodyHitbox = Rect.MinMaxRect(
+            bodyTopLeft.x,
+            bodyBottomLeft.y,
+            bodyTopRight.x,
+            bodyTopRight.y);
         return new SyringeGeometry(
             fluidOutline,
             collisionOutline,
@@ -1128,6 +1147,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             FromTop(27f, 9f),
             fluidBottomLeft.y,
             fluidTopLeft.y,
+            bodyHitbox,
             FromTop(15f, 140f));
     }
 
@@ -1204,6 +1224,16 @@ internal sealed class LiquidTransferMinigame : Minigame
     private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)
     {
         var pointerPosition = Minigame.game.handPos / fitScale;
+        if (IsPointerOnSyringeBody(receivingContainer, pointerPosition))
+        {
+            return receivingContainer;
+        }
+
+        if (IsPointerOnSyringeBody(sourceContainer, pointerPosition))
+        {
+            return sourceContainer;
+        }
+
         foreach (var uiCast in uiCasts)
         {
             if (uiCast.gameObject == receivingContainer.Transform.gameObject
@@ -1222,6 +1252,13 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         return null;
+    }
+
+    private bool IsPointerOnSyringeBody(ContainerVisual container, Vector2 pointerPosition)
+    {
+        return container.IsSyringe
+            && container.Geometry.BodyHitbox.Contains(
+                ToContainerLocalPoint(container, pointerPosition));
     }
 
     internal void RestoreHand()
@@ -1951,21 +1988,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             outline.color = Color.blue;
             outline.raycastTarget = false;
             outline.SetPoints(outlinePoints);
-
-            var debugLine = new GameObject(
-                $"{name}OpeningDebugLine",
-                typeof(RectTransform),
-                typeof(CanvasRenderer),
-                typeof(Image)).GetComponent<Image>();
-            var lineRect = debugLine.rectTransform;
-            lineRect.SetParent(rect, false);
-            lineRect.anchorMin = new Vector2(0.5f, 0.5f);
-            lineRect.anchorMax = new Vector2(0.5f, 0.5f);
-            lineRect.pivot = new Vector2(0.5f, 0.5f);
-            lineRect.anchoredPosition = openingPosition;
-            lineRect.sizeDelta = new Vector2(openingWidth, 3f);
-            debugLine.color = Color.red;
-            debugLine.raycastTarget = false;
         }
 
         if (!isSyringe)
@@ -2002,7 +2024,15 @@ internal sealed class LiquidTransferMinigame : Minigame
         rotationTrackingStarted = false;
         rotationVerticalSector = Mathf.FloorToInt(rotationAngle / 180f);
 
-        if (container.HasRotationPivot && !IsAtVerticalPosition(rotationAngle))
+        if (container.IsSyringe)
+        {
+            rotationPivotPosition = container.Transform.anchoredPosition
+                + TransformOpeningPoint(container.Transform, container.Geometry.NeedlePoint);
+            var pointerVector = rotationStartPointer - rotationPivotPosition;
+            rotationLastPointerAngle = Mathf.Atan2(pointerVector.y, pointerVector.x) * Mathf.Rad2Deg;
+            rotationTrackingStarted = true;
+        }
+        else if (container.HasRotationPivot && !IsAtVerticalPosition(rotationAngle))
         {
             StartPivotTracking(rotationStartPointer);
         }
@@ -2049,9 +2079,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         var visual = activeRotationContainer;
-        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        var pivotPoint = GetRotationPivotPoint(visual);
         var maxPivotDistance = 0f;
-        foreach (var point in visual.OutlinePoints)
+        var rotationOutline = visual.IsSyringe
+            ? visual.CollisionOutlinePoints
+            : visual.OutlinePoints;
+        foreach (var point in rotationOutline)
         {
             maxPivotDistance = Mathf.Max(
                 maxPivotDistance,
@@ -2119,10 +2152,19 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private void ApplyRotationPose(ContainerVisual visual, float angle)
     {
-        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        var pivotPoint = GetRotationPivotPoint(visual);
         visual.Transform.localRotation = Quaternion.Euler(0f, 0f, angle);
         visual.Transform.anchoredPosition = rotationPivotPosition
             - TransformOpeningPoint(visual.Transform, pivotPoint);
+    }
+
+    private static Vector2 GetRotationPivotPoint(ContainerVisual visual)
+    {
+        return visual.IsSyringe
+            ? visual.Geometry.NeedlePoint
+            : visual.PivotIsRight
+                ? visual.RightOpeningPoint
+                : visual.LeftOpeningPoint;
     }
 
     private bool WouldOverlap(ContainerVisual moving)
@@ -2144,7 +2186,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private void StartPivotTracking(Vector2 pointer)
     {
         var visual = activeRotationContainer;
-        var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
+        var pivotPoint = GetRotationPivotPoint(visual);
         rotationPivotPosition = visual.Transform.anchoredPosition
             + TransformOpeningPoint(visual.Transform, pivotPoint);
         var pointerVector = pointer - rotationPivotPosition;
@@ -2158,6 +2200,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         float currentAngle,
         Vector2 pointer)
     {
+        if (visual.IsSyringe)
+        {
+            return false;
+        }
+
         var crossed = false;
         if (currentAngle > previousAngle)
         {
@@ -2331,6 +2378,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal int ContainerIndex { get; }
         internal float Capacity { get; }
         internal RectTransform HandleTransform { get; }
+        internal float HandleVelocity { get; set; }
     }
 
     private readonly struct SyringeGeometry
@@ -2343,6 +2391,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             Vector2 openingRight,
             float fluidBottomY,
             float fluidTopY,
+            Rect bodyHitbox,
             Vector2 needlePoint)
         {
             FluidOutline = fluidOutline;
@@ -2352,6 +2401,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             OpeningRight = openingRight;
             FluidBottom = new Vector2(0f, fluidBottomY);
             FluidTop = new Vector2(0f, fluidTopY);
+            BodyHitbox = bodyHitbox;
             NeedlePoint = needlePoint;
         }
 
@@ -2362,6 +2412,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal Vector2 OpeningRight { get; }
         internal Vector2 FluidBottom { get; }
         internal Vector2 FluidTop { get; }
+        internal Rect BodyHitbox { get; }
         internal Vector2 NeedlePoint { get; }
     }
 }
