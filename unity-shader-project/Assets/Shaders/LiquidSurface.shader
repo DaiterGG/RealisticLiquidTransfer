@@ -4,8 +4,9 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
     {
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
         _LiquidColorTex ("Liquid Color Texture", 2D) = "white" {}
+        _LiquidSharpColorTex ("Sharp Liquid Color Texture", 2D) = "white" {}
         _Color ("Liquid Color", Color) = (0.16, 0.5, 0.95, 1)
-        _SharpColorBorders ("Sharp Liquid Borders", Float) = 0
+        _SharpLiquidColors ("Sharp Liquid Colors", Float) = 0
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -60,10 +61,12 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
 
             sampler2D _MainTex;
             sampler2D _LiquidColorTex;
+            sampler2D _LiquidSharpColorTex;
             float4 _MainTex_TexelSize;
+            float4 _LiquidSharpColorTex_TexelSize;
             float4 _Color;
             float4 _ClipRect;
-            float _SharpColorBorders;
+            float _SharpLiquidColors;
 
             struct appdata
             {
@@ -93,32 +96,26 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
             fixed4 frag(v2f input) : SV_Target
             {
                 float density = tex2D(_MainTex, input.uv).r;
-                float3 liquidColor = tex2D(_LiquidColorTex, input.uv).rgb;
+                float3 liquidColor;
+                if (_SharpLiquidColors > 0.5)
+                {
+                    float2 colorSize = _LiquidSharpColorTex_TexelSize.zw;
+                    float2 colorPixel = clamp(
+                        floor(input.uv * colorSize),
+                        float2(0.0, 0.0),
+                        colorSize - 1.0);
+                    float2 colorUv =
+                        (colorPixel + 0.5) * _LiquidSharpColorTex_TexelSize.xy;
+                    liquidColor = tex2D(_LiquidSharpColorTex, colorUv).rgb;
+                }
+                else
+                {
+                    liquidColor = tex2D(_LiquidColorTex, input.uv).rgb;
+                }
                 float leftDensity = tex2D(_MainTex, input.uv - float2(_MainTex_TexelSize.x, 0.0)).r;
                 float rightDensity = tex2D(_MainTex, input.uv + float2(_MainTex_TexelSize.x, 0.0)).r;
                 float downDensity = tex2D(_MainTex, input.uv - float2(0.0, _MainTex_TexelSize.y)).r;
                 float upDensity = tex2D(_MainTex, input.uv + float2(0.0, _MainTex_TexelSize.y)).r;
-                float3 leftColor = tex2D(
-                    _LiquidColorTex,
-                    input.uv - float2(_MainTex_TexelSize.x, 0.0)).rgb;
-                float3 rightColor = tex2D(
-                    _LiquidColorTex,
-                    input.uv + float2(_MainTex_TexelSize.x, 0.0)).rgb;
-                float3 downColor = tex2D(
-                    _LiquidColorTex,
-                    input.uv - float2(0.0, _MainTex_TexelSize.y)).rgb;
-                float3 upColor = tex2D(
-                    _LiquidColorTex,
-                    input.uv + float2(0.0, _MainTex_TexelSize.y)).rgb;
-                float horizontalColorEdge = length(rightColor - leftColor)
-                    * step(0.35, min(leftDensity, rightDensity));
-                float verticalColorEdge = length(upColor - downColor)
-                    * step(0.35, min(downDensity, upDensity));
-                float colorBorder = smoothstep(
-                    0.08,
-                    0.35,
-                    max(horizontalColorEdge, verticalColorEdge))
-                    * _SharpColorBorders;
                 float2 gradient = float2(rightDensity - leftDensity, upDensity - downDensity);
                 float3 normal = normalize(float3(-gradient * 5.0, 0.8));
                 float2 encodedVelocity = tex2D(_MainTex, input.uv).gb * 2.0 - 1.0;
@@ -134,7 +131,6 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
 
                 fixed4 color = fixed4(liquidColor, input.color.a);
                 color.rgb *= diffuse;
-                color.rgb *= 1.0 - saturate(colorBorder) * 0.88;
                 color.rgb = lerp(color.rgb * 0.62, color.rgb, 1.0 - edge * 0.35);
                 color.rgb = lerp(color.rgb, color.rgb * float3(0.62, 0.78, 0.96), trailingEdge * 0.35);
                 color.rgb += specular * 0.28;

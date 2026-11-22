@@ -25,7 +25,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private static float referenceCapacity = ReferenceCapacity;
 
     private static bool sessionShaderEnabled = true;
-    private static bool sessionSharpColorBordersEnabled;
+    private static bool sessionSharpLiquidColorsEnabled;
     private static bool sessionClickSpawnEnabled;
     private static int sessionCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
     private static int sessionCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
@@ -53,7 +53,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Text volumeText;
     private RectTransform screenRoot;
     private Toggle shaderToggle;
-    private Toggle sharpColorBordersToggle;
+    private Toggle sharpLiquidColorsToggle;
     private Toggle spawnToggle;
     private Slider collisionPassSlider;
     private Text collisionPassText;
@@ -240,12 +240,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             "Spawn drops on click",
             new Vector2(rightControlsX, -52f));
         spawnToggle.isOn = sessionClickSpawnEnabled;
-        sharpColorBordersToggle = CreateToggle(
+        sharpLiquidColorsToggle = CreateToggle(
             debugTextRoot,
-            "SharpColorBordersToggle",
-            "Sharp liquid borders",
-            new Vector2(rightControlsX, -78f));
-        sharpColorBordersToggle.isOn = sessionSharpColorBordersEnabled;
+            "SharpLiquidColorsToggle",
+            "Sharp liquid colors",
+            new Vector2(rightControlsX, -80f));
+        sharpLiquidColorsToggle.isOn = sessionSharpLiquidColorsEnabled;
         freezeToggle = CreateToggle(
             debugTextRoot,
             "FreezeSimulationToggle",
@@ -399,8 +399,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         UpdateSyringeHandlePositions();
         shaderToggle.onValueChanged.AddListener(SetLiquidShaderEnabled);
         SetLiquidShaderEnabled(shaderToggle.isOn);
-        sharpColorBordersToggle.onValueChanged.AddListener(SetSharpColorBordersEnabled);
-        SetSharpColorBordersEnabled(sharpColorBordersToggle.isOn);
+        sharpLiquidColorsToggle.onValueChanged.AddListener(SetSharpLiquidColorsEnabled);
+        SetSharpLiquidColorsEnabled(sharpLiquidColorsToggle.isOn);
         spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
         SetClickSpawnEnabled(spawnToggle.isOn);
         freezeToggle.onValueChanged.AddListener(SetFreezeSimulation);
@@ -676,10 +676,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         liquidSimulation.SetSurfaceShaderEnabled(enabled);
     }
 
-    private void SetSharpColorBordersEnabled(bool enabled)
+    private void SetSharpLiquidColorsEnabled(bool enabled)
     {
-        sessionSharpColorBordersEnabled = enabled;
-        liquidSimulation.SetSharpColorBordersEnabled(enabled);
+        sessionSharpLiquidColorsEnabled = enabled;
+        liquidSimulation.SetSharpLiquidColorsEnabled(enabled);
     }
 
     private void SetCollisionPasses(float passes)
@@ -743,7 +743,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
             if (selectable == shaderToggle
-                || selectable == sharpColorBordersToggle
+                || selectable == sharpLiquidColorsToggle
                 || selectable == spawnToggle
                 || selectable == freezeToggle)
             {
@@ -769,7 +769,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 pointer,
                 eventCamera)
             || RectTransformUtility.RectangleContainsScreenPoint(
-                sharpColorBordersToggle.GetComponent<RectTransform>(),
+                sharpLiquidColorsToggle.GetComponent<RectTransform>(),
                 pointer,
                 eventCamera)
             || RectTransformUtility.RectangleContainsScreenPoint(
