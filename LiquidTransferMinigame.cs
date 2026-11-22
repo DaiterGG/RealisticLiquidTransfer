@@ -20,7 +20,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float SyringeFreePistonSpeed = 420f;
     private const float SyringeEjectionRate = 24f;
     private const float SyringeEjectionSpeed = 1000f;
-    private const bool NoLiquidLossEnabled = false;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
@@ -1312,7 +1311,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             BuildTargetLiquidAmounts(sourceGameContainer, 1, typeCount, stride);
         }
 
-        var noLiquidLossEnabled = !drainOnly && NoLiquidLossEnabled;
+        var noLiquidLossEnabled = !drainOnly && NoLiquidLossSetting.IsEnabled;
         if (noLiquidLossEnabled)
         {
             CaptureUnreturnedLiquid(typeCount, stride);
