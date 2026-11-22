@@ -20,7 +20,6 @@
     <Compile Include="Plugin.cs" />
     <Compile Include="LiquidTransferMinigame.cs" />
     <Compile Include="HandAlphaGradient.cs" />
-    <Compile Include="DebugPolylineGraphic.cs" />
     <Compile Include="DebugLog.cs" />
     <Compile Include="SimulationProfiler.cs" />
     <Compile Include="LiquidSimulation.cs" />

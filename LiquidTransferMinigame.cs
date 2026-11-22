@@ -1994,74 +1994,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             openingRight = openingPosition + new Vector2(openingWidth * 0.5f, 0f);
             if (ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out outlinePoints))
             {
-                var outline = new GameObject(
-                    $"{name}OutlineDebugLine",
-                    typeof(RectTransform),
-                    typeof(CanvasRenderer),
-                    typeof(DebugPolylineGraphic)).GetComponent<DebugPolylineGraphic>();
-                var outlineRect = outline.rectTransform;
-                outlineRect.SetParent(rect, false);
-                outlineRect.anchorMin = new Vector2(0.5f, 0.5f);
-                outlineRect.anchorMax = new Vector2(0.5f, 0.5f);
-                outlineRect.pivot = new Vector2(0.5f, 0.5f);
-                outlineRect.sizeDelta = rect.sizeDelta;
-                outline.color = Color.blue;
-                outline.raycastTarget = false;
-                outline.SetPoints(outlinePoints);
-
                 interiorWalls = ModSprites.FindInteriorWalls(sprite, openingPosition, openingWidth);
-                for (var index = 0; index < interiorWalls.Length; index++)
-                {
-                    var wall = new GameObject(
-                        $"{name}InteriorWallDebugLine{index}",
-                        typeof(RectTransform),
-                        typeof(CanvasRenderer),
-                        typeof(DebugPolylineGraphic)).GetComponent<DebugPolylineGraphic>();
-                    var wallRect = wall.rectTransform;
-                    wallRect.SetParent(rect, false);
-                    wallRect.anchorMin = new Vector2(0.5f, 0.5f);
-                    wallRect.anchorMax = new Vector2(0.5f, 0.5f);
-                    wallRect.pivot = new Vector2(0.5f, 0.5f);
-                    wallRect.sizeDelta = rect.sizeDelta;
-                    wall.color = Color.blue;
-                    wall.raycastTarget = false;
-                    wall.SetPoints(interiorWalls[index]);
-                }
             }
             else
             {
                 Plugin.LogWarning($"Could not trace the outline of container sprite '{sprite.name}'.");
             }
-
-            var debugLine = new GameObject($"{name}OpeningDebugLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image))
-                .GetComponent<Image>();
-            var lineRect = debugLine.rectTransform;
-            lineRect.SetParent(rect, false);
-            lineRect.anchorMin = new Vector2(0.5f, 0.5f);
-            lineRect.anchorMax = new Vector2(0.5f, 0.5f);
-            lineRect.pivot = new Vector2(0.5f, 0.5f);
-            lineRect.anchoredPosition = openingPosition;
-            lineRect.sizeDelta = new Vector2(openingWidth, 3f);
-            debugLine.color = Color.red;
-            debugLine.raycastTarget = false;
-        }
-
-        if (isSyringe)
-        {
-            var outline = new GameObject(
-                $"{name}OutlineDebugLine",
-                typeof(RectTransform),
-                typeof(CanvasRenderer),
-                typeof(DebugPolylineGraphic)).GetComponent<DebugPolylineGraphic>();
-            var outlineRect = outline.rectTransform;
-            outlineRect.SetParent(rect, false);
-            outlineRect.anchorMin = new Vector2(0.5f, 0.5f);
-            outlineRect.anchorMax = new Vector2(0.5f, 0.5f);
-            outlineRect.pivot = new Vector2(0.5f, 0.5f);
-            outlineRect.sizeDelta = rect.sizeDelta;
-            outline.color = Color.blue;
-            outline.raycastTarget = false;
-            outline.SetPoints(outlinePoints);
         }
 
         if (!isSyringe)
