@@ -342,7 +342,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
         if (drainOnly)
         {
-            receivingContainer.Transform.anchoredPosition = Vector2.zero;
+            receivingContainer.Transform.anchoredPosition = -TransformOpeningPoint(
+                receivingContainer.Transform,
+                receivingContainer.OpeningCenterPoint);
             sourceContainer.Transform.anchoredPosition = Vector2.one * 100000f;
             sourceContainer.Transform.gameObject.SetActive(false);
         }
@@ -1436,7 +1438,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             BuildTargetLiquidAmounts(sourceGameContainer, 1, typeCount, stride);
         }
 
-        var noLiquidLossEnabled = NoLiquidLossSetting.IsEnabled;
+        var noLiquidLossEnabled = !drainOnly && NoLiquidLossSetting.IsEnabled;
         if (noLiquidLossEnabled)
         {
             CaptureUnreturnedLiquid(typeCount, stride);
