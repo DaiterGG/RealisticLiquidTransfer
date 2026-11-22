@@ -169,6 +169,59 @@ internal static class StartLiquidTransferPatch
     }
 }
 
+internal static class UnlockQuickLiquidTransferSetting
+{
+    internal const string Name = "realliquidtransfer.unlockquickliquidtransfer";
+    internal const string Label = "[Liquid] Unlock quick liquid transfer (with Shift)";
+    internal const string Description =
+        "Allow holding the expand descriptions key while combining containers to transfer liquid immediately.";
+
+    internal static bool IsEnabled
+    {
+        get
+        {
+            var setting = Settings.Get<SettingBool>(Name);
+            if (setting == null)
+            {
+                throw new InvalidOperationException(
+                    $"The '{Name}' Gameplay setting was not registered.");
+            }
+
+            return setting.value;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(Body), nameof(Body.CombineItems))]
+internal static class CombineLiquidContainersPatch
+{
+    [HarmonyPrefix]
+    private static bool Prefix(Body __instance, Item it1, Item it2)
+    {
+        if (!it1
+            || !it2
+            || !it1.TryGetComponent<WaterContainerItem>(out var target)
+            || !it2.TryGetComponent<WaterContainerItem>(out var source)
+            || !__instance.CanCombine(it1, it2)
+            || target.SpaceLeft <= 0f
+            || it1.id == "craftingbottle"
+            || (UnlockQuickLiquidTransferSetting.IsEnabled
+                && Input.GetKey(KeyBinds.GetBind("expanddesc"))))
+        {
+            return true;
+        }
+
+        if (!PlayerCamera.main)
+        {
+            Plugin.LogError("Cannot open liquid-transfer minigame because PlayerCamera is unavailable.");
+            return false;
+        }
+
+        PlayerCamera.main.StartLiquidTransfer(target, source);
+        return false;
+    }
+}
+
 [HarmonyPatch(typeof(PlayerCamera), "HandleWhileDragging")]
 internal static class StartLiquidDrainMinigamePatch
 {
@@ -310,7 +363,7 @@ internal static class NoLiquidLossSetting
 }
 
 [HarmonyPatch(typeof(Settings), nameof(Settings.DefaultSettings))]
-internal static class NoLiquidLossSettingsPatch
+internal static class LiquidTransferSettingsPatch
 {
     [HarmonyPostfix]
     private static void Postfix(List<Setting> __result)
@@ -320,25 +373,31 @@ internal static class NoLiquidLossSettingsPatch
             throw new InvalidOperationException("The game returned no default settings list.");
         }
 
-        foreach (var setting in __result)
+        if (!__result.Exists(setting => setting != null && setting.name == NoLiquidLossSetting.Name))
         {
-            if (setting != null && setting.name == NoLiquidLossSetting.Name)
+            __result.Add(new SettingBool
             {
-                return;
-            }
+                name = NoLiquidLossSetting.Name,
+                value = false,
+                category = Setting.SettingCategory.Game
+            });
         }
 
-        __result.Add(new SettingBool
+        if (!__result.Exists(
+                setting => setting != null && setting.name == UnlockQuickLiquidTransferSetting.Name))
         {
-            name = NoLiquidLossSetting.Name,
-            value = false,
-            category = Setting.SettingCategory.Game
-        });
+            __result.Add(new SettingBool
+            {
+                name = UnlockQuickLiquidTransferSetting.Name,
+                value = false,
+                category = Setting.SettingCategory.Game
+            });
+        }
     }
 }
 
 [HarmonyPatch(typeof(Locale), nameof(Locale.GetOther), typeof(string))]
-internal static class NoLiquidLossLocalizationPatch
+internal static class LiquidTransferSettingsLocalizationPatch
 {
     [HarmonyPostfix]
     private static void Postfix(ref string __result)
@@ -350,6 +409,20 @@ internal static class NoLiquidLossLocalizationPatch
         else if (string.Equals(__result, "gameset" + NoLiquidLossSetting.Name + "dsc", StringComparison.Ordinal))
         {
             __result = NoLiquidLossSetting.Description;
+        }
+        else if (string.Equals(
+                     __result,
+                     "gameset" + UnlockQuickLiquidTransferSetting.Name,
+                     StringComparison.Ordinal))
+        {
+            __result = UnlockQuickLiquidTransferSetting.Label;
+        }
+        else if (string.Equals(
+                     __result,
+                     "gameset" + UnlockQuickLiquidTransferSetting.Name + "dsc",
+                     StringComparison.Ordinal))
+        {
+            __result = UnlockQuickLiquidTransferSetting.Description;
         }
     }
 }
