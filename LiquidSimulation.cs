@@ -132,7 +132,6 @@ internal sealed class LiquidSimulation
     private Color32[] densityUploadPixels;
     private Vector3[] densityVelocityFields;
     private Vector4[] densityWeightedColors;
-    private float[] densityWeightedAlphas;
     private float[] densityStrongestColorContributions;
     private Color32[] densityColorPixels;
     private Color32[] densitySharpColorPixels;
@@ -3537,7 +3536,6 @@ internal sealed class LiquidSimulation
         densityPixels = new Color32[densityComputePixelCount];
         densityVelocityFields = new Vector3[densityPixels.Length];
         densityWeightedColors = new Vector4[densityPixels.Length];
-        densityWeightedAlphas = new float[densityPixels.Length];
         densityStrongestColorContributions = new float[densityPixels.Length];
         densityColorPixels = new Color32[densityPixels.Length];
         densitySharpColorPixels = new Color32[densityPixels.Length];
@@ -3689,7 +3687,6 @@ internal sealed class LiquidSimulation
             densityPixels[pixelIndex] = new Color32(0, 128, 128, 0);
             densityVelocityFields[pixelIndex] = Vector3.zero;
             densityWeightedColors[pixelIndex] = Vector4.zero;
-            densityWeightedAlphas[pixelIndex] = 0f;
             densityStrongestColorContributions[pixelIndex] = 0f;
             densityColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
             densitySharpColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
@@ -3717,7 +3714,7 @@ internal sealed class LiquidSimulation
                 (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.x) * byte.MaxValue),
                 (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.y) * byte.MaxValue),
                 (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.z) * byte.MaxValue),
-                (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.w) * byte.MaxValue));
+                byte.MaxValue);
             var supportRadius = dropRadius * 2.2f;
             var supportRadiusSquared = supportRadius * supportRadius;
             var inverseSupportRadiusSquared = 1f / supportRadiusSquared;
@@ -3825,7 +3822,6 @@ internal sealed class LiquidSimulation
                     weightedColor.z += dropColors[drop].z * contribution;
                     weightedColor.w += contribution;
                     densityWeightedColors[pixelIndex] = weightedColor;
-                    densityWeightedAlphas[pixelIndex] += dropColor.w * contribution;
                     if (contribution > densityStrongestColorContributions[pixelIndex])
                     {
                         densityStrongestColorContributions[pixelIndex] = contribution;
@@ -3857,8 +3853,7 @@ internal sealed class LiquidSimulation
                     (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.x / weightedColor.w) * byte.MaxValue),
                     (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.y / weightedColor.w) * byte.MaxValue),
                     (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.z / weightedColor.w) * byte.MaxValue),
-                    (byte)Mathf.RoundToInt(
-                        Mathf.Clamp01(densityWeightedAlphas[i] / weightedColor.w) * byte.MaxValue));
+                    byte.MaxValue);
             }
         }
 
@@ -5521,7 +5516,7 @@ internal sealed class LiquidDropGraphic : MaskableGraphic
     private void AddVertex(VertexHelper vertexHelper, Vector2 position, Vector4 dropColor)
     {
         var vertex = UIVertex.simpleVert;
-        vertex.color = new Color(dropColor.x, dropColor.y, dropColor.z, dropColor.w) * color;
+        vertex.color = new Color(dropColor.x, dropColor.y, dropColor.z, 1f) * color;
         vertex.position = position;
         vertex.uv0 = new Vector2(0.5f, 0.5f);
         vertexHelper.AddVert(vertex);
