@@ -126,7 +126,7 @@ internal static class LiquidDensityCatalog
         return densities;
     }
 
-    private static string NormalizeIdentifier(string value)
+    internal static string NormalizeIdentifier(string value)
     {
         var normalized = new StringBuilder(value.Length);
         foreach (var character in value)
@@ -145,5 +145,119 @@ internal static class LiquidDensityCatalog
         }
 
         return result;
+    }
+}
+
+internal static class LiquidTransparencyCatalog
+{
+    private static readonly Dictionary<string, int> TransparencyPercentByLiquidId =
+        CreateTransparencyPercentMap();
+
+    internal static bool TryGetAlpha(string liquidId, out float alpha)
+    {
+        alpha = 1f;
+        if (string.IsNullOrWhiteSpace(liquidId)
+            || !TransparencyPercentByLiquidId.TryGetValue(
+                LiquidDensityCatalog.NormalizeIdentifier(liquidId),
+                out var transparencyPercent))
+        {
+            return false;
+        }
+
+        alpha = 1f - transparencyPercent * 0.008f;
+        return true;
+    }
+
+    private static Dictionary<string, int> CreateTransparencyPercentMap()
+    {
+        var definitions = new (string LiquidId, int TransparencyPercent)[]
+        {
+            ("water", 100),
+            ("carbonatedwater", 95),
+            ("lrdserum", 35),
+            ("morphine", 90),
+            ("biochem", 15),
+            ("opium", 5),
+            ("painkillers", 90),
+            ("heroin", 40),
+            ("naloxone", 95),
+            ("naltrexone", 95),
+            ("ceftriaxone", 90),
+            ("fentanyl", 90),
+            ("ketchup", 0),
+            ("milk", 5),
+            ("chloroform", 100),
+            ("highgradestimulant", 95),
+            ("midgradestimulant", 40),
+            ("lowgradestimulant", 90),
+            ("applejuice", 65),
+            ("orangejuice", 15),
+            ("lemonade", 80),
+            ("urine", 85),
+            ("icetea", 75),
+            ("soup", 10),
+            ("chocolatemilk", 5),
+            ("cereal", 0),
+            ("energydrink", 75),
+            ("sportsdrink", 80),
+            ("oliveoil", 90),
+            ("hotsauce", 15),
+            ("icecream", 0),
+            ("yogurt", 5),
+            ("mold", 0),
+            ("powderedmilk", 0),
+            ("radwater", 65),
+            ("mercury", 0),
+            ("soda", 85),
+            ("alcohol", 100),
+            ("bleach", 95),
+            ("reliefcream", 0),
+            ("localanesthetic", 95),
+            ("woundglue", 20),
+            ("braingrow", 0),
+            ("mindwipe", 0),
+            ("antidepressants", 90),
+            ("antibiotics", 90),
+            ("antivenom", 65),
+            ("antiserum", 65),
+            ("keratinbooster", 25),
+            ("antirad", 30),
+            ("sleepingpills", 90),
+            ("procoagulant", 15),
+            ("epinephrine", 95),
+            ("oxyline", 95),
+            ("sodiumnitroprusside", 90),
+            ("vasopressin", 95),
+            ("amiodarone", 95),
+            ("streptokinase", 95),
+            ("saline", 100),
+            ("ringersolution", 100),
+            ("blood", 5),
+            ("redblood", 5),
+            ("alienblood", 0),
+            ("disinfectant", 90),
+            ("groundwater", 65),
+            ("lumalgae", 10),
+            ("redsludge", 0),
+            ("oil", 90),
+            ("sap", 35),
+            ("dirtywater", 10),
+            ("fat", 10),
+            ("soap", 65),
+            ("producejuice", 30),
+            ("refinedjuice", 75)
+        };
+
+        var transparencies = new Dictionary<string, int>(
+            definitions.Length,
+            StringComparer.Ordinal);
+        foreach (var definition in definitions)
+        {
+            transparencies.Add(
+                LiquidDensityCatalog.NormalizeIdentifier(definition.LiquidId),
+                definition.TransparencyPercent);
+        }
+
+        return transparencies;
     }
 }

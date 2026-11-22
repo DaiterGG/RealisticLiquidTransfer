@@ -132,12 +132,14 @@ internal sealed class LiquidSimulation
     private Color32[] densityUploadPixels;
     private Vector3[] densityVelocityFields;
     private Vector4[] densityWeightedColors;
+    private float[] densityWeightedAlphas;
     private float[] densityStrongestColorContributions;
     private Color32[] densityColorPixels;
     private Color32[] densitySharpColorPixels;
     private Vector4[] computeDropData;
     private float[] computeDropRadii;
     private Vector4[] computeDropColors;
+    private float[] computeDropOpacities;
     private int[] activeDensityPixelIndices;
     private int activeDensityPixelCount;
     private int densityTextureWidth;
@@ -154,6 +156,7 @@ internal sealed class LiquidSimulation
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
     private ComputeBuffer computeDropColorBuffer;
+    private ComputeBuffer computeDropOpacityBuffer;
     private ComputeBuffer computeDropSwapPathBuffer;
     private ComputeShader densityComputeShader;
     private bool supportsPartialTextureCopy;
@@ -448,7 +451,7 @@ internal sealed class LiquidSimulation
                         liquid.Color.r,
                         liquid.Color.g,
                         liquid.Color.b,
-                        1f);
+                        GetLiquidAlpha(liquid.LiquidId));
                     if (!LiquidDensityCatalog.TryGetDensity(liquid.LiquidId, out liquidTypeDensities[typeIndex]))
                     {
                         liquidTypeDensities[typeIndex] = LiquidDensityCatalog.DefaultDensity;
@@ -800,8 +803,24 @@ internal sealed class LiquidSimulation
         }
 
         return amountTotal > 0f
-            ? new Vector4(color.x / amountTotal, color.y / amountTotal, color.z / amountTotal, 1f)
+            ? new Vector4(
+                color.x / amountTotal,
+                color.y / amountTotal,
+                color.z / amountTotal,
+                color.w / amountTotal)
             : new Vector4(0.16f, 0.5f, 0.95f, 1f);
+    }
+
+    private static float GetLiquidAlpha(string liquidId)
+    {
+        if (LiquidTransparencyCatalog.TryGetAlpha(liquidId, out var alpha))
+        {
+            return alpha;
+        }
+
+        Plugin.LogWarning(
+            $"No transparency is defined for liquid '{liquidId}'; using alpha 1.00.");
+        return 1f;
     }
 
     private void ReleaseDropLiquidUnits(int dropIndex)
@@ -3470,6 +3489,7 @@ internal sealed class LiquidSimulation
                 computeDropDataBuffer,
                 computeDropRadiusBuffer,
                 computeDropColorBuffer,
+                computeDropOpacityBuffer,
                 computeDropSwapPathBuffer,
                 colorAccumulationBuffer,
                 dominantColorKeyBuffer);
@@ -3517,6 +3537,7 @@ internal sealed class LiquidSimulation
         densityPixels = new Color32[densityComputePixelCount];
         densityVelocityFields = new Vector3[densityPixels.Length];
         densityWeightedColors = new Vector4[densityPixels.Length];
+        densityWeightedAlphas = new float[densityPixels.Length];
         densityStrongestColorContributions = new float[densityPixels.Length];
         densityColorPixels = new Color32[densityPixels.Length];
         densitySharpColorPixels = new Color32[densityPixels.Length];
@@ -3583,7 +3604,7 @@ internal sealed class LiquidSimulation
             ComputeBufferType.Structured);
         colorAccumulationBuffer = new ComputeBuffer(
             densityComputePixelCount,
-            sizeof(int) * 3,
+            sizeof(int) * 4,
             ComputeBufferType.Structured);
         dominantColorKeyBuffer = new ComputeBuffer(
             densityComputePixelCount,
@@ -3592,6 +3613,7 @@ internal sealed class LiquidSimulation
         computeDropDataBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
         computeDropRadiusBuffer = new ComputeBuffer(MaximumDrops, sizeof(float), ComputeBufferType.Structured);
         computeDropColorBuffer = new ComputeBuffer(MaximumDrops, sizeof(float) * 4, ComputeBufferType.Structured);
+        computeDropOpacityBuffer = new ComputeBuffer(MaximumDrops, sizeof(float), ComputeBufferType.Structured);
         computeDropSwapPathBuffer = new ComputeBuffer(
             MaximumDrops,
             sizeof(float) * 4,
@@ -3599,6 +3621,7 @@ internal sealed class LiquidSimulation
         computeDropData = new Vector4[MaximumDrops];
         computeDropRadii = new float[MaximumDrops];
         computeDropColors = new Vector4[MaximumDrops];
+        computeDropOpacities = new float[MaximumDrops];
 
         densityComputeShader.SetBuffer(clearAccumulationKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_Accumulation", densityAccumulationBuffer);
@@ -3609,11 +3632,13 @@ internal sealed class LiquidSimulation
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropData", computeDropDataBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropRadii", computeDropRadiusBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropColors", computeDropColorBuffer);
+        densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropOpacities", computeDropOpacityBuffer);
         densityComputeShader.SetBuffer(rasterizeDropsKernel, "_DropSwapPaths", computeDropSwapPathBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_Accumulation", densityAccumulationBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_ColorAccumulation", colorAccumulationBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_DominantColorKeys", dominantColorKeyBuffer);
         densityComputeShader.SetBuffer(resolveDensityKernel, "_DropColors", computeDropColorBuffer);
+        densityComputeShader.SetBuffer(resolveDensityKernel, "_DropOpacities", computeDropOpacityBuffer);
         densityComputeShader.SetTexture(resolveDensityKernel, "_DensityOutput", densityRenderTexture);
         densityComputeShader.SetTexture(resolveDensityKernel, "_ColorOutput", densityColorRenderTexture);
         densityComputeShader.SetTexture(
@@ -3664,6 +3689,7 @@ internal sealed class LiquidSimulation
             densityPixels[pixelIndex] = new Color32(0, 128, 128, 0);
             densityVelocityFields[pixelIndex] = Vector3.zero;
             densityWeightedColors[pixelIndex] = Vector4.zero;
+            densityWeightedAlphas[pixelIndex] = 0f;
             densityStrongestColorContributions[pixelIndex] = 0f;
             densityColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
             densitySharpColorPixels[pixelIndex] = new Color32(41, 128, 243, 255);
@@ -3691,7 +3717,7 @@ internal sealed class LiquidSimulation
                 (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.x) * byte.MaxValue),
                 (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.y) * byte.MaxValue),
                 (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.z) * byte.MaxValue),
-                byte.MaxValue);
+                (byte)Mathf.RoundToInt(Mathf.Clamp01(dropColor.w) * byte.MaxValue));
             var supportRadius = dropRadius * 2.2f;
             var supportRadiusSquared = supportRadius * supportRadius;
             var inverseSupportRadiusSquared = 1f / supportRadiusSquared;
@@ -3799,6 +3825,7 @@ internal sealed class LiquidSimulation
                     weightedColor.z += dropColors[drop].z * contribution;
                     weightedColor.w += contribution;
                     densityWeightedColors[pixelIndex] = weightedColor;
+                    densityWeightedAlphas[pixelIndex] += dropColor.w * contribution;
                     if (contribution > densityStrongestColorContributions[pixelIndex])
                     {
                         densityStrongestColorContributions[pixelIndex] = contribution;
@@ -3830,7 +3857,8 @@ internal sealed class LiquidSimulation
                     (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.x / weightedColor.w) * byte.MaxValue),
                     (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.y / weightedColor.w) * byte.MaxValue),
                     (byte)Mathf.RoundToInt(Mathf.Clamp01(weightedColor.z / weightedColor.w) * byte.MaxValue),
-                    byte.MaxValue);
+                    (byte)Mathf.RoundToInt(
+                        Mathf.Clamp01(densityWeightedAlphas[i] / weightedColor.w) * byte.MaxValue));
             }
         }
 
@@ -3851,6 +3879,7 @@ internal sealed class LiquidSimulation
             computeDropData[i] = new Vector4(position.x, position.y, velocity.x, velocity.y);
             computeDropRadii[i] = GetDropRadius(i);
             computeDropColors[i] = dropColors[i];
+            computeDropOpacities[i] = dropColors[i].w;
             if (densitySwapProgress[i] >= 0f)
             {
                 computeDropColors[i].w = densitySwapProgress[i];
@@ -3869,6 +3898,7 @@ internal sealed class LiquidSimulation
             computeDropDataBuffer.SetData(computeDropData, 0, 0, count);
             computeDropRadiusBuffer.SetData(computeDropRadii, 0, 0, count);
             computeDropColorBuffer.SetData(computeDropColors, 0, 0, count);
+            computeDropOpacityBuffer.SetData(computeDropOpacities, 0, 0, count);
         }
 
         densityComputeShader.SetInt("_DropCount", count);
@@ -5197,6 +5227,7 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
     private ComputeBuffer computeDropDataBuffer;
     private ComputeBuffer computeDropRadiusBuffer;
     private ComputeBuffer computeDropColorBuffer;
+    private ComputeBuffer computeDropOpacityBuffer;
     private ComputeBuffer computeDropSwapPathBuffer;
     private Material surfaceMaterial;
 
@@ -5260,6 +5291,7 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         ComputeBuffer dropData,
         ComputeBuffer dropRadii,
         ComputeBuffer dropColors,
+        ComputeBuffer dropOpacities,
         ComputeBuffer dropSwapPaths,
         ComputeBuffer colorAccumulation,
         ComputeBuffer dominantColorKeys)
@@ -5268,6 +5300,7 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         computeDropDataBuffer = dropData;
         computeDropRadiusBuffer = dropRadii;
         computeDropColorBuffer = dropColors;
+        computeDropOpacityBuffer = dropOpacities;
         computeDropSwapPathBuffer = dropSwapPaths;
         colorAccumulationBuffer = colorAccumulation;
         dominantColorKeyBuffer = dominantColorKeys;
@@ -5347,6 +5380,8 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         computeDropRadiusBuffer = null;
         computeDropColorBuffer?.Release();
         computeDropColorBuffer = null;
+        computeDropOpacityBuffer?.Release();
+        computeDropOpacityBuffer = null;
         computeDropSwapPathBuffer?.Release();
         computeDropSwapPathBuffer = null;
         if (surfaceMaterial)

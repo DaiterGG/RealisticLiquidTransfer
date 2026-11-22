@@ -93,7 +93,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 return output;
             }
 
-            float3 SampleSharpLiquidColor(float2 uv)
+            float4 SampleSharpLiquidColor(float2 uv)
             {
                 float2 colorSize = _LiquidSharpColorTex_TexelSize.zw;
                 float2 colorPixel = clamp(
@@ -102,15 +102,15 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                     colorSize - 1.0);
                 float2 colorUv =
                     (colorPixel + 0.5) * _LiquidSharpColorTex_TexelSize.xy;
-                return tex2D(_LiquidSharpColorTex, colorUv).rgb;
+                return tex2D(_LiquidSharpColorTex, colorUv);
             }
 
-            float3 SampleSoftSharpLiquidColor(float2 uv)
+            float4 SampleSoftSharpLiquidColor(float2 uv)
             {
                 float2 texel = _LiquidSharpColorTex_TexelSize.xy;
                 float2 diagonal = texel;
                 float2 doubleTexel = texel * 2.0;
-                float3 color = SampleSharpLiquidColor(uv) * 6.0;
+                float4 color = SampleSharpLiquidColor(uv) * 6.0;
                 color += (
                     SampleSharpLiquidColor(uv + float2(texel.x, 0.0))
                     + SampleSharpLiquidColor(uv - float2(texel.x, 0.0))
@@ -131,14 +131,14 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
             fixed4 frag(v2f input) : SV_Target
             {
                 float density = tex2D(_MainTex, input.uv).r;
-                float3 liquidColor;
+                float4 sampledLiquidColor;
                 if (_SharpLiquidColors > 0.5)
                 {
-                    liquidColor = SampleSoftSharpLiquidColor(input.uv);
+                    sampledLiquidColor = SampleSoftSharpLiquidColor(input.uv);
                 }
                 else
                 {
-                    liquidColor = tex2D(_LiquidColorTex, input.uv).rgb;
+                    sampledLiquidColor = tex2D(_LiquidColorTex, input.uv);
                 }
                 float leftDensity = tex2D(_MainTex, input.uv - float2(_MainTex_TexelSize.x, 0.0)).r;
                 float rightDensity = tex2D(_MainTex, input.uv + float2(_MainTex_TexelSize.x, 0.0)).r;
@@ -157,7 +157,9 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float alpha = smoothstep(0.44, 0.56, density);
                 float edge = 1.0 - smoothstep(0.55, 0.8, density);
 
-                fixed4 color = fixed4(liquidColor, input.color.a);
+                fixed4 color = fixed4(
+                    sampledLiquidColor.rgb,
+                    input.color.a * sampledLiquidColor.a);
                 color.rgb *= diffuse;
                 color.rgb = lerp(color.rgb * 0.62, color.rgb, 1.0 - edge * 0.35);
                 color.rgb = lerp(color.rgb, color.rgb * float3(0.62, 0.78, 0.96), trailingEdge * 0.35);
