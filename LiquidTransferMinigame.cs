@@ -96,6 +96,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float controlsUpdateTimer;
     private int displayedDropCount = -1;
     private float[] initialSimulatedLiquidAmounts;
+    private float[] unreturnedLiquidByType;
     private float[] finalSimulatedLiquidAmounts;
     private float[] targetLiquidAmounts;
 
@@ -1435,9 +1436,16 @@ internal sealed class LiquidTransferMinigame : Minigame
             BuildTargetLiquidAmounts(sourceGameContainer, 1, typeCount, stride);
         }
 
+        var noLiquidLossEnabled = NoLiquidLossSetting.IsEnabled;
+        if (noLiquidLossEnabled)
+        {
+            CaptureUnreturnedLiquid(typeCount, stride);
+        }
+
         var receiverCapacity = receivingGameContainer.Capacity;
         ValidateCapacity(receiverCapacity, "receiver capacity");
         var discardedOverflow = 0f;
+        var sourceCapacity = 0f;
         if (drainOnly)
         {
             discardedOverflow = ClampLiquidAmountsToCapacity(
@@ -1448,10 +1456,19 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
         else
         {
-            var sourceCapacity = sourceGameContainer.Capacity;
+            sourceCapacity = sourceGameContainer.Capacity;
             ValidateCapacity(sourceCapacity, "source capacity");
             discardedOverflow = RouteLiquidCapacityOverflow(
                 targetLiquidAmounts,
+                typeCount,
+                stride,
+                receiverCapacity,
+                sourceCapacity);
+        }
+
+        if (noLiquidLossEnabled)
+        {
+            discardedOverflow += RedistributeUnreturnedLiquid(
                 typeCount,
                 stride,
                 receiverCapacity,
@@ -1467,10 +1484,70 @@ internal sealed class LiquidTransferMinigame : Minigame
         transferCommitted = true;
         DebugLog.Write(drainOnly
             ? $"Committed liquid drain: amount={receivingGameContainer.CurrentTotal:F2}, "
-                + $"outside liquid lost, capacity overflow discarded={discardedOverflow:F2} ml."
+                + $"liquid not retained={discardedOverflow:F2} ml."
             : $"Committed liquid transfer: amounts receiver={receivingGameContainer.CurrentTotal:F2}, "
                 + $"source={sourceGameContainer.CurrentTotal:F2}, "
-                + $"capacity overflow discarded={discardedOverflow:F2} ml.");
+                + $"liquid not retained={discardedOverflow:F2} ml.");
+    }
+
+    private void CaptureUnreturnedLiquid(int typeCount, int stride)
+    {
+        unreturnedLiquidByType = new float[typeCount];
+        for (var type = 0; type < typeCount; type++)
+        {
+            var initialTotal = initialSimulatedLiquidAmounts[type]
+                + initialSimulatedLiquidAmounts[stride + type];
+            var targetTotal = targetLiquidAmounts[type]
+                + (drainOnly ? 0f : targetLiquidAmounts[stride + type]);
+            var unreturnedAmount = Mathf.Max(0f, initialTotal - targetTotal);
+            unreturnedLiquidByType[type] = unreturnedAmount > 0.001f
+                ? unreturnedAmount
+                : 0f;
+        }
+    }
+
+    private float RedistributeUnreturnedLiquid(
+        int typeCount,
+        int stride,
+        float receiverCapacity,
+        float sourceCapacity)
+    {
+        var receiverSpace = Mathf.Max(
+            0f,
+            receiverCapacity - SumLiquidAmounts(targetLiquidAmounts, 0, typeCount));
+        var sourceSpace = drainOnly
+            ? 0f
+            : Mathf.Max(
+                0f,
+                sourceCapacity - SumLiquidAmounts(targetLiquidAmounts, stride, typeCount));
+        var unreturnedTotal = SumLiquidAmounts(unreturnedLiquidByType, 0, typeCount);
+
+        var sourceRestore = Mathf.Min(unreturnedTotal, sourceSpace);
+        if (sourceRestore > 0f && unreturnedTotal > 0f)
+        {
+            var sourceRestoreRatio = sourceRestore / unreturnedTotal;
+            for (var type = 0; type < typeCount; type++)
+            {
+                var amount = unreturnedLiquidByType[type] * sourceRestoreRatio;
+                targetLiquidAmounts[stride + type] += amount;
+                unreturnedLiquidByType[type] -= amount;
+            }
+        }
+
+        unreturnedTotal = SumLiquidAmounts(unreturnedLiquidByType, 0, typeCount);
+        var receiverRestore = Mathf.Min(unreturnedTotal, receiverSpace);
+        if (receiverRestore > 0f && unreturnedTotal > 0f)
+        {
+            var receiverRestoreRatio = receiverRestore / unreturnedTotal;
+            for (var type = 0; type < typeCount; type++)
+            {
+                var amount = unreturnedLiquidByType[type] * receiverRestoreRatio;
+                targetLiquidAmounts[type] += amount;
+                unreturnedLiquidByType[type] -= amount;
+            }
+        }
+
+        return SumLiquidAmounts(unreturnedLiquidByType, 0, typeCount);
     }
 
     private void BuildTargetLiquidAmounts(
