@@ -784,16 +784,26 @@ internal sealed class LiquidTransferMinigame : Minigame
             activeRotationContainer = null;
             rotatingWithRightMouse = false;
 
-            activeSyringe = GetSyringeHandleUnderPointer(pointerPosition);
-            if (activeSyringe != null)
+            var container = GetSyringeBodyUnderPointer(pointerPosition);
+            if (container != null)
             {
-                var localPointer = ToContainerLocalPoint(activeSyringe.Container, pointerPosition);
-                syringeHandlePointerOffset =
-                    activeSyringe.HandleTransform.anchoredPosition.y - localPointer.y;
+                StartDragging(container, game.handPos);
             }
             else
             {
-                var container = GetContainerUnderPointer(uiCasts);
+                activeSyringe = GetSyringeHandleUnderPointer(pointerPosition);
+                if (activeSyringe != null)
+                {
+                    var localPointer = ToContainerLocalPoint(activeSyringe.Container, pointerPosition);
+                    syringeHandlePointerOffset =
+                        activeSyringe.HandleTransform.anchoredPosition.y - localPointer.y;
+                    activeSyringe.HandleVelocity = 0f;
+                }
+                else
+                {
+                    container = GetContainerUnderPointer(uiCasts);
+                }
+
                 if (container != null)
                 {
                     StartDragging(container, game.handPos);
@@ -823,6 +833,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             heldContainer = null;
             heldVisual = null;
+            if (activeSyringe != null)
+            {
+                activeSyringe.HandleVelocity = 0f;
+            }
+
             activeSyringe = null;
             activeRotationContainer = null;
         }
@@ -855,7 +870,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             && !liquidSimulation.IsInsideContainer(pointerPosition);
         var deltaTime = Time.unscaledDeltaTime;
         liquidSimulation.Tick(deltaTime, spawnDrops, pointerPosition);
-        UpdateSyringeHandlePositions();
         controlsUpdateTimer -= deltaTime;
         if (controlsUpdateTimer <= 0f)
         {
@@ -962,6 +976,9 @@ internal sealed class LiquidTransferMinigame : Minigame
                 syringe.Container.Geometry.FluidTop.y,
                 fillRatio));
         syringe.HandleVelocity = 0f;
+        liquidSimulation.SetSyringePistonPosition(
+            syringe.ContainerIndex,
+            syringe.HandleTransform.anchoredPosition.y);
     }
 
     private SyringeVisual GetSyringeHandleUnderPointer(Vector2 pointerPosition)
@@ -1026,6 +1043,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             Time.unscaledDeltaTime);
         syringe.HandleVelocity = handleVelocity;
         syringe.HandleTransform.anchoredPosition = new Vector2(0f, handleY);
+        liquidSimulation.SetSyringePistonPosition(syringe.ContainerIndex, handleY);
         var fillRatio = Mathf.InverseLerp(
             geometry.FluidBottom.y,
             geometry.FluidTop.y,
@@ -1043,24 +1061,22 @@ internal sealed class LiquidTransferMinigame : Minigame
         var needlePoint = ToRootPoint(syringe.Container, geometry.NeedlePoint);
         var localOutlet = new Vector2(0f, geometry.FluidBottom.y + 2f);
         var outletPoint = ToRootPoint(syringe.Container, localOutlet);
+        var needleDirection3D = syringe.Container.Transform.localRotation
+            * Vector3.Scale(Vector2.down, syringe.Container.Transform.localScale);
+        var needleDirection = new Vector2(needleDirection3D.x, needleDirection3D.y).normalized;
         var remainingUnits = transferUnits;
         if (difference < 0f)
         {
-            var needleIsInsideOtherContainer = otherContainerIndex >= 0
-                && liquidSimulation.ContainsContainer(otherContainerIndex, needlePoint);
-            var destinationIndex = needleIsInsideOtherContainer
-                ? otherContainerIndex
-                : -1;
             while (remainingUnits > 0)
             {
                 var moved = liquidSimulation.TryTransferNearestDrop(
                     syringe.ContainerIndex,
-                    destinationIndex,
+                    -1,
                     outletPoint,
-                    float.PositiveInfinity,
+                    LiquidSimulation.DefaultDropRadius * 2f,
                     needlePoint,
                     remainingUnits,
-                    new Vector2(0f, -LiquidSimulation.DefaultDropRadius * 5f));
+                    needleDirection * (LiquidSimulation.DefaultDropRadius * 5f));
                 if (moved <= 0)
                 {
                     break;
@@ -1224,34 +1240,36 @@ internal sealed class LiquidTransferMinigame : Minigame
     private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)
     {
         var pointerPosition = Minigame.game.handPos / fitScale;
-        if (IsPointerOnSyringeBody(receivingContainer, pointerPosition))
-        {
-            return receivingContainer;
-        }
-
-        if (IsPointerOnSyringeBody(sourceContainer, pointerPosition))
-        {
-            return sourceContainer;
-        }
-
         foreach (var uiCast in uiCasts)
         {
             if (uiCast.gameObject == receivingContainer.Transform.gameObject
-                && (receivingContainer.IsSyringe
-                    || liquidSimulation.ContainsContainer(0, pointerPosition)))
+                && !receivingContainer.IsSyringe
+                && liquidSimulation.ContainsContainer(0, pointerPosition))
             {
                 return receivingContainer;
             }
 
             if (uiCast.gameObject == sourceContainer.Transform.gameObject
-                && (sourceContainer.IsSyringe
-                    || liquidSimulation.ContainsContainer(1, pointerPosition)))
+                && !sourceContainer.IsSyringe
+                && liquidSimulation.ContainsContainer(1, pointerPosition))
             {
                 return sourceContainer;
             }
         }
 
         return null;
+    }
+
+    private ContainerVisual GetSyringeBodyUnderPointer(Vector2 pointerPosition)
+    {
+        if (IsPointerOnSyringeBody(receivingContainer, pointerPosition))
+        {
+            return receivingContainer;
+        }
+
+        return IsPointerOnSyringeBody(sourceContainer, pointerPosition)
+            ? sourceContainer
+            : null;
     }
 
     private bool IsPointerOnSyringeBody(ContainerVisual container, Vector2 pointerPosition)

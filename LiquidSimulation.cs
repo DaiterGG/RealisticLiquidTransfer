@@ -63,6 +63,7 @@ internal sealed class LiquidSimulation
     private readonly RectTransform root;
     private readonly ContainerShape[] containers;
     private readonly bool[] openingTransitions;
+    private readonly float[] syringePistonLocalY = { float.NaN, float.NaN };
     private readonly int[] containerDropSizes;
     private readonly int[] initialContainerDropCounts;
     private readonly LiquidProfileEntry[][] liquidProfiles;
@@ -1010,6 +1011,21 @@ internal sealed class LiquidSimulation
         return containers[containerIndex].Contains(point);
     }
 
+    internal void SetSyringePistonPosition(int containerIndex, float localY)
+    {
+        if ((uint)containerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(containerIndex));
+        }
+
+        if (float.IsNaN(localY) || float.IsInfinity(localY))
+        {
+            throw new ArgumentOutOfRangeException(nameof(localY));
+        }
+
+        syringePistonLocalY[containerIndex] = localY;
+    }
+
     internal int TryTransferNearestDrop(
         int sourceContainerIndex,
         int destinationContainerIndex,
@@ -1922,6 +1938,18 @@ internal sealed class LiquidSimulation
             var velocity = velocities[i];
             var assignment = containerAssignments[i];
             var sizeZoneAssignment = dropSizeZoneAssignments[i];
+            if (assignment > 0
+                && assignment <= containers.Length
+                && !float.IsNaN(syringePistonLocalY[assignment - 1])
+                && containers[assignment - 1].TryConstrainBelowPiston(
+                    position,
+                    syringePistonLocalY[assignment - 1],
+                    radius,
+                    out var pistonCorrectedPosition))
+            {
+                position = pistonCorrectedPosition;
+            }
+
             var anyOpeningTransition = false;
             var firstContainerIndex = assignment > 0 && assignment <= containers.Length
                 ? assignment - 1
@@ -4826,6 +4854,25 @@ internal sealed class LiquidSimulation
                  ? point.y - node.Maximum.y
                  : 0f;
          return deltaX * deltaX + deltaY * deltaY;
+     }
+
+     internal bool TryConstrainBelowPiston(
+         Vector2 rootPoint,
+         float pistonLocalY,
+         float radius,
+         out Vector2 correctedPoint)
+     {
+         var localPoint = ToLocalPoint(rootPoint);
+         var maximumCenterY = pistonLocalY - radius / rootUnitsPerLocalUnit;
+         if (localPoint.y <= maximumCenterY)
+         {
+             correctedPoint = rootPoint;
+             return false;
+         }
+
+         localPoint.y = maximumCenterY;
+         correctedPoint = ToRootPoint(localPoint);
+         return true;
      }
 
      internal bool Contains(Vector2 rootPoint)
