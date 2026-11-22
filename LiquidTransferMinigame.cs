@@ -20,19 +20,18 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float SyringeFreePistonSpeed = 420f;
     private const float SyringeEjectionRate = 24f;
     private const float SyringeEjectionSpeed = 1000f;
+    private const bool NoLiquidLossEnabled = false;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
 
-    private static bool sessionShaderEnabled = true;
-    private static float sessionColorTransitionSharpness = 2f;
-    private static bool sessionClickSpawnEnabled;
+    private const bool ClickSpawnEnabled = false;
+    private const bool SimulationFrozen = false;
     private static int sessionCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
     private static int sessionCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
     private static int sessionVelocityContactMargin =
         LiquidSimulation.DefaultVelocityContactMarginTenths;
     private static int sessionDropRadiusTenths = LiquidSimulation.DefaultDropRadiusTenths;
-    private static bool sessionFreezeSimulation;
     private static int sessionInitialPackingTenths = LiquidSimulation.DefaultPackingTenths;
 
     private readonly WaterContainerItem receivingGameContainer;
@@ -52,8 +51,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Text controlsText;
     private Text volumeText;
     private RectTransform screenRoot;
-    private Toggle shaderToggle;
-    private Toggle spawnToggle;
     private Slider colorTransitionSharpnessSlider;
     private Text colorTransitionSharpnessText;
     private Slider collisionPassSlider;
@@ -66,7 +63,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Text dropRadiusText;
     private Slider initialPackingSlider;
     private Text initialPackingText;
-    private Toggle freezeToggle;
     private Slider[] collisionTuningSliders;
     private RectTransform debugTextRoot;
     private LiquidSimulation liquidSimulation;
@@ -91,7 +87,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float rotationLastPointerAngle;
     private int rotationVerticalSector;
     private bool rotationTrackingStarted;
-    private bool clickSpawnEnabled;
     private bool transferCommitted;
     private float fitScale;
     private float controlsUpdateTimer;
@@ -229,18 +224,6 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         volumeText = CreateVolumeText(debugTextRoot);
         var rightControlsX = Mathf.Max(24f, debugTextRoot.rect.width - 210f);
-        shaderToggle = CreateToggle(
-            debugTextRoot,
-            "LiquidShaderToggle",
-            "Liquid shader",
-            new Vector2(rightControlsX, -24f));
-        shaderToggle.isOn = sessionShaderEnabled;
-        spawnToggle = CreateToggle(
-            debugTextRoot,
-            "ClickSpawnToggle",
-            "Spawn drops on click",
-            new Vector2(rightControlsX, -52f));
-        spawnToggle.isOn = sessionClickSpawnEnabled;
         colorTransitionSharpnessSlider = CreateTuningSlider(
             debugTextRoot,
             "ColorTransitionSharpness",
@@ -249,15 +232,9 @@ internal sealed class LiquidTransferMinigame : Minigame
             new Vector2(rightControlsX, -104f),
             0f,
             3f,
-            sessionColorTransitionSharpness,
+            0f,
             false,
             out colorTransitionSharpnessText);
-        freezeToggle = CreateToggle(
-            debugTextRoot,
-            "FreezeSimulationToggle",
-            "Freeze simulation",
-            new Vector2(rightControlsX, -352f));
-        freezeToggle.isOn = sessionFreezeSimulation;
         collisionPassSlider = CreateTuningSlider(
             debugTextRoot,
             "CollisionPasses",
@@ -403,14 +380,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         UpdateSyringeHandlePositions();
-        shaderToggle.onValueChanged.AddListener(SetLiquidShaderEnabled);
-        SetLiquidShaderEnabled(shaderToggle.isOn);
+        liquidSimulation.SetSurfaceShaderEnabled(true);
         colorTransitionSharpnessSlider.onValueChanged.AddListener(SetColorTransitionSharpness);
         SetColorTransitionSharpness(colorTransitionSharpnessSlider.value);
-        spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
-        SetClickSpawnEnabled(spawnToggle.isOn);
-        freezeToggle.onValueChanged.AddListener(SetFreezeSimulation);
-        SetFreezeSimulation(freezeToggle.isOn);
+        liquidSimulation.SetSimulationFrozen(SimulationFrozen);
         collisionTuningSliders = new[]
         {
             colorTransitionSharpnessSlider,
@@ -497,71 +470,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         text.color = Color.white;
         text.raycastTarget = false;
         return text;
-    }
-
-    private static Toggle CreateToggle(
-        RectTransform parent,
-        string name,
-        string labelText,
-        Vector2 position)
-    {
-        var toggleObject = new GameObject(
-            name,
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Image),
-            typeof(Toggle));
-        var toggle = toggleObject.GetComponent<Toggle>();
-        var rect = toggle.GetComponent<RectTransform>();
-        rect.SetParent(parent, false);
-        rect.anchorMin = new Vector2(0f, 1f);
-        rect.anchorMax = new Vector2(0f, 1f);
-        rect.pivot = new Vector2(0f, 1f);
-        rect.anchoredPosition = position;
-        rect.sizeDelta = new Vector2(20f, 20f);
-
-        var background = toggle.GetComponent<Image>();
-        background.color = new Color(0.06f, 0.08f, 0.12f, 0.9f);
-
-        var checkmark = new GameObject(
-            "Checkmark",
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Image)).GetComponent<Image>();
-        var checkmarkRect = checkmark.rectTransform;
-        checkmarkRect.SetParent(rect, false);
-        checkmarkRect.anchorMin = new Vector2(0.2f, 0.2f);
-        checkmarkRect.anchorMax = new Vector2(0.8f, 0.8f);
-        checkmarkRect.offsetMin = Vector2.zero;
-        checkmarkRect.offsetMax = Vector2.zero;
-        checkmark.color = new Color(0.15f, 0.75f, 0.35f, 1f);
-        checkmark.raycastTarget = false;
-
-        var labelObject = new GameObject(
-            $"{name}Label",
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Text));
-        var label = labelObject.GetComponent<Text>();
-        var labelRect = label.rectTransform;
-        labelRect.SetParent(parent, false);
-        labelRect.anchorMin = new Vector2(0f, 1f);
-        labelRect.anchorMax = new Vector2(0f, 1f);
-        labelRect.pivot = new Vector2(0f, 1f);
-        labelRect.anchoredPosition = position + new Vector2(28f, 0f);
-        labelRect.sizeDelta = new Vector2(170f, 20f);
-        label.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        label.fontSize = 14;
-        label.alignment = TextAnchor.MiddleLeft;
-        label.text = labelText;
-        label.color = Color.white;
-        label.raycastTarget = false;
-
-        toggle.targetGraphic = background;
-        toggle.graphic = checkmark;
-        toggle.transition = Selectable.Transition.None;
-        toggle.isOn = true;
-        return toggle;
     }
 
     private static Text CreateTuningLabel(
@@ -677,15 +585,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         return slider;
     }
 
-    private void SetLiquidShaderEnabled(bool enabled)
-    {
-        sessionShaderEnabled = enabled;
-        liquidSimulation.SetSurfaceShaderEnabled(enabled);
-    }
-
     private void SetColorTransitionSharpness(float sharpness)
     {
-        sessionColorTransitionSharpness = sharpness;
         liquidSimulation.SetColorTransitionSharpness(sharpness);
         colorTransitionSharpnessText.text =
             $"Color transition sharpness: {sharpness:F1}";
@@ -734,30 +635,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         initialPackingText.text = $"Initial packing: {packing:F2}x";
     }
 
-    private void SetFreezeSimulation(bool enabled)
-    {
-        sessionFreezeSimulation = enabled;
-        liquidSimulation.SetSimulationFrozen(enabled);
-    }
-
-    private void SetClickSpawnEnabled(bool enabled)
-    {
-        sessionClickSpawnEnabled = enabled;
-        clickSpawnEnabled = enabled;
-    }
-
     private bool IsPointerOverInteractionControl(List<RaycastResult> uiCasts)
     {
         foreach (var uiCast in uiCasts)
         {
             var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
-            if (selectable == shaderToggle
-                || selectable == spawnToggle
-                || selectable == freezeToggle)
-            {
-                return true;
-            }
-
             foreach (var slider in collisionTuningSliders)
             {
                 if (selectable == slider)
@@ -767,24 +649,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             }
         }
 
-        var canvas = shaderToggle.GetComponentInParent<Canvas>();
+        var canvas = colorTransitionSharpnessSlider.GetComponentInParent<Canvas>();
         var eventCamera = canvas && canvas.renderMode != RenderMode.ScreenSpaceOverlay
             ? canvas.worldCamera
             : null;
         var pointer = Input.mousePosition;
-        return RectTransformUtility.RectangleContainsScreenPoint(
-                shaderToggle.GetComponent<RectTransform>(),
-                pointer,
-                eventCamera)
-            || RectTransformUtility.RectangleContainsScreenPoint(
-                spawnToggle.GetComponent<RectTransform>(),
-                pointer,
-                eventCamera)
-            || RectTransformUtility.RectangleContainsScreenPoint(
-                freezeToggle.GetComponent<RectTransform>(),
-                pointer,
-                eventCamera)
-            || IsPointerOverTuningSlider(pointer, eventCamera);
+        return IsPointerOverTuningSlider(pointer, eventCamera);
     }
 
     private bool IsPointerOverTuningSlider(Vector2 pointer, Camera eventCamera)
@@ -894,7 +764,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             MoveContainer(heldVisual, targetPosition);
         }
 
-        var spawnDrops = clickSpawnEnabled
+        var spawnDrops = ClickSpawnEnabled
             && (Input.GetMouseButton(0) || game.handClicking)
             && heldContainer == null
             && activeSyringe == null
@@ -1442,7 +1312,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             BuildTargetLiquidAmounts(sourceGameContainer, 1, typeCount, stride);
         }
 
-        var noLiquidLossEnabled = !drainOnly && NoLiquidLossSetting.IsEnabled;
+        var noLiquidLossEnabled = !drainOnly && NoLiquidLossEnabled;
         if (noLiquidLossEnabled)
         {
             CaptureUnreturnedLiquid(typeCount, stride);
