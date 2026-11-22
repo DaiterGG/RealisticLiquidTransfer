@@ -17,7 +17,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
     private const float SyringeHandleSmoothTime = 0.04f;
-    private const float SyringeEjectionRate = 20f;
+    private const float SyringeFreePistonSpeed = 420f;
+    private const float SyringeEjectionRate = 24f;
     private const float SyringeEjectionSpeed = 1000f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
@@ -1040,27 +1041,30 @@ internal sealed class LiquidTransferMinigame : Minigame
         var currentHandleY = syringe.HandleTransform.anchoredPosition.y;
         var otherContainerIndex = drainOnly ? -1 : 1 - syringe.ContainerIndex;
         var needlePoint = ToRootPoint(syringe.Container, geometry.NeedlePoint);
+        var localDropRadius = LiquidSimulation.DefaultDropRadius
+            / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
         var outletPoint = ToRootPoint(
             syringe.Container,
-            new Vector2(0f, geometry.FluidBottom.y + 2f));
+            new Vector2(0f, geometry.FluidBottom.y + localDropRadius));
         var hasLiquidAtOutlet = liquidSimulation.HasContainerDropNear(
             syringe.ContainerIndex,
             outletPoint,
             LiquidSimulation.DefaultDropRadius * 2f);
         var deltaTime = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.1f);
         float handleY;
-        if (requestedHandleY <= geometry.FluidBottom.y + 0.01f)
+        if (requestedHandleY < currentHandleY)
         {
-            handleY = geometry.FluidBottom.y;
-            syringe.HandleVelocity = 0f;
-        }
-        else if (requestedHandleY < currentHandleY
-            && hasLiquidAtOutlet
-            && syringe.Capacity > 0f)
-        {
-            var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
-            var maximumDownwardDistance = strokeHeight * SyringeEjectionRate
-                / syringe.Capacity * deltaTime;
+            var movementDeltaTime = Mathf.Min(deltaTime, 1f / 30f);
+            var maximumDownwardSpeed = SyringeFreePistonSpeed;
+            if (hasLiquidAtOutlet && syringe.Capacity > 0f)
+            {
+                var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
+                maximumDownwardSpeed = Mathf.Min(
+                    maximumDownwardSpeed,
+                    strokeHeight * SyringeEjectionRate / syringe.Capacity);
+            }
+
+            var maximumDownwardDistance = maximumDownwardSpeed * movementDeltaTime;
             handleY = Mathf.Max(requestedHandleY, currentHandleY - maximumDownwardDistance);
             syringe.HandleVelocity = 0f;
         }
@@ -1165,8 +1169,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (transferUnits > 0)
             {
                 var sourceIndex = otherContainerIndex;
-                var localDropRadius = LiquidSimulation.DefaultDropRadius
-                    / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
                 var destinationPoint = ToRootPoint(
                     syringe.Container,
                     new Vector2(0f, geometry.FluidBottom.y + localDropRadius));
