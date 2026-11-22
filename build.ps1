@@ -2,6 +2,7 @@
 param(
     [string]$GamePath = 'D:\SteamLibrary\steamapps\common\Casualties Unknown',
     [bool]$EnableDebugLogging = $true,
+    [bool]$EnableDebugLaunch = $false,
     [bool]$EnableProfiling = $false,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )
@@ -97,6 +98,7 @@ $dotnet = Get-Command 'dotnet' -ErrorAction Stop
 & $dotnet.Source build $projectPath --configuration Release --nologo `
     "-p:GamePath=$resolvedGamePath" `
     "-p:EnableDebugLogging=$($EnableDebugLogging.ToString().ToLowerInvariant())" `
+    "-p:EnableDebugLaunch=$($EnableDebugLaunch.ToString().ToLowerInvariant())" `
     "-p:EnableProfiling=$($EnableProfiling.ToString().ToLowerInvariant())"
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet build failed with exit code $LASTEXITCODE."

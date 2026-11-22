@@ -8,10 +8,14 @@
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
     <GamePath Condition="'$(GamePath)' == ''">D:\SteamLibrary\steamapps\common\Casualties Unknown</GamePath>
     <EnableDebugLogging Condition="'$(EnableDebugLogging)' == ''">false</EnableDebugLogging>
+    <EnableDebugLaunch Condition="'$(EnableDebugLaunch)' == ''">false</EnableDebugLaunch>
     <EnableProfiling Condition="'$(EnableProfiling)' == ''">false</EnableProfiling>
   </PropertyGroup>
   <PropertyGroup Condition="'$(EnableDebugLogging)' == 'true'">
     <DefineConstants>$(DefineConstants);LIQUID_TRANSFER_DEBUG_LOGGING</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableDebugLaunch)' == 'true'">
+    <DefineConstants>$(DefineConstants);LIQUID_TRANSFER_DEBUG_LAUNCH</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition="'$(EnableProfiling)' == 'true'">
     <DefineConstants>$(DefineConstants);LIQUID_TRANSFER_PROFILING</DefineConstants>

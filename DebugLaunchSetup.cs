@@ -1,4 +1,4 @@
-#if LIQUID_TRANSFER_DEBUG_LOGGING
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
 using HarmonyLib;
 using UnityEngine;
 

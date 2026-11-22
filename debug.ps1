@@ -7,4 +7,4 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $buildScript = Join-Path $PSScriptRoot 'build.ps1'
-& $buildScript -GamePath $GamePath -EnableDebugLogging:$true
+& $buildScript -GamePath $GamePath -EnableDebugLogging:$true -EnableDebugLaunch:$true

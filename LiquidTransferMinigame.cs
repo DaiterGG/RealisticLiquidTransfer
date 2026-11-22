@@ -24,14 +24,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
 
-    private const bool ClickSpawnEnabled = false;
     private const bool SimulationFrozen = false;
-    private static int sessionCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
-    private static int sessionCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
-    private static int sessionVelocityContactMargin =
-        LiquidSimulation.DefaultVelocityContactMarginTenths;
-    private static int sessionDropRadiusTenths = LiquidSimulation.DefaultDropRadiusTenths;
-    private static int sessionInitialPackingTenths = LiquidSimulation.DefaultPackingTenths;
 
     private readonly WaterContainerItem receivingGameContainer;
     private readonly WaterContainerItem sourceGameContainer;
@@ -48,22 +41,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly bool drainOnly;
     private Image handImage;
     private Text controlsText;
-    private Text volumeText;
     private RectTransform screenRoot;
-    private Slider colorTransitionSharpnessSlider;
-    private Text colorTransitionSharpnessText;
-    private Slider collisionPassSlider;
-    private Text collisionPassText;
-    private Slider collisionCorrectionSlider;
-    private Text collisionCorrectionText;
-    private Slider velocityContactMarginSlider;
-    private Text velocityContactMarginText;
-    private Slider dropRadiusSlider;
-    private Text dropRadiusText;
-    private Slider initialPackingSlider;
-    private Text initialPackingText;
-    private Slider[] collisionTuningSliders;
-    private RectTransform debugTextRoot;
+    private RectTransform overlayRoot;
     private LiquidSimulation liquidSimulation;
     private HandAlphaGradient handAlphaGradient;
     private Vector2 originalHandSize;
@@ -88,8 +67,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private bool rotationTrackingStarted;
     private bool transferCommitted;
     private float fitScale;
-    private float controlsUpdateTimer;
-    private int displayedDropCount = -1;
     private float[] initialSimulatedLiquidAmounts;
     private float[] finalSimulatedLiquidAmounts;
     private float[] targetLiquidAmounts;
@@ -209,86 +186,17 @@ internal sealed class LiquidTransferMinigame : Minigame
         screenRoot.sizeDelta = game.minigameScreen.rect.size;
         screenRoot.SetSiblingIndex(0);
         game.spawnedMiniGame = screenRoot;
-        debugTextRoot = CreateDebugTextRoot(game.minigameScreen);
-        controlsText = CreateControlsText(debugTextRoot);
+        overlayRoot = CreateOverlayRoot(game.minigameScreen);
+        controlsText = CreateControlsText(overlayRoot);
         if (drainOnly)
         {
-            controlsText.text = "Hold left-click outside the container to spawn drops | Right-click and drag to rotate | Esc: exit";
+            controlsText.text = "Drag the container to pour | Right-click and drag to rotate | Esc: finish";
         }
         if (receivingSyringe != null || sourceSyringe != null)
         {
             controlsText.text =
-                "Drag the syringe plunger up to draw nearby liquid and down to inject through the needle | Esc: exit";
+                "Drag the syringe plunger up to draw liquid and down to inject through the needle | Esc: finish";
         }
-
-        volumeText = CreateVolumeText(debugTextRoot);
-        var rightControlsX = Mathf.Max(24f, debugTextRoot.rect.width - 210f);
-        colorTransitionSharpnessSlider = CreateTuningSlider(
-            debugTextRoot,
-            "ColorTransitionSharpness",
-            "Color transition sharpness",
-            new Vector2(rightControlsX, -78f),
-            new Vector2(rightControlsX, -104f),
-            0f,
-            3f,
-            0f,
-            false,
-            out colorTransitionSharpnessText);
-        collisionPassSlider = CreateTuningSlider(
-            debugTextRoot,
-            "CollisionPasses",
-            "Collision passes",
-            new Vector2(rightControlsX, -132f),
-            new Vector2(rightControlsX, -158f),
-            LiquidSimulation.MinimumDropCollisionPasses,
-            LiquidSimulation.MaximumDropCollisionPasses,
-            sessionCollisionPasses,
-            true,
-            out collisionPassText);
-        collisionCorrectionSlider = CreateTuningSlider(
-            debugTextRoot,
-            "CollisionCorrection",
-            "Position correction",
-            new Vector2(rightControlsX, -186f),
-            new Vector2(rightControlsX, -212f),
-            LiquidSimulation.MinimumCollisionCorrectionPercent,
-            LiquidSimulation.MaximumCollisionCorrectionPercent,
-            sessionCollisionCorrection,
-            true,
-            out collisionCorrectionText);
-        velocityContactMarginSlider = CreateTuningSlider(
-            debugTextRoot,
-            "VelocityContactMargin",
-            "Velocity contact margin",
-            new Vector2(rightControlsX, -240f),
-            new Vector2(rightControlsX, -266f),
-            LiquidSimulation.MinimumVelocityContactMarginTenths,
-            LiquidSimulation.MaximumVelocityContactMarginTenths,
-            sessionVelocityContactMargin,
-            true,
-            out velocityContactMarginText);
-        dropRadiusSlider = CreateTuningSlider(
-            debugTextRoot,
-            "DropRadius",
-            "Base drop radius",
-            new Vector2(rightControlsX, -294f),
-            new Vector2(rightControlsX, -320f),
-            LiquidSimulation.MinimumDropRadiusTenths,
-            LiquidSimulation.MaximumDropRadiusTenths,
-            sessionDropRadiusTenths,
-            false,
-            out dropRadiusText);
-        initialPackingSlider = CreateTuningSlider(
-            debugTextRoot,
-            "InitialPacking",
-            "Initial packing",
-            new Vector2(rightControlsX, -374f),
-            new Vector2(rightControlsX, -400f),
-            LiquidSimulation.MinimumPackingTenths,
-            LiquidSimulation.MaximumPackingTenths,
-            sessionInitialPackingTenths,
-            false,
-            out initialPackingText);
 
         receivingContainer = CreateContainer(
             screenRoot,
@@ -357,7 +265,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             secondOriginalContainerAmount,
             firstOriginalLiquidComposition,
             secondOriginalLiquidComposition,
-            sessionInitialPackingTenths / 100f);
+            LiquidSimulation.DefaultPackingTenths / 100f);
         var amountBufferLength = liquidSimulation.LiquidTypeBufferLength * 2;
         initialSimulatedLiquidAmounts = new float[amountBufferLength];
         finalSimulatedLiquidAmounts = new float[amountBufferLength];
@@ -380,29 +288,13 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         UpdateSyringeHandlePositions();
         liquidSimulation.SetSurfaceShaderEnabled(true);
-        colorTransitionSharpnessSlider.onValueChanged.AddListener(SetColorTransitionSharpness);
-        SetColorTransitionSharpness(colorTransitionSharpnessSlider.value);
+        liquidSimulation.SetColorTransitionSharpness(0f);
         liquidSimulation.SetSimulationFrozen(SimulationFrozen);
-        collisionTuningSliders = new[]
-        {
-            colorTransitionSharpnessSlider,
-            collisionPassSlider,
-            collisionCorrectionSlider,
-            velocityContactMarginSlider,
-            dropRadiusSlider,
-            initialPackingSlider
-        };
-        collisionPassSlider.onValueChanged.AddListener(SetCollisionPasses);
-        SetCollisionPasses(collisionPassSlider.value);
-        collisionCorrectionSlider.onValueChanged.AddListener(SetCollisionCorrection);
-        SetCollisionCorrection(collisionCorrectionSlider.value);
-        velocityContactMarginSlider.onValueChanged.AddListener(SetVelocityContactMargin);
-        SetVelocityContactMargin(velocityContactMarginSlider.value);
-        dropRadiusSlider.onValueChanged.AddListener(SetDropRadius);
-        SetDropRadius(dropRadiusSlider.value);
-        initialPackingSlider.onValueChanged.AddListener(SetInitialPacking);
-        SetInitialPacking(initialPackingSlider.value);
-        UpdateVolumeReadout();
+        liquidSimulation.SetDropCollisionPasses(LiquidSimulation.DefaultDropCollisionPasses);
+        liquidSimulation.SetCollisionCorrectionPercent(
+            LiquidSimulation.DefaultCollisionCorrectionPercent);
+        liquidSimulation.SetVelocityContactMarginTenths(
+            LiquidSimulation.DefaultVelocityContactMarginTenths);
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
             + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "
@@ -415,9 +307,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         handAlphaGradient = handImage.gameObject.AddComponent<HandAlphaGradient>();
     }
 
-    private static RectTransform CreateDebugTextRoot(RectTransform parent)
+    private static RectTransform CreateOverlayRoot(RectTransform parent)
     {
-        var root = new GameObject("RealisticLiquidTransferDebugText", typeof(RectTransform))
+        var root = new GameObject("RealisticLiquidTransferOverlay", typeof(RectTransform))
             .GetComponent<RectTransform>();
         root.SetParent(parent, false);
         root.anchorMin = Vector2.zero;
@@ -444,232 +336,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         controls.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         controls.fontSize = 16;
         controls.alignment = TextAnchor.MiddleCenter;
-        controls.text = "Hold left-click outside containers to spawn drops | Right-click and drag to rotate | Esc: exit";
+        controls.text = "Drag containers to pour | Right-click and drag to rotate | Esc: finish";
         controls.color = Color.white;
         controls.raycastTarget = false;
         return controls;
-    }
-
-    private static Text CreateVolumeText(RectTransform parent)
-    {
-        var textObject = new GameObject("LiquidTransferContainerVolumes", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
-        var text = textObject.GetComponent<Text>();
-        var rect = text.rectTransform;
-        rect.SetParent(parent, false);
-        rect.anchorMin = new Vector2(1f, 0f);
-        rect.anchorMax = new Vector2(1f, 0f);
-        rect.pivot = new Vector2(1f, 0f);
-        rect.anchoredPosition = new Vector2(-24f, 120f);
-        rect.sizeDelta = new Vector2(Mathf.Min(260f, parent.rect.width * 0.32f), 160f);
-
-        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        text.fontSize = 12;
-        text.alignment = TextAnchor.UpperRight;
-        text.verticalOverflow = VerticalWrapMode.Overflow;
-        text.color = Color.white;
-        text.raycastTarget = false;
-        return text;
-    }
-
-    private static Text CreateTuningLabel(
-        RectTransform parent,
-        string name,
-        string label,
-        Vector2 position)
-    {
-        var textObject = new GameObject(
-            name,
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Text));
-        var text = textObject.GetComponent<Text>();
-        var rect = text.rectTransform;
-        rect.SetParent(parent, false);
-        rect.anchorMin = new Vector2(0f, 1f);
-        rect.anchorMax = new Vector2(0f, 1f);
-        rect.pivot = new Vector2(0f, 1f);
-        rect.anchoredPosition = position;
-        rect.sizeDelta = new Vector2(180f, 20f);
-        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        text.fontSize = 14;
-        text.alignment = TextAnchor.MiddleLeft;
-        text.color = Color.white;
-        text.raycastTarget = false;
-        text.text = label;
-        return text;
-    }
-
-    private static Slider CreateTuningSlider(
-        RectTransform parent,
-        string name,
-        string label,
-        Vector2 labelPosition,
-        Vector2 sliderPosition,
-        float minimum,
-        float maximum,
-        float initialValue,
-        bool wholeNumbers,
-        out Text labelText)
-    {
-        var sliderObject = new GameObject(
-            name,
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Image),
-            typeof(Slider));
-        var slider = sliderObject.GetComponent<Slider>();
-        var rect = slider.GetComponent<RectTransform>();
-        rect.SetParent(parent, false);
-        rect.anchorMin = new Vector2(0f, 1f);
-        rect.anchorMax = new Vector2(0f, 1f);
-        rect.pivot = new Vector2(0f, 1f);
-        rect.anchoredPosition = sliderPosition;
-        rect.sizeDelta = new Vector2(180f, 18f);
-
-        labelText = CreateTuningLabel(
-            parent,
-            $"{name}Label",
-            label,
-            labelPosition);
-        slider.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.12f, 0.9f);
-
-        var fillArea = new GameObject("FillArea", typeof(RectTransform)).GetComponent<RectTransform>();
-        fillArea.SetParent(rect, false);
-        fillArea.anchorMin = new Vector2(0f, 0.5f);
-        fillArea.anchorMax = new Vector2(1f, 0.5f);
-        fillArea.pivot = new Vector2(0.5f, 0.5f);
-        fillArea.sizeDelta = new Vector2(-18f, 6f);
-
-        var fill = new GameObject(
-            "Fill",
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Image)).GetComponent<Image>();
-        fill.rectTransform.SetParent(fillArea, false);
-        fill.rectTransform.anchorMin = Vector2.zero;
-        fill.rectTransform.anchorMax = Vector2.one;
-        fill.rectTransform.offsetMin = Vector2.zero;
-        fill.rectTransform.offsetMax = Vector2.zero;
-        fill.color = new Color(0.15f, 0.75f, 0.35f, 1f);
-
-        var handleArea = new GameObject("HandleSlideArea", typeof(RectTransform)).GetComponent<RectTransform>();
-        handleArea.SetParent(rect, false);
-        handleArea.anchorMin = Vector2.zero;
-        handleArea.anchorMax = Vector2.one;
-        handleArea.offsetMin = new Vector2(9f, 0f);
-        handleArea.offsetMax = new Vector2(-9f, 0f);
-
-        var handle = new GameObject(
-            "Handle",
-            typeof(RectTransform),
-            typeof(CanvasRenderer),
-            typeof(Image)).GetComponent<Image>();
-        var handleRect = handle.rectTransform;
-        handleRect.SetParent(handleArea, false);
-        handleRect.anchorMin = new Vector2(0f, 0.5f);
-        handleRect.anchorMax = new Vector2(0f, 0.5f);
-        handleRect.pivot = new Vector2(0.5f, 0.5f);
-        handleRect.sizeDelta = new Vector2(14f, 14f);
-        handle.color = Color.white;
-
-        slider.fillRect = fill.rectTransform;
-        slider.handleRect = handleRect;
-        slider.targetGraphic = handle;
-        slider.minValue = minimum;
-        slider.maxValue = maximum;
-        slider.wholeNumbers = wholeNumbers;
-        slider.value = initialValue;
-        slider.direction = Slider.Direction.LeftToRight;
-        slider.transition = Selectable.Transition.None;
-        return slider;
-    }
-
-    private void SetColorTransitionSharpness(float sharpness)
-    {
-        liquidSimulation.SetColorTransitionSharpness(sharpness);
-        colorTransitionSharpnessText.text =
-            $"Color transition sharpness: {sharpness:F1}";
-    }
-
-    private void SetCollisionPasses(float passes)
-    {
-        var passCount = Mathf.RoundToInt(passes);
-        sessionCollisionPasses = passCount;
-        liquidSimulation.SetDropCollisionPasses(passCount);
-        collisionPassText.text = $"Collision passes: {passCount}";
-    }
-
-    private void SetCollisionCorrection(float percent)
-    {
-        var correction = Mathf.RoundToInt(percent);
-        sessionCollisionCorrection = correction;
-        liquidSimulation.SetCollisionCorrectionPercent(correction);
-        collisionCorrectionText.text = $"Position correction: {correction}%";
-    }
-
-    private void SetVelocityContactMargin(float tenths)
-    {
-        var marginTenths = Mathf.RoundToInt(tenths);
-        var margin = marginTenths / 10f;
-        sessionVelocityContactMargin = marginTenths;
-        liquidSimulation.SetVelocityContactMarginTenths(marginTenths);
-        velocityContactMarginText.text = $"Velocity contact margin: {margin:F1}px";
-    }
-
-    private void SetDropRadius(float tenths)
-    {
-        var radiusTenths = Mathf.RoundToInt(tenths);
-        var radius = radiusTenths / 10f;
-        sessionDropRadiusTenths = radiusTenths;
-        liquidSimulation.SetDropRadius(radius);
-        dropRadiusText.text = $"Base drop radius: {radius:F1}px";
-    }
-
-    private void SetInitialPacking(float tenths)
-    {
-        var packingTenths = Mathf.RoundToInt(tenths);
-        var packing = packingTenths / 100f;
-        sessionInitialPackingTenths = packingTenths;
-        liquidSimulation.SetInitialPacking(packing);
-        initialPackingText.text = $"Initial packing: {packing:F2}x";
-    }
-
-    private bool IsPointerOverInteractionControl(List<RaycastResult> uiCasts)
-    {
-        foreach (var uiCast in uiCasts)
-        {
-            var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
-            foreach (var slider in collisionTuningSliders)
-            {
-                if (selectable == slider)
-                {
-                    return true;
-                }
-            }
-        }
-
-        var canvas = colorTransitionSharpnessSlider.GetComponentInParent<Canvas>();
-        var eventCamera = canvas && canvas.renderMode != RenderMode.ScreenSpaceOverlay
-            ? canvas.worldCamera
-            : null;
-        var pointer = Input.mousePosition;
-        return IsPointerOverTuningSlider(pointer, eventCamera);
-    }
-
-    private bool IsPointerOverTuningSlider(Vector2 pointer, Camera eventCamera)
-    {
-        foreach (var slider in collisionTuningSliders)
-        {
-            if (RectTransformUtility.RectangleContainsScreenPoint(
-                    slider.GetComponent<RectTransform>(),
-                    pointer,
-                    eventCamera))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     public override void Update(List<RaycastResult> uiCasts)
@@ -763,65 +433,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             MoveContainer(heldVisual, targetPosition);
         }
 
-        var spawnDrops = ClickSpawnEnabled
-            && (Input.GetMouseButton(0) || game.handClicking)
-            && heldContainer == null
-            && activeSyringe == null
-            && activeRotationContainer == null
-            && !IsPointerOverInteractionControl(uiCasts)
-            && !liquidSimulation.IsInsideContainer(pointerPosition);
-        var deltaTime = Time.unscaledDeltaTime;
-        liquidSimulation.Tick(deltaTime, spawnDrops, pointerPosition);
-        controlsUpdateTimer -= deltaTime;
-        if (controlsUpdateTimer <= 0f)
-        {
-            if (displayedDropCount != liquidSimulation.Count)
-            {
-                displayedDropCount = liquidSimulation.Count;
-                var dropScope = drainOnly ? "outside the container" : "outside containers";
-                controlsText.text =
-                    $"Hold left-click {dropScope} to spawn drops ({displayedDropCount}/20000) | Right-click and drag to rotate | Esc: exit";
-                if (receivingSyringe != null || sourceSyringe != null)
-                {
-                    controlsText.text =
-                        "Drag the syringe plunger up to draw nearby liquid and down to inject through the needle | Esc: exit";
-                }
-            }
-
-            UpdateVolumeReadout();
-            controlsUpdateTimer = 0.25f;
-        }
-
-    }
-
-    private void UpdateVolumeReadout()
-    {
-        if (drainOnly)
-        {
-            volumeText.text =
-                "Liquid amount (1 drop per ml)\n"
-                + $"Container: {liquidSimulation.GetContainerDropCount(0):N0} ml\n\n"
-                + "Liquid outside the container is lost on exit.";
-            return;
-        }
-
-        volumeText.text =
-            "Original container sprites\n"
-            + $"Container 1: {firstOriginalContainerSpriteName}\n"
-            + $"Container 2: {secondOriginalContainerSpriteName}\n\n"
-            + "Liquid amount (1 drop per ml)\n"
-            + $"Receiver: {liquidSimulation.GetContainerDropCount(0):N0} ml\n"
-            + $"Source: {liquidSimulation.GetContainerDropCount(1):N0} ml\n\n"
-            + "Estimated 2D area (container outline)\n"
-            + $"Receiver: {EstimateArea(receivingContainer):N0} units^2\n"
-            + $"Source: {EstimateArea(sourceContainer):N0} units^2";
-    }
-
-    private static double EstimateArea(ContainerVisual container)
-    {
-        var scale = container.Transform.localScale;
-        var scaleArea = System.Math.Abs((double)scale.x * scale.y);
-        return EstimateContainerArea(container.OutlinePoints, container.InteriorWalls) * scaleArea;
+        liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
     }
 
     private SyringeVisual CreateSyringeVisual(
@@ -1261,12 +873,12 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     internal void RestoreHand()
     {
-        if (debugTextRoot)
+        if (overlayRoot)
         {
-            var root = debugTextRoot.gameObject;
+            var root = overlayRoot.gameObject;
             root.SetActive(false);
             Object.Destroy(root);
-            debugTextRoot = null;
+            overlayRoot = null;
         }
 
         if (!handImage)
