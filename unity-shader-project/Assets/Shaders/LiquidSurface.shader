@@ -99,7 +99,8 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
             {
                 float4 before = tex2D(_LiquidColorTex, uv - offset);
                 float4 after = tex2D(_LiquidColorTex, uv + offset);
-                float3 colorDifference = after.rgb - before.rgb;
+                float3 colorDifference =
+                    after.rgb * after.a - before.rgb * before.a;
                 float contrast = dot(colorDifference, colorDifference);
                 if (contrast > strongestContrast)
                 {
@@ -156,9 +157,12 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                     return centerColor;
                 }
 
-                float3 colorSpan = colorAfter.rgb - colorBefore.rgb;
+                float3 beforePremultiplied = colorBefore.rgb * colorBefore.a;
+                float3 afterPremultiplied = colorAfter.rgb * colorAfter.a;
+                float3 colorSpan = afterPremultiplied - beforePremultiplied;
+                float3 centerPremultiplied = centerColor.rgb * centerColor.a;
                 float blend = saturate(
-                    dot(centerColor.rgb - colorBefore.rgb, colorSpan)
+                    dot(centerPremultiplied - beforePremultiplied, colorSpan)
                     / strongestContrast);
                 float sharpness = saturate(_ColorTransitionSharpness / 3.0);
                 float transitionWidth = lerp(1.0, 0.08, sharpness);
@@ -166,9 +170,15 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                     0.5 - transitionWidth * 0.5,
                     0.5 + transitionWidth * 0.5,
                     blend);
-                return float4(
-                    lerp(colorBefore.rgb, colorAfter.rgb, splineBlend),
-                    centerColor.a);
+                float opacity = lerp(colorBefore.a, colorAfter.a, splineBlend);
+                float3 premultipliedColor = lerp(
+                    beforePremultiplied,
+                    afterPremultiplied,
+                    splineBlend);
+                float3 color = opacity > 0.0001
+                    ? premultipliedColor / opacity
+                    : float3(0.0, 0.0, 0.0);
+                return float4(color, opacity);
             }
 
             fixed4 frag(v2f input) : SV_Target

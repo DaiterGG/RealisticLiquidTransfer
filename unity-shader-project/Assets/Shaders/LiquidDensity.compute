@@ -159,11 +159,11 @@ void RasterizeDrops(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadI
             int weight = (int)round(contribution * VELOCITY_SCALE);
             int velocityX = (int)round(velocityRatio.x * contribution * VELOCITY_SCALE);
             int velocityY = (int)round(velocityRatio.y * contribution * VELOCITY_SCALE);
-            int colorR = (int)round(dropColor.r * contribution * VELOCITY_SCALE);
-            int colorG = (int)round(dropColor.g * contribution * VELOCITY_SCALE);
-            int colorB = (int)round(dropColor.b * contribution * VELOCITY_SCALE);
-            int colorA = (int)round(
-                _DropOpacities[dropIndex] * contribution * VELOCITY_SCALE);
+            float opacity = _DropOpacities[dropIndex];
+            int colorR = (int)round(dropColor.r * opacity * contribution * VELOCITY_SCALE);
+            int colorG = (int)round(dropColor.g * opacity * contribution * VELOCITY_SCALE);
+            int colorB = (int)round(dropColor.b * opacity * contribution * VELOCITY_SCALE);
+            int colorA = (int)round(opacity * contribution * VELOCITY_SCALE);
             uint pixelIndex = (uint)(pixel.y * _TextureWidth + pixel.x);
             int ignored;
             InterlockedAdd(_Accumulation[pixelIndex].x, densityIncrement, ignored);
@@ -196,12 +196,11 @@ void ResolveDensity(uint3 dispatchId : SV_DispatchThreadID)
         round((encodedVelocity * 0.5 + 0.5) * 255.0) / 255.0,
         accumulated.y > 0 ? 1.0 : 0.0);
     int4 colorAccumulated = _ColorAccumulation[pixelIndex];
+    float opacityWeight = max((float)colorAccumulated.w, 0.0001);
     float4 liquidColor = accumulated.y > 0
         ? float4(
-            saturate((float)colorAccumulated.x / accumulated.y),
-            saturate((float)colorAccumulated.y / accumulated.y),
-            saturate((float)colorAccumulated.z / accumulated.y),
-            saturate((float)colorAccumulated.w / accumulated.y))
+            saturate((float3)colorAccumulated.xyz / opacityWeight),
+            saturate(opacityWeight / accumulated.y))
         : float4(0.16, 0.5, 0.95, _DefaultLiquidAlpha);
     _ColorOutput[dispatchId.xy] = liquidColor;
 }
