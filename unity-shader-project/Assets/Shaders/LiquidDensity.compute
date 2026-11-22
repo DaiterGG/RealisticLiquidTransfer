@@ -25,7 +25,6 @@ float _XScale;
 float _YScale;
 float _DensityContribution;
 float _TailSpeedForMaximumLength;
-float _DefaultLiquidAlpha;
 
 [numthreads(256, 1, 1)]
 void ClearAccumulation(uint3 dispatchId : SV_DispatchThreadID)
@@ -201,6 +200,6 @@ void ResolveDensity(uint3 dispatchId : SV_DispatchThreadID)
         ? float4(
             saturate((float3)colorAccumulated.xyz / opacityWeight),
             saturate(opacityWeight / accumulated.y))
-        : float4(0.16, 0.5, 0.95, _DefaultLiquidAlpha);
+        : float4(0.16, 0.5, 0.95, 1.0);
     _ColorOutput[dispatchId.xy] = liquidColor;
 }

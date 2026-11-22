@@ -3593,7 +3593,6 @@ internal sealed class LiquidSimulation
             (densityTextureHeight - 1) / (maximumScreenY - minimumScreenY));
         densityComputeShader.SetFloat("_DensityContribution", DensityContribution);
         densityComputeShader.SetFloat("_TailSpeedForMaximumLength", TailSpeedForMaximumLength);
-        densityComputeShader.SetFloat("_DefaultLiquidAlpha", GetLiquidAlpha("water"));
     }
 
     private void UpdateGraphics()

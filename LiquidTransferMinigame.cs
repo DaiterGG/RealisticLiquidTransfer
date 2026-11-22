@@ -91,9 +91,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float controlsUpdateTimer;
     private int displayedDropCount = -1;
     private float[] initialSimulatedLiquidAmounts;
-    private float[] unreturnedLiquidByType;
     private float[] finalSimulatedLiquidAmounts;
     private float[] targetLiquidAmounts;
+    private float[] unreturnedLiquidByType;
 
     internal LiquidTransferMinigame(
         WaterContainerItem receivingGameContainer,
