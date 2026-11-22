@@ -93,20 +93,48 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 return output;
             }
 
+            float3 SampleSharpLiquidColor(float2 uv)
+            {
+                float2 colorSize = _LiquidSharpColorTex_TexelSize.zw;
+                float2 colorPixel = clamp(
+                    floor(uv * colorSize),
+                    float2(0.0, 0.0),
+                    colorSize - 1.0);
+                float2 colorUv =
+                    (colorPixel + 0.5) * _LiquidSharpColorTex_TexelSize.xy;
+                return tex2D(_LiquidSharpColorTex, colorUv).rgb;
+            }
+
+            float3 SampleSoftSharpLiquidColor(float2 uv)
+            {
+                float2 texel = _LiquidSharpColorTex_TexelSize.xy;
+                float2 diagonal = texel;
+                float2 doubleTexel = texel * 2.0;
+                float3 color = SampleSharpLiquidColor(uv) * 6.0;
+                color += (
+                    SampleSharpLiquidColor(uv + float2(texel.x, 0.0))
+                    + SampleSharpLiquidColor(uv - float2(texel.x, 0.0))
+                    + SampleSharpLiquidColor(uv + float2(0.0, texel.y))
+                    + SampleSharpLiquidColor(uv - float2(0.0, texel.y))) * 4.0;
+                color += SampleSharpLiquidColor(uv + float2(doubleTexel.x, 0.0));
+                color += SampleSharpLiquidColor(uv - float2(doubleTexel.x, 0.0));
+                color += SampleSharpLiquidColor(uv + float2(0.0, doubleTexel.y));
+                color += SampleSharpLiquidColor(uv - float2(0.0, doubleTexel.y));
+                color += (
+                    SampleSharpLiquidColor(uv + diagonal)
+                    + SampleSharpLiquidColor(uv - diagonal)
+                    + SampleSharpLiquidColor(uv + float2(diagonal.x, -diagonal.y))
+                    + SampleSharpLiquidColor(uv + float2(-diagonal.x, diagonal.y))) * 2.0;
+                return color / 34.0;
+            }
+
             fixed4 frag(v2f input) : SV_Target
             {
                 float density = tex2D(_MainTex, input.uv).r;
                 float3 liquidColor;
                 if (_SharpLiquidColors > 0.5)
                 {
-                    float2 colorSize = _LiquidSharpColorTex_TexelSize.zw;
-                    float2 colorPixel = clamp(
-                        floor(input.uv * colorSize),
-                        float2(0.0, 0.0),
-                        colorSize - 1.0);
-                    float2 colorUv =
-                        (colorPixel + 0.5) * _LiquidSharpColorTex_TexelSize.xy;
-                    liquidColor = tex2D(_LiquidSharpColorTex, colorUv).rgb;
+                    liquidColor = SampleSoftSharpLiquidColor(input.uv);
                 }
                 else
                 {
