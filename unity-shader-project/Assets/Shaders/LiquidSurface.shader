@@ -5,6 +5,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
         _LiquidColorTex ("Liquid Color Texture", 2D) = "white" {}
         _Color ("Liquid Color", Color) = (0.16, 0.5, 0.95, 1)
+        _SharpColorBorders ("Sharp Liquid Borders", Float) = 0
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -62,6 +63,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
             float4 _MainTex_TexelSize;
             float4 _Color;
             float4 _ClipRect;
+            float _SharpColorBorders;
 
             struct appdata
             {
@@ -96,6 +98,27 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float rightDensity = tex2D(_MainTex, input.uv + float2(_MainTex_TexelSize.x, 0.0)).r;
                 float downDensity = tex2D(_MainTex, input.uv - float2(0.0, _MainTex_TexelSize.y)).r;
                 float upDensity = tex2D(_MainTex, input.uv + float2(0.0, _MainTex_TexelSize.y)).r;
+                float3 leftColor = tex2D(
+                    _LiquidColorTex,
+                    input.uv - float2(_MainTex_TexelSize.x, 0.0)).rgb;
+                float3 rightColor = tex2D(
+                    _LiquidColorTex,
+                    input.uv + float2(_MainTex_TexelSize.x, 0.0)).rgb;
+                float3 downColor = tex2D(
+                    _LiquidColorTex,
+                    input.uv - float2(0.0, _MainTex_TexelSize.y)).rgb;
+                float3 upColor = tex2D(
+                    _LiquidColorTex,
+                    input.uv + float2(0.0, _MainTex_TexelSize.y)).rgb;
+                float horizontalColorEdge = length(rightColor - leftColor)
+                    * step(0.35, min(leftDensity, rightDensity));
+                float verticalColorEdge = length(upColor - downColor)
+                    * step(0.35, min(downDensity, upDensity));
+                float colorBorder = smoothstep(
+                    0.08,
+                    0.35,
+                    max(horizontalColorEdge, verticalColorEdge))
+                    * _SharpColorBorders;
                 float2 gradient = float2(rightDensity - leftDensity, upDensity - downDensity);
                 float3 normal = normalize(float3(-gradient * 5.0, 0.8));
                 float2 encodedVelocity = tex2D(_MainTex, input.uv).gb * 2.0 - 1.0;
@@ -111,6 +134,7 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
 
                 fixed4 color = fixed4(liquidColor, input.color.a);
                 color.rgb *= diffuse;
+                color.rgb *= 1.0 - saturate(colorBorder) * 0.88;
                 color.rgb = lerp(color.rgb * 0.62, color.rgb, 1.0 - edge * 0.35);
                 color.rgb = lerp(color.rgb, color.rgb * float3(0.62, 0.78, 0.96), trailingEdge * 0.35);
                 color.rgb += specular * 0.28;

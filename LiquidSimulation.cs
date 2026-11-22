@@ -932,6 +932,11 @@ internal sealed class LiquidSimulation
             + $"individual drop rendering {(surfaceShaderEnabled ? "disabled" : "enabled")}.");
     }
 
+    internal void SetSharpColorBordersEnabled(bool enabled)
+    {
+        surfaceGraphic.SetSharpColorBordersEnabled(enabled);
+    }
+
     internal int GetContainerDropCount(int containerIndex)
     {
         if ((uint)containerIndex >= containers.Length)
@@ -5105,6 +5110,14 @@ internal sealed class LiquidSurfaceGraphic : MaskableGraphic
         if (liquidColorTexture)
         {
             surfaceMaterial.SetTexture("_LiquidColorTex", liquidColorTexture);
+        }
+    }
+
+    internal void SetSharpColorBordersEnabled(bool enabled)
+    {
+        if (surfaceMaterial)
+        {
+            surfaceMaterial.SetFloat("_SharpColorBorders", enabled ? 1f : 0f);
         }
     }
 

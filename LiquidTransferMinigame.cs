@@ -25,6 +25,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private static float referenceCapacity = ReferenceCapacity;
 
     private static bool sessionShaderEnabled = true;
+    private static bool sessionSharpColorBordersEnabled;
     private static bool sessionClickSpawnEnabled;
     private static int sessionCollisionPasses = LiquidSimulation.DefaultDropCollisionPasses;
     private static int sessionCollisionCorrection = LiquidSimulation.DefaultCollisionCorrectionPercent;
@@ -52,6 +53,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Text volumeText;
     private RectTransform screenRoot;
     private Toggle shaderToggle;
+    private Toggle sharpColorBordersToggle;
     private Toggle spawnToggle;
     private Slider collisionPassSlider;
     private Text collisionPassText;
@@ -237,18 +239,24 @@ internal sealed class LiquidTransferMinigame : Minigame
             "Spawn drops on click",
             new Vector2(rightControlsX, -52f));
         spawnToggle.isOn = sessionClickSpawnEnabled;
+        sharpColorBordersToggle = CreateToggle(
+            debugTextRoot,
+            "SharpColorBordersToggle",
+            "Sharp liquid borders",
+            new Vector2(rightControlsX, -78f));
+        sharpColorBordersToggle.isOn = sessionSharpColorBordersEnabled;
         freezeToggle = CreateToggle(
             debugTextRoot,
             "FreezeSimulationToggle",
             "Freeze simulation",
-            new Vector2(rightControlsX, -298f));
+            new Vector2(rightControlsX, -326f));
         freezeToggle.isOn = sessionFreezeSimulation;
         collisionPassSlider = CreateTuningSlider(
             debugTextRoot,
             "CollisionPasses",
             "Collision passes",
-            new Vector2(rightControlsX, -78f),
-            new Vector2(rightControlsX, -104f),
+            new Vector2(rightControlsX, -106f),
+            new Vector2(rightControlsX, -132f),
             LiquidSimulation.MinimumDropCollisionPasses,
             LiquidSimulation.MaximumDropCollisionPasses,
             sessionCollisionPasses,
@@ -258,8 +266,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "CollisionCorrection",
             "Position correction",
-            new Vector2(rightControlsX, -132f),
-            new Vector2(rightControlsX, -158f),
+            new Vector2(rightControlsX, -160f),
+            new Vector2(rightControlsX, -186f),
             LiquidSimulation.MinimumCollisionCorrectionPercent,
             LiquidSimulation.MaximumCollisionCorrectionPercent,
             sessionCollisionCorrection,
@@ -269,8 +277,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "VelocityContactMargin",
             "Velocity contact margin",
-            new Vector2(rightControlsX, -186f),
-            new Vector2(rightControlsX, -212f),
+            new Vector2(rightControlsX, -214f),
+            new Vector2(rightControlsX, -240f),
             LiquidSimulation.MinimumVelocityContactMarginTenths,
             LiquidSimulation.MaximumVelocityContactMarginTenths,
             sessionVelocityContactMargin,
@@ -280,8 +288,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "DropRadius",
             "Base drop radius",
-            new Vector2(rightControlsX, -240f),
-            new Vector2(rightControlsX, -266f),
+            new Vector2(rightControlsX, -268f),
+            new Vector2(rightControlsX, -294f),
             LiquidSimulation.MinimumDropRadiusTenths,
             LiquidSimulation.MaximumDropRadiusTenths,
             sessionDropRadiusTenths,
@@ -291,8 +299,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             debugTextRoot,
             "InitialPacking",
             "Initial packing",
-            new Vector2(rightControlsX, -320f),
-            new Vector2(rightControlsX, -346f),
+            new Vector2(rightControlsX, -348f),
+            new Vector2(rightControlsX, -374f),
             LiquidSimulation.MinimumPackingTenths,
             LiquidSimulation.MaximumPackingTenths,
             sessionInitialPackingTenths,
@@ -388,6 +396,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         UpdateSyringeHandlePositions();
         shaderToggle.onValueChanged.AddListener(SetLiquidShaderEnabled);
         SetLiquidShaderEnabled(shaderToggle.isOn);
+        sharpColorBordersToggle.onValueChanged.AddListener(SetSharpColorBordersEnabled);
+        SetSharpColorBordersEnabled(sharpColorBordersToggle.isOn);
         spawnToggle.onValueChanged.AddListener(SetClickSpawnEnabled);
         SetClickSpawnEnabled(spawnToggle.isOn);
         freezeToggle.onValueChanged.AddListener(SetFreezeSimulation);
@@ -663,6 +673,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         liquidSimulation.SetSurfaceShaderEnabled(enabled);
     }
 
+    private void SetSharpColorBordersEnabled(bool enabled)
+    {
+        sessionSharpColorBordersEnabled = enabled;
+        liquidSimulation.SetSharpColorBordersEnabled(enabled);
+    }
+
     private void SetCollisionPasses(float passes)
     {
         var passCount = Mathf.RoundToInt(passes);
@@ -724,6 +740,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             var selectable = uiCast.gameObject.GetComponentInParent<Selectable>();
             if (selectable == shaderToggle
+                || selectable == sharpColorBordersToggle
                 || selectable == spawnToggle
                 || selectable == freezeToggle)
             {
@@ -746,6 +763,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         var pointer = Input.mousePosition;
         return RectTransformUtility.RectangleContainsScreenPoint(
                 shaderToggle.GetComponent<RectTransform>(),
+                pointer,
+                eventCamera)
+            || RectTransformUtility.RectangleContainsScreenPoint(
+                sharpColorBordersToggle.GetComponent<RectTransform>(),
                 pointer,
                 eventCamera)
             || RectTransformUtility.RectangleContainsScreenPoint(
