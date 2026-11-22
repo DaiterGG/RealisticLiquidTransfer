@@ -17,6 +17,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
     private const float SyringeHandleSmoothTime = 0.04f;
+    private const float SyringeEjectionRate = 20f;
+    private const float SyringeEjectionSpeed = 1000f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
@@ -813,7 +815,8 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         if (Input.GetMouseButtonDown(1))
         {
-            var container = GetContainerUnderPointer(uiCasts);
+            var container = GetSyringeBodyUnderPointer(pointerPosition)
+                ?? GetContainerUnderPointer(uiCasts);
             if (container != null)
             {
                 heldContainer = null;
@@ -836,6 +839,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (activeSyringe != null)
             {
                 activeSyringe.HandleVelocity = 0f;
+                activeSyringe.EjectionVolumeCredit = 0f;
             }
 
             activeSyringe = null;
@@ -1033,15 +1037,41 @@ internal sealed class LiquidTransferMinigame : Minigame
             pointerLocal.y + syringeHandlePointerOffset,
             geometry.FluidBottom.y,
             geometry.FluidTop.y);
-        var handleVelocity = syringe.HandleVelocity;
-        var handleY = Mathf.SmoothDamp(
-            syringe.HandleTransform.anchoredPosition.y,
-            requestedHandleY,
-            ref handleVelocity,
-            SyringeHandleSmoothTime,
-            Mathf.Infinity,
-            Time.unscaledDeltaTime);
-        syringe.HandleVelocity = handleVelocity;
+        var currentHandleY = syringe.HandleTransform.anchoredPosition.y;
+        var otherContainerIndex = drainOnly ? -1 : 1 - syringe.ContainerIndex;
+        var needlePoint = ToRootPoint(syringe.Container, geometry.NeedlePoint);
+        var outletPoint = ToRootPoint(
+            syringe.Container,
+            new Vector2(0f, geometry.FluidBottom.y + 2f));
+        var hasLiquidAtOutlet = liquidSimulation.HasContainerDropNear(
+            syringe.ContainerIndex,
+            outletPoint,
+            LiquidSimulation.DefaultDropRadius * 2f);
+        var deltaTime = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.1f);
+        float handleY;
+        if (requestedHandleY < currentHandleY
+            && hasLiquidAtOutlet
+            && syringe.Capacity > 0f)
+        {
+            var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
+            var maximumDownwardDistance = strokeHeight * SyringeEjectionRate
+                / syringe.Capacity * deltaTime;
+            handleY = Mathf.Max(requestedHandleY, currentHandleY - maximumDownwardDistance);
+            syringe.HandleVelocity = 0f;
+        }
+        else
+        {
+            var handleVelocity = syringe.HandleVelocity;
+            handleY = Mathf.SmoothDamp(
+                currentHandleY,
+                requestedHandleY,
+                ref handleVelocity,
+                SyringeHandleSmoothTime,
+                Mathf.Infinity,
+                deltaTime);
+            syringe.HandleVelocity = handleVelocity;
+        }
+
         syringe.HandleTransform.anchoredPosition = new Vector2(0f, handleY);
         liquidSimulation.SetSyringePistonPosition(syringe.ContainerIndex, handleY);
         var fillRatio = Mathf.InverseLerp(
@@ -1052,62 +1082,76 @@ internal sealed class LiquidTransferMinigame : Minigame
         var currentAmount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
         var difference = requestedAmount - currentAmount;
         var transferUnits = Mathf.FloorToInt(Mathf.Abs(difference) + 0.001f);
-        if (transferUnits <= 0)
-        {
-            return;
-        }
-
-        var otherContainerIndex = drainOnly ? -1 : 1 - syringe.ContainerIndex;
-        var needlePoint = ToRootPoint(syringe.Container, geometry.NeedlePoint);
-        var localOutlet = new Vector2(0f, geometry.FluidBottom.y + 2f);
-        var outletPoint = ToRootPoint(syringe.Container, localOutlet);
         var needleDirection3D = syringe.Container.Transform.localRotation
             * Vector3.Scale(Vector2.down, syringe.Container.Transform.localScale);
         var needleDirection = new Vector2(needleDirection3D.x, needleDirection3D.y).normalized;
-        var remainingUnits = transferUnits;
         if (difference < 0f)
         {
+            if (hasLiquidAtOutlet)
+            {
+                syringe.EjectionVolumeCredit = Mathf.Min(
+                    syringe.EjectionVolumeCredit + SyringeEjectionRate * deltaTime,
+                    syringe.Capacity);
+            }
+
+            var ejectionUnits = Mathf.Min(
+                transferUnits,
+                Mathf.FloorToInt(syringe.EjectionVolumeCredit + 0.001f));
+            var remainingUnits = ejectionUnits;
+            var destinationIndex = otherContainerIndex >= 0
+                && liquidSimulation.ContainsContainer(otherContainerIndex, needlePoint)
+                    ? otherContainerIndex
+                    : -1;
             while (remainingUnits > 0)
             {
                 var moved = liquidSimulation.TryTransferNearestDrop(
                     syringe.ContainerIndex,
-                    -1,
+                    destinationIndex,
                     outletPoint,
                     LiquidSimulation.DefaultDropRadius * 2f,
                     needlePoint,
                     remainingUnits,
-                    needleDirection * (LiquidSimulation.DefaultDropRadius * 5f));
+                    needleDirection * SyringeEjectionSpeed,
+                    destinationIndex >= 0);
                 if (moved <= 0)
                 {
                     break;
                 }
 
                 remainingUnits -= moved;
+                syringe.EjectionVolumeCredit = Mathf.Max(
+                    0f,
+                    syringe.EjectionVolumeCredit - moved);
             }
         }
         else
         {
-            var sourceIndex = otherContainerIndex;
-            var destinationPoint = ToRootPoint(
-                syringe.Container,
-                new Vector2(0f, geometry.FluidBottom.y + LiquidSimulation.DefaultDropRadius));
-            var maximumSourceDistance = LiquidSimulation.DefaultDropRadius * 3f;
-            while (remainingUnits > 0)
+            syringe.EjectionVolumeCredit = 0f;
+            if (transferUnits > 0)
             {
-                var moved = liquidSimulation.TryTransferNearestDrop(
-                    sourceIndex,
-                    syringe.ContainerIndex,
-                    needlePoint,
-                    maximumSourceDistance,
-                    destinationPoint,
-                    remainingUnits,
-                    Vector2.zero);
-                if (moved <= 0)
+                var sourceIndex = otherContainerIndex;
+                var destinationPoint = ToRootPoint(
+                    syringe.Container,
+                    new Vector2(0f, geometry.FluidBottom.y + LiquidSimulation.DefaultDropRadius));
+                var maximumSourceDistance = LiquidSimulation.DefaultDropRadius * 3f;
+                var remainingUnits = transferUnits;
+                while (remainingUnits > 0)
                 {
-                    break;
-                }
+                    var moved = liquidSimulation.TryTransferNearestDrop(
+                        sourceIndex,
+                        syringe.ContainerIndex,
+                        needlePoint,
+                        maximumSourceDistance,
+                        destinationPoint,
+                        remainingUnits,
+                        Vector2.zero);
+                    if (moved <= 0)
+                    {
+                        break;
+                    }
 
-                remainingUnits -= moved;
+                    remainingUnits -= moved;
+                }
             }
         }
     }
@@ -2397,6 +2441,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal float Capacity { get; }
         internal RectTransform HandleTransform { get; }
         internal float HandleVelocity { get; set; }
+        internal float EjectionVolumeCredit { get; set; }
     }
 
     private readonly struct SyringeGeometry

@@ -1026,6 +1026,32 @@ internal sealed class LiquidSimulation
         syringePistonLocalY[containerIndex] = localY;
     }
 
+    internal bool HasContainerDropNear(int containerIndex, Vector2 point, float maximumDistance)
+    {
+        if ((uint)containerIndex >= containers.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(containerIndex));
+        }
+
+        if (maximumDistance < 0f || float.IsNaN(maximumDistance))
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumDistance));
+        }
+
+        var maximumDistanceSquared = maximumDistance * maximumDistance;
+        var assignment = (byte)(containerIndex + 1);
+        for (var drop = 0; drop < count; drop++)
+        {
+            if (containerAssignments[drop] == assignment
+                && (positions[drop] - point).sqrMagnitude <= maximumDistanceSquared)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal int TryTransferNearestDrop(
         int sourceContainerIndex,
         int destinationContainerIndex,
@@ -1033,7 +1059,8 @@ internal sealed class LiquidSimulation
         float maximumSourceDistance,
         Vector2 destinationPoint,
         int maximumVolume,
-        Vector2 outsideVelocity)
+        Vector2 outsideVelocity,
+        bool forceDestination = false)
     {
         if (sourceContainerIndex < -1 || sourceContainerIndex >= containers.Length)
         {
@@ -1084,15 +1111,18 @@ internal sealed class LiquidSimulation
         var destinationAssignment = (byte)(destinationContainerIndex + 1);
         if (destinationContainerIndex >= 0)
         {
-            var radius = GetDropRadius(closestDrop);
-            if (!TryFindTransferPosition(
-                    destinationContainerIndex,
-                    destinationPoint,
-                    radius,
-                    closestDrop,
-                    out destinationPosition))
+            if (!forceDestination)
             {
-                return 0;
+                var radius = GetDropRadius(closestDrop);
+                if (!TryFindTransferPosition(
+                        destinationContainerIndex,
+                        destinationPoint,
+                        radius,
+                        closestDrop,
+                        out destinationPosition))
+                {
+                    return 0;
+                }
             }
         }
         else
@@ -1102,9 +1132,7 @@ internal sealed class LiquidSimulation
 
         positions[closestDrop] = destinationPosition;
         previousPositions[closestDrop] = destinationPosition;
-        velocities[closestDrop] = destinationContainerIndex >= 0
-            ? Vector2.zero
-            : outsideVelocity;
+        velocities[closestDrop] = outsideVelocity;
         fastOutsideDrops[closestDrop] = false;
         containerAssignments[closestDrop] = destinationAssignment;
         dropSizeZoneAssignments[closestDrop] = destinationContainerIndex >= 0
