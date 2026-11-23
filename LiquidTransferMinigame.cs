@@ -16,9 +16,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
-    private const float SyringeHandleSmoothTime = 0.04f;
     private const float SyringeFreePistonSpeed = 420f;
-    private const float SyringeEjectionRate = 24f;
+    private const float SyringeVolumeTransferRate = 24f;
     private const float SyringeEjectionSpeed = 1000f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
@@ -401,7 +400,6 @@ internal sealed class LiquidTransferMinigame : Minigame
                     var localPointer = ToContainerLocalPoint(activeSyringe.Container, pointerPosition);
                     syringeHandlePointerOffset =
                         activeSyringe.HandleTransform.anchoredPosition.y - localPointer.y;
-                    activeSyringe.HandleVelocity = 0f;
                 }
                 else
                 {
@@ -440,8 +438,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             heldVisual = null;
             if (activeSyringe != null)
             {
-                activeSyringe.HandleVelocity = 0f;
                 activeSyringe.EjectionVolumeCredit = 0f;
+                activeSyringe.IntakeVolumeCredit = 0f;
             }
 
             activeSyringe = null;
@@ -523,7 +521,6 @@ internal sealed class LiquidTransferMinigame : Minigame
                 syringe.Container.Geometry.FluidBottom.y,
                 syringe.Container.Geometry.FluidTop.y,
                 fillRatio));
-        syringe.HandleVelocity = 0f;
         liquidSimulation.SetSyringePistonPosition(
             syringe.ContainerIndex,
             syringe.HandleTransform.anchoredPosition.y);
@@ -599,34 +596,40 @@ internal sealed class LiquidTransferMinigame : Minigame
             outletPoint,
             LiquidSimulation.DefaultDropRadius * 2f);
         var deltaTime = Mathf.Clamp(Time.unscaledDeltaTime, 0f, 0.1f);
+        var movementDeltaTime = Mathf.Min(deltaTime, 1f / 30f);
         float handleY;
         if (requestedHandleY < currentHandleY)
         {
-            var movementDeltaTime = Mathf.Min(deltaTime, 1f / 30f);
             var maximumDownwardSpeed = SyringeFreePistonSpeed;
             if (hasLiquidAtOutlet && syringe.Capacity > 0f)
             {
                 var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
                 maximumDownwardSpeed = Mathf.Min(
                     maximumDownwardSpeed,
-                    strokeHeight * SyringeEjectionRate / syringe.Capacity);
+                    strokeHeight * SyringeVolumeTransferRate / syringe.Capacity);
             }
 
             var maximumDownwardDistance = maximumDownwardSpeed * movementDeltaTime;
             handleY = Mathf.Max(requestedHandleY, currentHandleY - maximumDownwardDistance);
-            syringe.HandleVelocity = 0f;
+        }
+        else if (requestedHandleY > currentHandleY)
+        {
+            var maximumUpwardSpeed = SyringeFreePistonSpeed;
+            if (syringe.Capacity > 0f)
+            {
+                var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
+                maximumUpwardSpeed = Mathf.Min(
+                    maximumUpwardSpeed,
+                    strokeHeight * SyringeVolumeTransferRate / syringe.Capacity);
+            }
+
+            handleY = Mathf.Min(
+                requestedHandleY,
+                currentHandleY + maximumUpwardSpeed * movementDeltaTime);
         }
         else
         {
-            var handleVelocity = syringe.HandleVelocity;
-            handleY = Mathf.SmoothDamp(
-                currentHandleY,
-                requestedHandleY,
-                ref handleVelocity,
-                SyringeHandleSmoothTime,
-                Mathf.Infinity,
-                deltaTime);
-            syringe.HandleVelocity = handleVelocity;
+            handleY = currentHandleY;
         }
 
         syringe.HandleTransform.anchoredPosition = new Vector2(0f, handleY);
@@ -645,6 +648,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         if (handleY <= geometry.FluidBottom.y + 0.01f)
         {
             syringe.EjectionVolumeCredit = 0f;
+            syringe.IntakeVolumeCredit = 0f;
             var destinationIndex = otherContainerIndex >= 0
                 && liquidSimulation.ContainsContainer(otherContainerIndex, needlePoint)
                     ? otherContainerIndex
@@ -674,10 +678,11 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         if (difference < 0f)
         {
+            syringe.IntakeVolumeCredit = 0f;
             if (hasLiquidAtOutlet)
             {
                 syringe.EjectionVolumeCredit = Mathf.Min(
-                    syringe.EjectionVolumeCredit + SyringeEjectionRate * deltaTime,
+                    syringe.EjectionVolumeCredit + SyringeVolumeTransferRate * movementDeltaTime,
                     syringe.Capacity);
             }
 
@@ -716,6 +721,9 @@ internal sealed class LiquidTransferMinigame : Minigame
             syringe.EjectionVolumeCredit = 0f;
             if (transferUnits > 0)
             {
+                syringe.IntakeVolumeCredit = Mathf.Min(
+                    syringe.IntakeVolumeCredit + SyringeVolumeTransferRate * movementDeltaTime,
+                    syringe.Capacity);
                 var sourceIndex = otherContainerIndex;
                 var destinationPoint = ToRootPoint(
                     syringe.Container,
@@ -734,11 +742,24 @@ internal sealed class LiquidTransferMinigame : Minigame
                         Vector2.zero);
                     if (moved <= 0)
                     {
+                        syringe.IntakeVolumeCredit = 0f;
                         break;
                     }
 
                     remainingUnits -= moved;
+                    syringe.IntakeVolumeCredit = Mathf.Max(
+                        0f,
+                        syringe.IntakeVolumeCredit - moved);
                 }
+
+                if (remainingUnits > 0)
+                {
+                    syringe.IntakeVolumeCredit = 0f;
+                }
+            }
+            else
+            {
+                syringe.IntakeVolumeCredit = 0f;
             }
         }
     }
@@ -2204,8 +2225,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal int ContainerIndex { get; }
         internal float Capacity { get; }
         internal RectTransform HandleTransform { get; }
-        internal float HandleVelocity { get; set; }
         internal float EjectionVolumeCredit { get; set; }
+        internal float IntakeVolumeCredit { get; set; }
     }
 
     private readonly struct SyringeGeometry
