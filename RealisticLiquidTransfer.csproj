@@ -40,10 +40,13 @@
     <Compile Include="DebugLaunchSetup.cs" />
   </ItemGroup>
   <Target Name="GenerateContainerBoundaries" BeforeTargets="CoreCompile">
-    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\tools\SpriteBoundaryGenerator\SpriteBoundaryGenerator.csproj&quot; --configuration Release -- &quot;$(MSBuildProjectDirectory)\resources&quot; &quot;$(MSBuildProjectDirectory)\Generated\ContainerBoundaries.g.cs&quot;" />
+    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\tools\SpriteBoundaryGenerator\SpriteBoundaryGenerator.csproj&quot; --configuration Release -- &quot;$(MSBuildProjectDirectory)\resources\sprites\containers&quot; &quot;$(MSBuildProjectDirectory)\Generated\ContainerBoundaries.g.cs&quot;" />
   </Target>
   <ItemGroup>
     <EmbeddedResource Include="resources\*.png">
+      <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="resources\sprites\containers\*.png">
       <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="resources\*.bundle">

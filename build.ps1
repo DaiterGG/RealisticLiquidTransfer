@@ -26,7 +26,7 @@ $unityImageAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Manage
 $unityUiAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\UnityEngine.UI.dll'
 $unityUiModuleAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\UnityEngine.UIModule.dll'
 $unityTextRenderingAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\UnityEngine.TextRenderingModule.dll'
-$containerSpriteDirectory = Join-Path $PSScriptRoot 'resources'
+$containerSpriteDirectory = Join-Path $PSScriptRoot 'resources\sprites\containers'
 $defaultContainerSprite = Join-Path $containerSpriteDirectory 'default.png'
 $referenceContainerSprite = Join-Path $containerSpriteDirectory 'coffee.png'
 
