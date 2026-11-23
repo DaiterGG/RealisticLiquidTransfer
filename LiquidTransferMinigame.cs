@@ -604,7 +604,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         if (requestedHandleY < currentHandleY)
         {
             var maximumDownwardSpeed = SyringeFreePistonSpeed;
-            if (hasLiquidAtOutlet && syringe.Capacity > 0f)
+            if (syringe.Capacity > 0f)
             {
                 var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
                 maximumDownwardSpeed = Mathf.Min(
@@ -758,12 +758,14 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         var requests = syringe.IntakeRequests;
         var pendingVolume = 0f;
+        var expiredAsAir = 0f;
         for (var index = requests.Count - 1; index >= 0; index--)
         {
             var request = requests[index];
             request.RemainingLifetime -= deltaTime;
             if (request.RemainingLifetime <= 0f || request.RemainingVolume <= 0f)
             {
+                expiredAsAir += request.RemainingVolume;
                 requests.RemoveAt(index);
             }
             else
@@ -772,53 +774,86 @@ internal sealed class LiquidTransferMinigame : Minigame
             }
         }
 
-        if (pendingVolume <= 0f)
-        {
-            syringe.IntakeVolumeCredit = 0f;
-            return;
-        }
-
-        syringe.IntakeVolumeCredit = Mathf.Min(
-            syringe.IntakeVolumeCredit + SyringeVolumeTransferRate * movementDeltaTime,
-            syringe.Capacity);
-        var remainingUnits = Mathf.Min(
-            Mathf.FloorToInt(pendingVolume + 0.001f),
-            Mathf.FloorToInt(syringe.IntakeVolumeCredit + 0.001f));
-        if (remainingUnits <= 0)
-        {
-            return;
-        }
-
         var geometry = syringe.Container.Geometry;
         var otherContainerIndex = drainOnly ? -1 : 1 - syringe.ContainerIndex;
         var needlePoint = ToRootPoint(syringe.Container, geometry.NeedlePoint);
-        var localDropRadius = LiquidSimulation.DefaultDropRadius
-            / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
-        var destinationPoint = ToRootPoint(
-            syringe.Container,
-            new Vector2(0f, geometry.FluidBottom.y + localDropRadius));
         var maximumSourceDistance = LiquidSimulation.DefaultDropRadius * 3f;
-        while (remainingUnits > 0)
+        var sourceDropCount = -1;
+        var sourceDropNearNeedle = false;
+        if (DebugLog.IsFileEnabled && otherContainerIndex >= 0)
         {
-            var moved = liquidSimulation.TryTransferNearestDrop(
+            sourceDropCount = liquidSimulation.GetContainerDropCount(otherContainerIndex);
+            sourceDropNearNeedle = liquidSimulation.HasContainerDropNear(
                 otherContainerIndex,
-                syringe.ContainerIndex,
                 needlePoint,
-                maximumSourceDistance,
-                destinationPoint,
-                remainingUnits,
-                Vector2.zero);
-            if (moved <= 0)
-            {
-                syringe.IntakeVolumeCredit = 0f;
-                break;
-            }
+                maximumSourceDistance);
+        }
 
-            remainingUnits -= moved;
-            ConsumeSyringeIntakeRequests(syringe, moved);
-            syringe.IntakeVolumeCredit = Mathf.Max(
+        var liquidTaken = 0;
+        if (pendingVolume <= 0f)
+        {
+            syringe.IntakeVolumeCredit = 0f;
+        }
+        else
+        {
+            syringe.IntakeVolumeCredit = Mathf.Min(
+                syringe.IntakeVolumeCredit + SyringeVolumeTransferRate * movementDeltaTime,
+                Mathf.Min(syringe.Capacity, pendingVolume));
+            var remainingUnits = Mathf.Min(
+                Mathf.FloorToInt(pendingVolume + 0.001f),
+                Mathf.FloorToInt(syringe.IntakeVolumeCredit + 0.001f));
+            if (remainingUnits > 0)
+            {
+                var localDropRadius = LiquidSimulation.DefaultDropRadius
+                    / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
+                var destinationPoint = ToRootPoint(
+                    syringe.Container,
+                    new Vector2(0f, geometry.FluidBottom.y + localDropRadius));
+                while (remainingUnits > 0)
+                {
+                    var moved = liquidSimulation.TryTransferNearestDrop(
+                        otherContainerIndex,
+                        syringe.ContainerIndex,
+                        needlePoint,
+                        maximumSourceDistance,
+                        destinationPoint,
+                        remainingUnits,
+                        Vector2.zero);
+                    if (moved <= 0)
+                    {
+                        break;
+                    }
+
+                    remainingUnits -= moved;
+                    liquidTaken += moved;
+                    pendingVolume = Mathf.Max(0f, pendingVolume - moved);
+                    ConsumeSyringeIntakeRequests(syringe, moved);
+                    syringe.IntakeVolumeCredit = Mathf.Max(
+                        0f,
+                        syringe.IntakeVolumeCredit - moved);
+                }
+            }
+        }
+
+        syringe.DiagnosticLiquidTaken += liquidTaken;
+        syringe.DiagnosticAirExpired += expiredAsAir;
+        if (DebugLog.IsFileEnabled && Time.unscaledTime >= syringe.NextDiagnosticLogTime)
+        {
+            var currentAmount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
+            var airGapVolume = Mathf.Max(
                 0f,
-                syringe.IntakeVolumeCredit - moved);
+                syringe.LastRequestedAmount - currentAmount - pendingVolume);
+            DebugLog.Write(
+                $"Syringe intake index={syringe.ContainerIndex}: capacity={syringe.Capacity:F1}, "
+                + $"liquid={currentAmount:F1}, handleY={syringe.HandleTransform.anchoredPosition.y:F1}, "
+                + $"requested={syringe.LastRequestedAmount:F1}, pending={pendingVolume:F1}, "
+                + $"liquidTaken={syringe.DiagnosticLiquidTaken:F1}, "
+                + $"airExpired={syringe.DiagnosticAirExpired:F1}, airGap={airGapVolume:F1}, "
+                + $"sourceDrops={sourceDropCount}, sourceNearNeedle={sourceDropNearNeedle}, "
+                + $"intakeCredit={syringe.IntakeVolumeCredit:F1}.");
+            syringe.DiagnosticLiquidTaken = 0f;
+            syringe.DiagnosticAirExpired = 0f;
+            syringe.NextDiagnosticLogTime = Time.unscaledTime + 0.25f;
         }
     }
 
@@ -2321,6 +2356,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         internal float IntakeVolumeCredit { get; set; }
         internal float LastRequestedAmount { get; set; }
         internal List<SyringeIntakeRequest> IntakeRequests { get; }
+        internal float DiagnosticLiquidTaken { get; set; }
+        internal float DiagnosticAirExpired { get; set; }
+        internal float NextDiagnosticLogTime { get; set; }
     }
 
     private sealed class SyringeIntakeRequest
