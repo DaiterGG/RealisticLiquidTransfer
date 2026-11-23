@@ -1182,8 +1182,7 @@ internal sealed class LiquidSimulation
         var closestDrop = -1;
         for (var drop = 0; drop < count; drop++)
         {
-            if (containerAssignments[drop] != sourceAssignment
-                || dropVolumes[drop] > maximumVolume)
+            if (containerAssignments[drop] != sourceAssignment || dropVolumes[drop] == 0)
             {
                 continue;
             }
@@ -1203,6 +1202,14 @@ internal sealed class LiquidSimulation
             return 0;
         }
 
+        var sourceVolume = dropVolumes[closestDrop];
+        var transferVolume = Mathf.Min(sourceVolume, maximumVolume);
+        var isPartialTransfer = transferVolume < sourceVolume;
+        if (isPartialTransfer && count >= MaximumDrops)
+        {
+            return 0;
+        }
+
         var destinationPosition = destinationPoint;
         var destinationAssignment = (byte)(destinationContainerIndex + 1);
         if (destinationContainerIndex >= 0)
@@ -1210,6 +1217,11 @@ internal sealed class LiquidSimulation
             if (!forceDestination)
             {
                 var radius = GetDropRadius(closestDrop);
+                if (isPartialTransfer)
+                {
+                    radius = dropRadius * Mathf.Sqrt(transferVolume);
+                }
+
                 if (!TryFindTransferPosition(
                         destinationContainerIndex,
                         destinationPoint,
@@ -1226,23 +1238,80 @@ internal sealed class LiquidSimulation
             destinationAssignment = 0;
         }
 
-        positions[closestDrop] = destinationPosition;
-        previousPositions[closestDrop] = destinationPosition;
-        velocities[closestDrop] = outsideVelocity;
-        fastOutsideDrops[closestDrop] = false;
-        containerAssignments[closestDrop] = destinationAssignment;
-        dropSizeZoneAssignments[closestDrop] = destinationContainerIndex >= 0
+        var sizeZoneAssignment = destinationContainerIndex >= 0
             && containers[destinationContainerIndex].IsPastSizeZone(destinationPosition)
                 ? destinationAssignment
                 : (byte)0;
-        densitySwapPaths[closestDrop] = new Vector4(
-            destinationPosition.x,
-            destinationPosition.y,
-            destinationPosition.x,
-            destinationPosition.y);
-        mergeDelayRemaining[closestDrop] = 0f;
+        if (isPartialTransfer)
+        {
+            var movedHead = dropUnitHeads[closestDrop];
+            if (movedHead < 0)
+            {
+                throw new InvalidOperationException("A merged liquid drop has no constituent units.");
+            }
+
+            var movedTail = movedHead;
+            for (var member = 1; member < transferVolume; member++)
+            {
+                movedTail = unitNext[movedTail];
+                if (movedTail < 0)
+                {
+                    throw new InvalidOperationException(
+                        "A merged liquid drop has fewer constituent units than its volume.");
+                }
+            }
+
+            var remainingHead = unitNext[movedTail];
+            if (remainingHead < 0)
+            {
+                throw new InvalidOperationException(
+                    "A partial liquid transfer did not leave any source units.");
+            }
+
+            unitNext[movedTail] = -1;
+            dropUnitHeads[closestDrop] = remainingHead;
+            dropVolumes[closestDrop] = (byte)(sourceVolume - transferVolume);
+            dropColors[closestDrop] = GetColorForUnits(remainingHead);
+
+            var transferredDrop = count++;
+            positions[transferredDrop] = destinationPosition;
+            previousPositions[transferredDrop] = destinationPosition;
+            velocities[transferredDrop] = outsideVelocity;
+            fastOutsideDrops[transferredDrop] = false;
+            mergeDelayRemaining[transferredDrop] = 0f;
+            dropIds[transferredDrop] = nextDropId++;
+            dropVolumes[transferredDrop] = (byte)transferVolume;
+            containerAssignments[transferredDrop] = destinationAssignment;
+            dropSizeZoneAssignments[transferredDrop] = sizeZoneAssignment;
+            dropColors[transferredDrop] = GetColorForUnits(movedHead);
+            densitySwapPaths[transferredDrop] = new Vector4(
+                destinationPosition.x,
+                destinationPosition.y,
+                destinationPosition.x,
+                destinationPosition.y);
+            densitySwapProgress[transferredDrop] = -1f;
+            dropUnitHeads[transferredDrop] = movedHead;
+            dropUnitTails[transferredDrop] = movedTail;
+        }
+        else
+        {
+            positions[closestDrop] = destinationPosition;
+            previousPositions[closestDrop] = destinationPosition;
+            velocities[closestDrop] = outsideVelocity;
+            fastOutsideDrops[closestDrop] = false;
+            containerAssignments[closestDrop] = destinationAssignment;
+            dropSizeZoneAssignments[closestDrop] = sizeZoneAssignment;
+            dropColors[closestDrop] = GetColorForUnits(dropUnitHeads[closestDrop]);
+            densitySwapPaths[closestDrop] = new Vector4(
+                destinationPosition.x,
+                destinationPosition.y,
+                destinationPosition.x,
+                destinationPosition.y);
+            mergeDelayRemaining[closestDrop] = 0f;
+        }
+
         graphicsDirty = true;
-        return dropVolumes[closestDrop];
+        return transferVolume;
     }
 
     private bool TryFindTransferPosition(

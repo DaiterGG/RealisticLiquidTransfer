@@ -806,9 +806,22 @@ internal sealed class LiquidTransferMinigame : Minigame
             {
                 var localDropRadius = LiquidSimulation.DefaultDropRadius
                     / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
+                var liquidAmount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
+                var fillRatio = syringe.Capacity > 0f
+                    ? Mathf.Clamp01(liquidAmount / syringe.Capacity)
+                    : 0f;
+                var surfaceY = Mathf.Lerp(
+                    geometry.FluidBottom.y,
+                    geometry.FluidTop.y,
+                    fillRatio);
+                var maximumY = syringe.HandleTransform.anchoredPosition.y - localDropRadius;
+                var destinationY = Mathf.Clamp(
+                    Mathf.Min(surfaceY + localDropRadius, maximumY),
+                    geometry.FluidBottom.y + localDropRadius,
+                    geometry.FluidTop.y - localDropRadius);
                 var destinationPoint = ToRootPoint(
                     syringe.Container,
-                    new Vector2(0f, geometry.FluidBottom.y + localDropRadius));
+                    new Vector2(0f, destinationY));
                 while (remainingUnits > 0)
                 {
                     var moved = liquidSimulation.TryTransferNearestDrop(
