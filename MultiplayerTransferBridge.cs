@@ -75,11 +75,21 @@ internal static class MultiplayerTransferBridge
     private static object reliableOrdered;
     private static bool initialized;
     private static Assembly failedAssembly;
+    private static string lastDetectionState;
+    private static string lastRouteState;
 
     internal static void InitializeIfAvailable()
     {
         var assembly = FindMultiplayerAssembly();
-        if (assembly == null || initialized || assembly == failedAssembly)
+        if (assembly == null)
+        {
+            LogDetectionState("Multiplayer detection: Together.Net assembly is not loaded.");
+            return;
+        }
+
+        LogDetectionState(
+            $"Multiplayer detection: found {assembly.FullName}; location='{GetAssemblyLocation(assembly)}'.");
+        if (initialized || assembly == failedAssembly)
         {
             return;
         }
@@ -98,6 +108,13 @@ internal static class MultiplayerTransferBridge
             registerClientReceiver = FindReceiverRegistration(multiplayerType, 1);
             deliveryMethodType = FindDeliveryMethodType(assembly);
             reliableOrdered = Enum.Parse(deliveryMethodType, "ReliableOrdered");
+
+            if (createNamedWriter == null)
+            {
+                throw new MissingMethodException(
+                    multiplayerType.FullName,
+                    "CreateNamedWriter(string)");
+            }
 
             var writerType = createNamedWriter.ReturnType;
             var netDataReaderType = FindReaderType(assembly);
@@ -120,6 +137,18 @@ internal static class MultiplayerTransferBridge
                 writerType,
                 deliveryMethodType,
                 assembly.GetType("Together.ScavPlayer", true));
+            itemReachCheck = FindItemReachCheck(assembly);
+
+            DebugLog.Write(
+                "Multiplayer API discovery: "
+                + $"CreateNamedWriter={DescribeMethod(createNamedWriter)}; "
+                + $"server receiver={DescribeMethod(registerServerReceiver)}; "
+                + $"client receiver={DescribeMethod(registerClientReceiver)}; "
+                + $"writer bytes={DescribeMethod(writerPutBytes)}; "
+                + $"reader bytes={DescribeMethod(readerGetBytes)}; "
+                + $"client send={DescribeMethod(clientSend)}; "
+                + $"server send-to={DescribeMethod(serverSendTo)}; "
+                + $"item reach check={DescribeMethod(itemReachCheck)}.");
 
             if (createNamedWriter == null
                 || registerServerReceiver == null
@@ -145,9 +174,11 @@ internal static class MultiplayerTransferBridge
 
             registerServerReceiver.Invoke(null, new object[] { ChannelName, serverCallback });
             registerClientReceiver.Invoke(null, new object[] { ChannelName, clientCallback });
-            itemReachCheck = FindItemReachCheck(assembly);
             initialized = true;
-            DebugLog.Write("Registered multiplayer liquid-transfer message handlers.");
+            DebugLog.Write(
+                itemReachCheck == null
+                    ? "Registered multiplayer liquid-transfer message handlers, but item reach checking is unavailable; host transfers will be rejected."
+                    : "Registered multiplayer liquid-transfer message handlers; required reflection APIs were found.");
         }
         catch (Exception exception)
         {
@@ -162,44 +193,46 @@ internal static class MultiplayerTransferBridge
         var assembly = FindMultiplayerAssembly();
         if (assembly == null)
         {
-            return TransferCommitRoute.Local;
+            return LogRoute(TransferCommitRoute.Local, "multiplayer assembly not loaded");
         }
 
         InitializeIfAvailable();
         var type = assembly.GetType("Together.Net", false);
         if (type == null)
         {
-            return TransferCommitRoute.Local;
+            return LogRoute(TransferCommitRoute.Local, "Together.Net type not found");
         }
 
         try
         {
             if (!ReadBooleanProperty(type, "IsRunning"))
             {
-                return TransferCommitRoute.Local;
+                return LogRoute(TransferCommitRoute.Local, "multiplayer is not running");
             }
 
             if (!initialized)
             {
-                return TransferCommitRoute.Unavailable;
+                return LogRoute(TransferCommitRoute.Unavailable, "multiplayer is running but integration is not initialized");
             }
 
-            if (ReadBooleanProperty(type, "IsServer"))
+            var isServer = ReadBooleanProperty(type, "IsServer");
+            var isClient = ReadBooleanProperty(type, "IsClient");
+            if (isServer)
             {
-                return TransferCommitRoute.Host;
+                return LogRoute(TransferCommitRoute.Host, $"running=true, server=true, client={isClient}");
             }
 
-            if (ReadBooleanProperty(type, "IsClient"))
+            if (isClient)
             {
-                return TransferCommitRoute.Client;
+                return LogRoute(TransferCommitRoute.Client, "running=true, server=false, client=true");
             }
 
-            return TransferCommitRoute.Unavailable;
+            return LogRoute(TransferCommitRoute.Unavailable, "running=true, but neither server nor client");
         }
         catch (Exception exception)
         {
             Plugin.ReportNetworkError($"Could not determine multiplayer liquid-transfer route: {exception}");
-            return TransferCommitRoute.Unavailable;
+            return LogRoute(TransferCommitRoute.Unavailable, $"role detection failed: {exception.Message}");
         }
     }
 
@@ -209,11 +242,27 @@ internal static class MultiplayerTransferBridge
         out ContainerLiquidChange change)
     {
         change = null;
-        if (!container
-            || container.stack == null
-            || !TryGetClientSyncInfo(container.gameObject, out var syncInfo)
-            || !TryGetSyncIdentity(syncInfo, out var syncId, out var version))
+        if (!container)
         {
+            DebugLog.Write("Container detection failed: transfer container reference is missing.");
+            return false;
+        }
+
+        if (container.stack == null)
+        {
+            DebugLog.Write($"Container detection failed: '{container.gameObject.name}' has no liquid stack.");
+            return false;
+        }
+
+        if (!TryGetClientSyncInfo(container.gameObject, out var syncInfo))
+        {
+            DebugLog.Write($"Container detection failed: '{container.gameObject.name}' has no multiplayer sync entry.");
+            return false;
+        }
+
+        if (!TryGetSyncIdentity(syncInfo, out var syncId, out var version))
+        {
+            DebugLog.Write($"Container detection failed: '{container.gameObject.name}' has no valid sync ID/version.");
             return false;
         }
 
@@ -224,6 +273,9 @@ internal static class MultiplayerTransferBridge
             Expected = CaptureComposition(container),
             Target = target
         };
+        DebugLog.Write(
+            $"Detected transfer container '{container.gameObject.name}': syncId={syncId}, version={version}, "
+            + $"current=[{FormatComposition(change.Expected)}], target=[{FormatComposition(change.Target)}].");
         return true;
     }
 
@@ -260,6 +312,54 @@ internal static class MultiplayerTransferBridge
         }
 
         return null;
+    }
+
+    private static string GetAssemblyLocation(Assembly assembly)
+    {
+        try
+        {
+            return string.IsNullOrEmpty(assembly.Location) ? "<dynamic>" : assembly.Location;
+        }
+        catch (NotSupportedException)
+        {
+            return "<unavailable>";
+        }
+    }
+
+    private static string DescribeMethod(MethodInfo method)
+    {
+        return method == null ? "<missing>" : method.ToString();
+    }
+
+    [System.Diagnostics.Conditional("LIQUID_TRANSFER_DEBUG_LOGGING")]
+    private static void LogDetectionState(string state)
+    {
+        if (string.Equals(lastDetectionState, state, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lastDetectionState = state;
+        DebugLog.Write(state);
+    }
+
+    private static TransferCommitRoute LogRoute(TransferCommitRoute route, string details)
+    {
+        var state = $"Multiplayer transfer route: {route} ({details}).";
+        if (!string.Equals(lastRouteState, state, StringComparison.Ordinal))
+        {
+            lastRouteState = state;
+            DebugLog.Write(state);
+        }
+
+        return route;
+    }
+
+    private static string FormatComposition(List<LiquidAmount> amounts)
+    {
+        return amounts == null
+            ? "<missing>"
+            : string.Join(", ", amounts.Select(entry => $"{entry.LiquidId}={entry.Amount:F2} ml"));
     }
 
     private static MethodInfo FindStaticMethod(
@@ -416,10 +516,19 @@ internal static class MultiplayerTransferBridge
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as IDictionary;
         if (registry == null || !registry.Contains(gameObject))
         {
+            DebugLog.Write(
+                registry == null
+                    ? "Container detection failed: multiplayer SyncRegistry is unavailable."
+                    : $"Container detection failed: '{gameObject.name}' is not in multiplayer SyncRegistry.");
             return false;
         }
 
         syncInfo = registry[gameObject];
+        if (syncInfo == null)
+        {
+            DebugLog.Write($"Container detection failed: '{gameObject.name}' has a null multiplayer sync entry.");
+        }
+
         return syncInfo != null;
     }
 
@@ -427,8 +536,15 @@ internal static class MultiplayerTransferBridge
     {
         syncId = 0;
         version = 0;
-        if (syncInfo == null || ReadMember(syncInfo, "IsDestroyed") is bool destroyed && destroyed)
+        if (syncInfo == null)
         {
+            DebugLog.Write("Container detection failed: multiplayer sync information is null.");
+            return false;
+        }
+
+        if (ReadMember(syncInfo, "IsDestroyed") is bool destroyed && destroyed)
+        {
+            DebugLog.Write("Container detection failed: multiplayer sync information is destroyed.");
             return false;
         }
 
@@ -436,12 +552,19 @@ internal static class MultiplayerTransferBridge
         var rawId = ReadMember(rawSyncId, "id");
         if (rawId == null)
         {
+            DebugLog.Write("Container detection failed: multiplayer sync ID is unavailable.");
             return false;
         }
 
         syncId = Convert.ToUInt16(rawId);
         version = Convert.ToByte(ReadMember(syncInfo, "Version"));
-        return syncId != 0;
+        if (syncId == 0)
+        {
+            DebugLog.Write("Container detection failed: multiplayer sync ID is zero.");
+            return false;
+        }
+
+        return true;
     }
 
     private static object ReadMember(object instance, string name)
@@ -535,6 +658,14 @@ internal static class MultiplayerTransferBridge
         WriteAmounts(writer, change.Target);
     }
 
+    private static string FormatChange(ContainerLiquidChange change)
+    {
+        return change == null
+            ? "<missing>"
+            : $"syncId={change.SyncId}/v{change.Version}, current=[{FormatComposition(change.Expected)}], "
+                + $"target=[{FormatComposition(change.Target)}]";
+    }
+
     private static void WriteAmounts(BinaryWriter writer, List<LiquidAmount> amounts)
     {
         if (amounts == null || amounts.Count > MaximumLiquidEntries)
@@ -568,6 +699,11 @@ internal static class MultiplayerTransferBridge
             var payload = ReadPayload(reader);
             var request = DeserializeRequest(payload);
             requestId = request.RequestId;
+            DebugLog.Write(
+                $"Host received liquid-transfer request {requestId:N} from {sender.GetType().Name}: "
+                + $"drainOnly={request.DrainOnly}, noLiquidLoss={request.NoLiquidLoss}, "
+                + $"receiver={FormatChange(request.Receiver)}, "
+                + $"source={(request.Source == null ? "<none>" : FormatChange(request.Source))}.");
 
             if (AppliedRequests.Contains(requestId))
             {
@@ -586,6 +722,10 @@ internal static class MultiplayerTransferBridge
             Plugin.ReportNetworkError($"Rejected multiplayer liquid-transfer request: {exception}");
         }
 
+        DebugLog.Write(
+            accepted
+                ? $"Host accepted liquid-transfer request {requestId:N}."
+                : $"Host rejected liquid-transfer request {requestId:N}: {reason}");
         SendResponse(sender, requestId, accepted, reason);
     }
 
@@ -1005,7 +1145,15 @@ internal static class MultiplayerTransferBridge
             var method = syncInfo.GetType().GetMethod(
                 "WriteObjectIntoPacket",
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            method?.Invoke(syncInfo, null);
+            if (method == null)
+            {
+                Plugin.ReportNetworkWarning(
+                    $"Could not publish liquid-transfer item sync: {syncInfo.GetType().FullName} has no WriteObjectIntoPacket method.");
+                return;
+            }
+
+            method.Invoke(syncInfo, null);
+            DebugLog.Write($"Published multiplayer item sync through {DescribeMethod(method)}.");
         }
         catch (Exception exception)
         {
@@ -1038,6 +1186,7 @@ internal static class MultiplayerTransferBridge
 
             var writerObject = CreateNamedWriter(payload);
             serverSendTo.Invoke(null, new[] { reliableOrdered, writerObject, sender });
+            DebugLog.Write($"Sent liquid-transfer response {requestId:N}: accepted={accepted}, reason='{reason}'.");
         }
         catch (Exception exception)
         {

@@ -31,17 +31,21 @@ public sealed class Plugin : BaseUnityPlugin
 #endif
         DebugLog.Initialize(Logger);
         ModSprites.Load();
+        DebugLog.Write("Container sprites loaded.");
         try
         {
             LiquidShaderAssets.Load();
+            DebugLog.Write("Liquid shader assets loaded.");
         }
         catch (System.Exception exception)
         {
             Logger.LogError($"Could not load the liquid shader bundle: {exception}");
+            DebugLog.Write($"Could not load the liquid shader bundle: {exception}");
         }
 
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll();
+        DebugLog.Write($"Harmony patches applied for {PluginGuid}.");
         MultiplayerTransferBridge.InitializeIfAvailable();
         LogInfo($"{PluginName} {PluginVersion} loaded.");
         DebugLog.Write($"{PluginName} {PluginVersion} loaded.");
@@ -55,7 +59,11 @@ public sealed class Plugin : BaseUnityPlugin
         }
 
         nextMultiplayerBridgeCheck = UnityEngine.Time.unscaledTime + 1f;
+#if LIQUID_TRANSFER_DEBUG_LOGGING
+        MultiplayerTransferBridge.GetRoute();
+#else
         MultiplayerTransferBridge.InitializeIfAvailable();
+#endif
     }
 
     private void OnDestroy()
@@ -80,11 +88,13 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static void ReportNetworkWarning(string message)
     {
+        DebugLog.Write($"Network warning: {message}");
         instance?.Logger.LogWarning(message);
     }
 
     internal static void ReportNetworkError(string message)
     {
+        DebugLog.Write($"Network error: {message}");
         instance?.Logger.LogError(message);
     }
 
