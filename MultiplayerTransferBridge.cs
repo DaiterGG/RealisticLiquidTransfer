@@ -79,7 +79,34 @@ internal static class MultiplayerTransferBridge
     private static string lastDetectionState;
     private static string lastRouteState;
 
-    internal static bool IsMultiplayerModLoaded => FindMultiplayerAssembly() != null;
+    internal static bool IsMultiplayerSessionRunning
+    {
+        get
+        {
+            var assembly = FindMultiplayerAssembly();
+            if (assembly == null)
+            {
+                return false;
+            }
+
+            var type = assembly.GetType("Together.Net", false);
+            if (type == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return ReadBooleanProperty(type, "IsRunning");
+            }
+            catch (Exception exception)
+            {
+                Plugin.ReportNetworkWarning(
+                    $"Could not detect multiplayer state for debug startup; skipping tutorial to be safe: {exception}");
+                return true;
+            }
+        }
+    }
 
     internal static void PatchMinigameSyncCompatibility(HarmonyLib.Harmony harmony)
     {

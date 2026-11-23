@@ -19,9 +19,9 @@ internal static class DebugLaunchMenuPatch
         }
 
         _launchStarted = true;
-        if (MultiplayerTransferBridge.IsMultiplayerModLoaded)
+        if (MultiplayerTransferBridge.IsMultiplayerSessionRunning)
         {
-            Plugin.LogInfo("Debug startup: skipped tutorial because the multiplayer mod is enabled.");
+            Plugin.LogInfo("Debug startup: skipped tutorial because a multiplayer session is active.");
             return;
         }
 
@@ -31,7 +31,7 @@ internal static class DebugLaunchMenuPatch
         PlayerPrefs.SetInt("radlinedisable", 0);
         WorldGeneration.runSettings = null;
         __instance.StartCoroutine(__instance.WaitLoad());
-        Plugin.LogInfo("Debug startup: loading tutorial.");
+        Plugin.LogInfo("Debug startup: loading tutorial because multiplayer is not running.");
     }
 
     internal static void ConsumeSandboxSetup()
