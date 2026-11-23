@@ -14,14 +14,18 @@ public sealed class Plugin : BaseUnityPlugin
     public const string PluginName = "Realistic Liquid Transfer";
     public const string PluginVersion = "0.1.0";
 
+    private static Plugin instance;
+
 #if LIQUID_TRANSFER_DEBUG_LOGGING
     internal static ManualLogSource LogSource { get; private set; }
 #endif
 
     private Harmony _harmony;
+    private float nextMultiplayerBridgeCheck;
 
     private void Awake()
     {
+        instance = this;
 #if LIQUID_TRANSFER_DEBUG_LOGGING
         LogSource = Logger;
 #endif
@@ -38,8 +42,20 @@ public sealed class Plugin : BaseUnityPlugin
 
         _harmony = new Harmony(PluginGuid);
         _harmony.PatchAll();
+        MultiplayerTransferBridge.InitializeIfAvailable();
         LogInfo($"{PluginName} {PluginVersion} loaded.");
         DebugLog.Write($"{PluginName} {PluginVersion} loaded.");
+    }
+
+    private void Update()
+    {
+        if (UnityEngine.Time.unscaledTime < nextMultiplayerBridgeCheck)
+        {
+            return;
+        }
+
+        nextMultiplayerBridgeCheck = UnityEngine.Time.unscaledTime + 1f;
+        MultiplayerTransferBridge.InitializeIfAvailable();
     }
 
     private void OnDestroy()
@@ -53,9 +69,23 @@ public sealed class Plugin : BaseUnityPlugin
         LiquidShaderAssets.Unload();
         ModSprites.Unload();
         DebugLog.Close();
+        if (instance == this)
+        {
+            instance = null;
+        }
 #if LIQUID_TRANSFER_DEBUG_LOGGING
         LogSource = null;
 #endif
+    }
+
+    internal static void ReportNetworkWarning(string message)
+    {
+        instance?.Logger.LogWarning(message);
+    }
+
+    internal static void ReportNetworkError(string message)
+    {
+        instance?.Logger.LogError(message);
     }
 
     [Conditional("LIQUID_TRANSFER_DEBUG_LOGGING")]

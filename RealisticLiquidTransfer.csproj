@@ -31,6 +31,7 @@
     <Compile Include="LiquidShaderAssets.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
+    <Compile Include="MultiplayerTransferBridge.cs" />
     <Compile Include="Patches.cs" />
     <Compile Include="DebugLaunchSetup.cs" />
   </ItemGroup>

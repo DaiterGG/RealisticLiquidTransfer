@@ -962,6 +962,51 @@ internal sealed class LiquidTransferMinigame : Minigame
                 sourceCapacity);
         }
 
+        var route = MultiplayerTransferBridge.GetRoute();
+        if (route == TransferCommitRoute.Unavailable)
+        {
+            throw new System.InvalidOperationException(
+                "The multiplayer liquid-transfer bridge is unavailable; the transfer was not applied.");
+        }
+
+        if (route == TransferCommitRoute.Client)
+        {
+            var request = new LiquidTransferCommitRequest
+            {
+                RequestId = System.Guid.NewGuid(),
+                DrainOnly = drainOnly,
+                NoLiquidLoss = noLiquidLossEnabled
+            };
+            if (!MultiplayerTransferBridge.TryCreateChange(
+                    receivingGameContainer,
+                    CreateTargetComposition(0, typeCount),
+                    out request.Receiver))
+            {
+                throw new System.InvalidOperationException(
+                    "Could not identify the receiving container in the multiplayer session.");
+            }
+
+            if (!drainOnly
+                && !MultiplayerTransferBridge.TryCreateChange(
+                    sourceGameContainer,
+                    CreateTargetComposition(stride, typeCount),
+                    out request.Source))
+            {
+                throw new System.InvalidOperationException(
+                    "Could not identify the source container in the multiplayer session.");
+            }
+
+            if (!MultiplayerTransferBridge.SendCommit(request))
+            {
+                throw new System.InvalidOperationException(
+                    "Could not send the liquid-transfer result to the multiplayer host.");
+            }
+
+            transferCommitted = true;
+            DebugLog.Write($"Submitted multiplayer liquid-transfer commit {request.RequestId:N}.");
+            return;
+        }
+
         ApplyLiquidTargets(receivingGameContainer, 0, typeCount, stride, receivingDrainPlan);
         if (!drainOnly)
         {
@@ -975,6 +1020,23 @@ internal sealed class LiquidTransferMinigame : Minigame
             : $"Committed liquid transfer: amounts receiver={receivingGameContainer.CurrentTotal:F2}, "
                 + $"source={sourceGameContainer.CurrentTotal:F2}, "
                 + $"liquid not retained={discardedOverflow:F2} ml.");
+    }
+
+    private List<LiquidAmount> CreateTargetComposition(
+        int offset,
+        int typeCount)
+    {
+        var composition = new List<LiquidAmount>(typeCount);
+        for (var type = 0; type < typeCount; type++)
+        {
+            var amount = targetLiquidAmounts[offset + type];
+            if (amount > 0f)
+            {
+                composition.Add(new LiquidAmount(liquidSimulation.GetLiquidId(type), amount));
+            }
+        }
+
+        return composition;
     }
 
     private void CaptureUnreturnedLiquid(int typeCount, int stride)
