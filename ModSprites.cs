@@ -579,11 +579,22 @@ internal static class ModSprites
 
         texture.filterMode = FilterMode.Point;
         texture.wrapMode = TextureWrapMode.Clamp;
-        return Sprite.Create(
+        var sprite = Sprite.Create(
             texture,
             new Rect(visibleBounds.x, visibleBounds.y, visibleBounds.width, visibleBounds.height),
             new Vector2(0.5f, 0.5f),
             100f);
+        sprite.name = Path.GetFileNameWithoutExtension(resourceName.Substring(ResourcePrefix.Length));
+        return sprite;
+    }
+
+    internal static bool TryGetPrecomputedBoundary(
+        Sprite sprite,
+        out ContainerBoundaryData boundary)
+    {
+        boundary = null;
+        return sprite
+            && GeneratedContainerBoundaryCatalog.TryGet(sprite.name, out boundary);
     }
 
     private static bool TryFindVisiblePixelBounds(

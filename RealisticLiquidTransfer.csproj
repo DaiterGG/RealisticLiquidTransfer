@@ -28,6 +28,10 @@
     <Compile Include="SimulationProfiler.cs" />
     <Compile Include="LiquidSimulation.cs" />
     <Compile Include="LiquidDensityCatalog.cs" />
+    <Compile Include="ContainerMaterialCatalog.cs" />
+    <Compile Include="ContainerImpactAudioCatalog.cs" />
+    <Compile Include="ContainerBoundaryData.cs" />
+    <Compile Include="Generated\ContainerBoundaries.g.cs" />
     <Compile Include="LiquidShaderAssets.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
@@ -35,6 +39,9 @@
     <Compile Include="Patches.cs" />
     <Compile Include="DebugLaunchSetup.cs" />
   </ItemGroup>
+  <Target Name="GenerateContainerBoundaries" BeforeTargets="CoreCompile">
+    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\tools\SpriteBoundaryGenerator\SpriteBoundaryGenerator.csproj&quot; --configuration Release -- &quot;$(MSBuildProjectDirectory)\resources&quot; &quot;$(MSBuildProjectDirectory)\Generated\ContainerBoundaries.g.cs&quot;" />
+  </Target>
   <ItemGroup>
     <EmbeddedResource Include="resources\*.png">
       <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>

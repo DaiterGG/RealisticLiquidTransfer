@@ -822,16 +822,17 @@ internal sealed class LiquidTransferMinigame : Minigame
     private static double EstimateSpriteArea(Sprite sprite)
     {
         if (!sprite
-            || !ModSprites.TryFindOpening(sprite, out var openingPosition, out var openingWidth)
-            || !ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out var outline))
+            || !ModSprites.TryGetPrecomputedBoundary(sprite, out var boundary)
+            || !boundary.HasOpening
+            || boundary.WallCenterlinePoints.Length < 2)
         {
             Plugin.LogWarning($"Could not calculate the reference area from sprite '{ReferenceSpriteName}.png'.");
             return 0d;
         }
 
         return EstimateContainerArea(
-            outline,
-            ModSprites.FindInteriorWalls(sprite, openingPosition, openingWidth));
+            boundary.WallCenterlinePoints,
+            boundary.InteriorWalls);
     }
 
     private static double EstimateContainerArea(Vector2[] outline, Vector2[][] interiorWalls)
@@ -1775,12 +1776,15 @@ internal sealed class LiquidTransferMinigame : Minigame
         image.preserveAspect = false;
         image.raycastTarget = true;
 
-        var hasOpening = ModSprites.TryFindOpening(sprite, out var openingPosition, out var openingWidth);
+        var hasBoundary = ModSprites.TryGetPrecomputedBoundary(sprite, out var boundary);
+        var hasOpening = hasBoundary && boundary.HasOpening;
+        var openingPosition = hasOpening ? boundary.OpeningPosition : Vector2.zero;
+        var openingWidth = hasOpening ? boundary.OpeningWidth : 0f;
         var openingLeft = Vector2.zero;
         var openingRight = Vector2.zero;
         var outlinePoints = System.Array.Empty<Vector2>();
         var interiorWalls = System.Array.Empty<Vector2[]>();
-        var collisionOutlinePoints = outlinePoints;
+        var containerCollisionPoints = System.Array.Empty<Vector2>();
         var syringeGeometry = isSyringe ? CreateSyringeGeometry(sprite) : default;
         if (isSyringe)
         {
@@ -1790,7 +1794,9 @@ internal sealed class LiquidTransferMinigame : Minigame
             openingWidth = Vector2.Distance(openingLeft, openingRight);
             hasOpening = true;
             outlinePoints = syringeGeometry.FluidOutline;
-            collisionOutlinePoints = syringeGeometry.CollisionOutline;
+            containerCollisionPoints = ContainerShapeCollision.CreateWallCollisionBand(
+                outlinePoints,
+                SyringeWallHalfWidth);
         }
         else if (!hasOpening)
         {
@@ -1800,19 +1806,16 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             openingLeft = openingPosition - new Vector2(openingWidth * 0.5f, 0f);
             openingRight = openingPosition + new Vector2(openingWidth * 0.5f, 0f);
-            if (ModSprites.TryFindOutline(sprite, openingPosition, openingWidth, out outlinePoints))
+            outlinePoints = boundary.WallCenterlinePoints;
+            if (outlinePoints.Length >= 2)
             {
-                interiorWalls = ModSprites.FindInteriorWalls(sprite, openingPosition, openingWidth);
+                interiorWalls = boundary.InteriorWalls;
+                containerCollisionPoints = boundary.CollisionPoints;
             }
             else
             {
                 Plugin.LogWarning($"Could not trace the outline of container sprite '{sprite.name}'.");
             }
-        }
-
-        if (!isSyringe)
-        {
-            collisionOutlinePoints = outlinePoints;
         }
 
         return new ContainerVisual(
@@ -1823,7 +1826,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             hasOpening,
             outlinePoints,
             interiorWalls,
-            collisionOutlinePoints,
+            containerCollisionPoints,
             isSyringe,
             syringeGeometry);
     }
