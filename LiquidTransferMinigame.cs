@@ -39,6 +39,10 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly List<float> receivingDrainPlan;
     private readonly List<float> sourceDrainPlan;
     private readonly bool drainOnly;
+    private readonly ushort receivingSyncId;
+    private readonly byte receivingSyncVersion;
+    private readonly ushort sourceSyncId;
+    private readonly byte sourceSyncVersion;
     private Image handImage;
     private Text controlsText;
     private RectTransform screenRoot;
@@ -98,6 +102,27 @@ internal sealed class LiquidTransferMinigame : Minigame
         this.secondOriginalContainerAmount = secondOriginalContainerAmount;
         this.secondOriginalLiquidComposition = secondOriginalLiquidComposition
             ?? System.Array.Empty<LiquidProfileEntry>();
+        if (MultiplayerTransferBridge.GetRoute() == TransferCommitRoute.Client)
+        {
+            if (MultiplayerTransferBridge.TryCaptureClientSyncIdentity(
+                    receivingGameContainer,
+                    out var capturedReceiverSyncId,
+                    out var capturedReceiverSyncVersion))
+            {
+                receivingSyncId = capturedReceiverSyncId;
+                receivingSyncVersion = capturedReceiverSyncVersion;
+            }
+
+            if (MultiplayerTransferBridge.TryCaptureClientSyncIdentity(
+                    sourceGameContainer,
+                    out var capturedSourceSyncId,
+                    out var capturedSourceSyncVersion))
+            {
+                sourceSyncId = capturedSourceSyncId;
+                sourceSyncVersion = capturedSourceSyncVersion;
+            }
+        }
+
         if (string.Equals(
                 firstOriginalContainerSpriteName,
                 ReferenceSpriteName,
@@ -138,6 +163,15 @@ internal sealed class LiquidTransferMinigame : Minigame
             ?? System.Array.Empty<LiquidProfileEntry>();
         secondOriginalLiquidComposition = System.Array.Empty<LiquidProfileEntry>();
         drainOnly = true;
+        if (MultiplayerTransferBridge.GetRoute() == TransferCommitRoute.Client
+            && MultiplayerTransferBridge.TryCaptureClientSyncIdentity(
+                receivingGameContainer,
+                out var capturedSyncId,
+                out var capturedSyncVersion))
+        {
+            receivingSyncId = capturedSyncId;
+            receivingSyncVersion = capturedSyncVersion;
+        }
 
         if (string.Equals(
                 originalContainerSpriteName,
@@ -907,20 +941,49 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
-        if (!receivingGameContainer || (!drainOnly && !sourceGameContainer))
+        var route = MultiplayerTransferBridge.GetRoute();
+        if (route == TransferCommitRoute.Unavailable)
         {
             throw new System.InvalidOperationException(
-                "Cannot commit liquid simulation because a required game container is unavailable.");
+                "The multiplayer liquid-transfer bridge is unavailable; the transfer was not applied.");
+        }
+
+        if (route != TransferCommitRoute.Client
+            && (!receivingGameContainer || (!drainOnly && !sourceGameContainer)))
+        {
+            var message = !receivingGameContainer
+                ? "The receiving game container became unavailable before commit."
+                : "The source game container became unavailable before commit.";
+            DebugLog.Write(
+                $"Aborted liquid-transfer commit: {message} "
+                + $"route={route}, drainOnly={drainOnly}, receiverSyncId={receivingSyncId}, "
+                + $"sourceSyncId={sourceSyncId}.");
+            throw new System.InvalidOperationException(message);
         }
 
         liquidSimulation.GetInitialSimulatedLiquidAmounts(initialSimulatedLiquidAmounts);
         liquidSimulation.GetFinalSimulatedLiquidAmounts(finalSimulatedLiquidAmounts);
         var typeCount = liquidSimulation.LiquidTypeCount;
         var stride = liquidSimulation.LiquidTypeBufferLength;
-        BuildTargetLiquidAmounts(receivingGameContainer, 0, typeCount, stride);
+        var useOriginalSnapshot = route == TransferCommitRoute.Client;
+        BuildTargetLiquidAmounts(
+            receivingGameContainer,
+            firstOriginalLiquidComposition,
+            firstOriginalContainerAmount,
+            0,
+            typeCount,
+            stride,
+            useOriginalSnapshot);
         if (!drainOnly)
         {
-            BuildTargetLiquidAmounts(sourceGameContainer, 1, typeCount, stride);
+            BuildTargetLiquidAmounts(
+                sourceGameContainer,
+                secondOriginalLiquidComposition,
+                secondOriginalContainerAmount,
+                1,
+                typeCount,
+                stride,
+                useOriginalSnapshot);
         }
 
         var noLiquidLossEnabled = !drainOnly && NoLiquidLossSetting.IsEnabled;
@@ -929,7 +992,9 @@ internal sealed class LiquidTransferMinigame : Minigame
             CaptureUnreturnedLiquid(typeCount, stride);
         }
 
-        var receiverCapacity = receivingGameContainer.Capacity;
+        var receiverCapacity = useOriginalSnapshot
+            ? firstOriginalContainerCapacity
+            : receivingGameContainer.Capacity;
         ValidateCapacity(receiverCapacity, "receiver capacity");
         var discardedOverflow = 0f;
         var sourceCapacity = 0f;
@@ -943,7 +1008,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
         else
         {
-            sourceCapacity = sourceGameContainer.Capacity;
+            sourceCapacity = useOriginalSnapshot
+                ? secondOriginalContainerCapacity
+                : sourceGameContainer.Capacity;
             ValidateCapacity(sourceCapacity, "source capacity");
             discardedOverflow = RouteLiquidCapacityOverflow(
                 targetLiquidAmounts,
@@ -962,13 +1029,6 @@ internal sealed class LiquidTransferMinigame : Minigame
                 sourceCapacity);
         }
 
-        var route = MultiplayerTransferBridge.GetRoute();
-        if (route == TransferCommitRoute.Unavailable)
-        {
-            throw new System.InvalidOperationException(
-                "The multiplayer liquid-transfer bridge is unavailable; the transfer was not applied.");
-        }
-
         if (route == TransferCommitRoute.Client)
         {
             var request = new LiquidTransferCommitRequest
@@ -979,21 +1039,27 @@ internal sealed class LiquidTransferMinigame : Minigame
             };
             if (!MultiplayerTransferBridge.TryCreateChange(
                     receivingGameContainer,
+                    receivingSyncId,
+                    receivingSyncVersion,
+                    CreateInitialComposition(firstOriginalLiquidComposition),
                     CreateTargetComposition(0, typeCount),
                     out request.Receiver))
             {
                 throw new System.InvalidOperationException(
-                    "Could not identify the receiving container in the multiplayer session.");
+                    "Could not identify the receiving container in the multiplayer session; no transfer was applied.");
             }
 
             if (!drainOnly
                 && !MultiplayerTransferBridge.TryCreateChange(
                     sourceGameContainer,
+                    sourceSyncId,
+                    sourceSyncVersion,
+                    CreateInitialComposition(secondOriginalLiquidComposition),
                     CreateTargetComposition(stride, typeCount),
                     out request.Source))
             {
                 throw new System.InvalidOperationException(
-                    "Could not identify the source container in the multiplayer session.");
+                    "Could not identify the source container in the multiplayer session; no transfer was applied.");
             }
 
             if (!MultiplayerTransferBridge.SendCommit(request))
@@ -1034,6 +1100,29 @@ internal sealed class LiquidTransferMinigame : Minigame
             {
                 composition.Add(new LiquidAmount(liquidSimulation.GetLiquidId(type), amount));
             }
+        }
+
+        return composition;
+    }
+
+    private static List<LiquidAmount> CreateInitialComposition(LiquidProfileEntry[] profile)
+    {
+        var amounts = new Dictionary<string, float>(System.StringComparer.Ordinal);
+        foreach (var entry in profile)
+        {
+            if (string.IsNullOrWhiteSpace(entry.LiquidId) || entry.Amount <= 0f)
+            {
+                continue;
+            }
+
+            amounts.TryGetValue(entry.LiquidId, out var currentAmount);
+            amounts[entry.LiquidId] = currentAmount + entry.Amount;
+        }
+
+        var composition = new List<LiquidAmount>(amounts.Count);
+        foreach (var entry in amounts)
+        {
+            composition.Add(new LiquidAmount(entry.Key, entry.Value));
         }
 
         return composition;
@@ -1101,18 +1190,25 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private void BuildTargetLiquidAmounts(
         WaterContainerItem container,
+        LiquidProfileEntry[] originalComposition,
+        float originalAmount,
         int containerIndex,
         int typeCount,
-        int stride)
+        int stride,
+        bool useOriginalSnapshot)
     {
-        var currentTotal = container.CurrentTotal;
+        var currentTotal = useOriginalSnapshot
+            ? originalAmount
+            : container.CurrentTotal;
         ValidateAmount(currentTotal, $"container {containerIndex + 1} amount");
         var offset = containerIndex * stride;
         var compositionTotal = 0f;
         for (var type = 0; type < typeCount; type++)
         {
             var liquidId = liquidSimulation.GetLiquidId(type);
-            var currentAmount = GetLiquidAmount(container, liquidId);
+            var currentAmount = useOriginalSnapshot
+                ? GetLiquidAmount(originalComposition, liquidId)
+                : GetLiquidAmount(container, liquidId);
             compositionTotal += currentAmount;
             var delta = finalSimulatedLiquidAmounts[offset + type]
                 - initialSimulatedLiquidAmounts[offset + type];
@@ -1133,6 +1229,30 @@ internal sealed class LiquidTransferMinigame : Minigame
                 $"Container {containerIndex + 1} liquid stacks total {compositionTotal:F3} ml, "
                 + $"but the game reports {currentTotal:F3} ml.");
         }
+
+        var initialSimulatedTotal = SumLiquidAmounts(
+            initialSimulatedLiquidAmounts,
+            offset,
+            typeCount);
+        var finalSimulatedTotal = SumLiquidAmounts(
+            finalSimulatedLiquidAmounts,
+            offset,
+            typeCount);
+        var clearUnrepresentedRemainder = finalSimulatedTotal <= 0.001f
+            && (drainOnly
+                || (initialSimulatedTotal > 0.001f && !NoLiquidLossSetting.IsEnabled));
+        if (clearUnrepresentedRemainder)
+        {
+            var unrepresentedRemainder = Mathf.Max(0f, currentTotal - initialSimulatedTotal);
+            if (unrepresentedRemainder > 0.001f)
+            {
+                DebugLog.Write(
+                    $"Clearing {unrepresentedRemainder:F2} ml below simulation resolution from "
+                    + $"container {containerIndex + 1}, whose simulated liquid is fully emptied.");
+            }
+
+            System.Array.Clear(targetLiquidAmounts, offset, typeCount);
+        }
     }
 
     private float GetLiquidAmount(WaterContainerItem container, string liquidId)
@@ -1143,6 +1263,20 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (stack != null && string.Equals(stack.liquidId, liquidId, System.StringComparison.Ordinal))
             {
                 amount += stack.amount;
+            }
+        }
+
+        return amount;
+    }
+
+    private static float GetLiquidAmount(LiquidProfileEntry[] composition, string liquidId)
+    {
+        var amount = 0f;
+        foreach (var entry in composition)
+        {
+            if (string.Equals(entry.LiquidId, liquidId, System.StringComparison.Ordinal))
+            {
+                amount += entry.Amount;
             }
         }
 

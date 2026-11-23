@@ -238,33 +238,51 @@ internal static class MultiplayerTransferBridge
         }
     }
 
-    internal static bool TryCreateChange(
+    internal static bool TryCaptureClientSyncIdentity(
         WaterContainerItem container,
-        List<LiquidAmount> target,
-        out ContainerLiquidChange change)
+        out ushort syncId,
+        out byte version)
     {
-        change = null;
+        syncId = 0;
+        version = 0;
         if (!container)
         {
             DebugLog.Write("Container detection failed: transfer container reference is missing.");
             return false;
         }
 
-        if (container.stack == null)
-        {
-            DebugLog.Write($"Container detection failed: '{container.gameObject.name}' has no liquid stack.");
-            return false;
-        }
-
         if (!TryGetClientSyncInfo(container.gameObject, out var syncInfo))
         {
-            DebugLog.Write($"Container detection failed: '{container.gameObject.name}' has no multiplayer sync entry.");
             return false;
         }
 
-        if (!TryGetSyncIdentity(syncInfo, out var syncId, out var version))
+        if (!TryGetSyncIdentity(syncInfo, out syncId, out version))
         {
-            DebugLog.Write($"Container detection failed: '{container.gameObject.name}' has no valid sync ID/version.");
+            return false;
+        }
+
+        DebugLog.Write(
+            $"Captured multiplayer identity for '{container.gameObject.name}': syncId={syncId}, version={version}.");
+        return true;
+    }
+
+    internal static bool TryCreateChange(
+        WaterContainerItem container,
+        ushort syncId,
+        byte version,
+        List<LiquidAmount> expected,
+        List<LiquidAmount> target,
+        out ContainerLiquidChange change)
+    {
+        change = null;
+        if (syncId == 0 && !TryCaptureClientSyncIdentity(container, out syncId, out version))
+        {
+            return false;
+        }
+
+        if (expected == null || target == null)
+        {
+            DebugLog.Write("Container detection failed: transfer compositions are unavailable.");
             return false;
         }
 
@@ -272,11 +290,12 @@ internal static class MultiplayerTransferBridge
         {
             SyncId = syncId,
             Version = version,
-            Expected = CaptureComposition(container),
+            Expected = expected,
             Target = target
         };
         DebugLog.Write(
-            $"Detected transfer container '{container.gameObject.name}': syncId={syncId}, version={version}, "
+            $"Detected transfer container '{(container ? container.gameObject.name : "<reference unavailable>")}': "
+            + $"syncId={syncId}, version={version}, "
             + $"current=[{FormatComposition(change.Expected)}], target=[{FormatComposition(change.Target)}].");
         return true;
     }
