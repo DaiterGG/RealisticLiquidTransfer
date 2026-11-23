@@ -19,6 +19,12 @@ internal static class DebugLaunchMenuPatch
         }
 
         _launchStarted = true;
+        if (MultiplayerTransferBridge.IsMultiplayerModLoaded)
+        {
+            Plugin.LogInfo("Debug startup: skipped tutorial because the multiplayer mod is enabled.");
+            return;
+        }
+
         SandboxSetupPending = true;
         SaveSystem.loadedRun = false;
         PlayerPrefs.SetInt("tutorial", 1);

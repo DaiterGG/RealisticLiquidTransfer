@@ -78,6 +78,8 @@ internal static class MultiplayerTransferBridge
     private static string lastDetectionState;
     private static string lastRouteState;
 
+    internal static bool IsMultiplayerModLoaded => FindMultiplayerAssembly() != null;
+
     internal static void InitializeIfAvailable()
     {
         var assembly = FindMultiplayerAssembly();
