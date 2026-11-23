@@ -1134,12 +1134,16 @@ internal sealed class LiquidSimulation
             throw new ArgumentOutOfRangeException(nameof(maximumDistance));
         }
 
-        var maximumDistanceSquared = maximumDistance * maximumDistance;
         var assignment = (byte)(containerIndex + 1);
         for (var drop = 0; drop < count; drop++)
         {
-            if (containerAssignments[drop] == assignment
-                && (positions[drop] - point).sqrMagnitude <= maximumDistanceSquared)
+            if (containerAssignments[drop] != assignment)
+            {
+                continue;
+            }
+
+            var contactDistance = maximumDistance + GetDropRadius(drop);
+            if ((positions[drop] - point).sqrMagnitude <= contactDistance * contactDistance)
             {
                 return true;
             }
@@ -1177,7 +1181,6 @@ internal sealed class LiquidSimulation
         }
 
         var sourceAssignment = (byte)(sourceContainerIndex + 1);
-        var maximumDistanceSquared = maximumSourceDistance * maximumSourceDistance;
         var closestDistanceSquared = float.PositiveInfinity;
         var closestDrop = -1;
         for (var drop = 0; drop < count; drop++)
@@ -1188,7 +1191,10 @@ internal sealed class LiquidSimulation
             }
 
             var distanceSquared = (positions[drop] - sourcePoint).sqrMagnitude;
-            if (distanceSquared > maximumDistanceSquared || distanceSquared >= closestDistanceSquared)
+            var radius = GetDropRadius(drop);
+            var maximumContactDistance = maximumSourceDistance + radius;
+            if (distanceSquared > maximumContactDistance * maximumContactDistance
+                || distanceSquared >= closestDistanceSquared)
             {
                 continue;
             }
