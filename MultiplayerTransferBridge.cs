@@ -75,10 +75,63 @@ internal static class MultiplayerTransferBridge
     private static object reliableOrdered;
     private static bool initialized;
     private static Assembly failedAssembly;
+    private static Assembly minigameSyncCompatibilityAttemptedAssembly;
     private static string lastDetectionState;
     private static string lastRouteState;
 
     internal static bool IsMultiplayerModLoaded => FindMultiplayerAssembly() != null;
+
+    internal static void PatchMinigameSyncCompatibility(HarmonyLib.Harmony harmony)
+    {
+        var assembly = FindMultiplayerAssembly();
+        if (assembly == null || assembly == minigameSyncCompatibilityAttemptedAssembly)
+        {
+            return;
+        }
+
+        minigameSyncCompatibilityAttemptedAssembly = assembly;
+        try
+        {
+            var patchType = assembly.GetType(
+                "Together.MinigameBase_StartMinigame_MultiplayerPatch",
+                false);
+            var postfix = patchType?.GetMethod(
+                "Postfix",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (postfix == null
+                || !postfix.GetParameters().Any(
+                    parameter => parameter.Name == "minigame"
+                        && parameter.ParameterType == typeof(Minigame)))
+            {
+                throw new MissingMethodException(
+                    "Could not find Together's multiplayer minigame-start postfix.");
+            }
+
+            var prefix = typeof(MultiplayerTransferBridge).GetMethod(
+                nameof(ShouldRunTogetherMinigamePatch),
+                BindingFlags.NonPublic | BindingFlags.Static);
+            harmony.Patch(postfix, prefix: new HarmonyLib.HarmonyMethod(prefix));
+            DebugLog.Write(
+                "Installed multiplayer compatibility patch to keep the RLT minigame local; "
+                + "liquid results continue through the authoritative transfer channel.");
+        }
+        catch (Exception exception)
+        {
+            Plugin.ReportNetworkWarning(
+                $"Could not suppress Together's minigame synchronization for RLT: {exception}");
+        }
+    }
+
+    private static bool ShouldRunTogetherMinigamePatch(Minigame minigame)
+    {
+        if (minigame is LiquidTransferMinigame)
+        {
+            DebugLog.Write("Skipped Together minigame synchronization for LiquidTransferMinigame.");
+            return false;
+        }
+
+        return true;
+    }
 
     internal static void InitializeIfAvailable()
     {

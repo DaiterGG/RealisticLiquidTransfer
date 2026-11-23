@@ -47,6 +47,7 @@ public sealed class Plugin : BaseUnityPlugin
         _harmony.PatchAll();
         DebugLog.Write($"Harmony patches applied for {PluginGuid}.");
         MultiplayerTransferBridge.InitializeIfAvailable();
+        MultiplayerTransferBridge.PatchMinigameSyncCompatibility(_harmony);
         LogInfo($"{PluginName} {PluginVersion} loaded.");
         DebugLog.Write($"{PluginName} {PluginVersion} loaded.");
     }
@@ -64,6 +65,7 @@ public sealed class Plugin : BaseUnityPlugin
 #else
         MultiplayerTransferBridge.InitializeIfAvailable();
 #endif
+        MultiplayerTransferBridge.PatchMinigameSyncCompatibility(_harmony);
     }
 
     private void OnDestroy()
