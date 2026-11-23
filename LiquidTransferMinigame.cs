@@ -549,6 +549,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         var localPointer = ToContainerLocalPoint(syringe.Container, pointerPosition);
+        if (localPointer.y <= syringe.Container.Geometry.BodyHitbox.yMax)
+        {
+            return false;
+        }
+
         var handlePoint = localPointer - syringe.HandleTransform.anchoredPosition;
         var hitbox = syringe.HandleTransform.rect;
         hitbox.xMin -= 8f;
