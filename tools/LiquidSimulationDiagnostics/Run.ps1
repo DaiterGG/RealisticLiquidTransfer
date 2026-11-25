@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
+    [ValidateSet('water-bottle-full-idle')]
     [string]$Scenario,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )
@@ -17,13 +18,21 @@ $diagnosticLogPath = Join-Path $outputDirectory "$Scenario-$timestamp.log"
 $unityLogPath = Join-Path $outputDirectory "$Scenario-$timestamp-unity.log"
 
 if ([string]::IsNullOrWhiteSpace($UnityEditorPath)) {
-    $UnityEditorPath = 'D:\unity\Editor\Unity.exe'
+    $unityEditorCandidates = @(
+        'D:\unity\Editor\Unity.exe',
+        (Join-Path $env:ProgramFiles 'Unity\Hub\Editor\2022.3.62f3\Editor\Unity.exe')
+    )
+    $UnityEditorPath = $unityEditorCandidates |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
 }
 
-if (-not (Test-Path -LiteralPath $UnityEditorPath -PathType Leaf)) {
+if ([string]::IsNullOrWhiteSpace($UnityEditorPath) -or -not (
+        Test-Path -LiteralPath $UnityEditorPath -PathType Leaf)) {
     throw 'Unity Editor was not found. Set UNITY_EDITOR or pass -UnityEditorPath.'
 }
 
+$unityCli = Get-Command 'unity' -ErrorAction Stop
 if (Test-Path -LiteralPath $generatedDirectory) {
     throw "Temporary Unity source directory already exists; inspect it before running: $generatedDirectory"
 }
@@ -34,7 +43,9 @@ $sourceFiles = @(
     'LiquidSimulation.cs',
     'ContainerShapeCollision.cs',
     'LiquidDensityCatalog.cs',
-    'SimulationProfiler.cs'
+    'SimulationProfiler.cs',
+    'ContainerBoundaryData.cs',
+    'Generated\ContainerBoundaries.g.cs'
 )
 $generatedFiles = @()
 try {
@@ -59,23 +70,27 @@ try {
     $generatedFiles += $runnerDestination
 
     $unityArguments = @(
-        '-batchmode',
-        '-nographics',
-        '-projectPath',
+        'run',
         $unityProjectPath,
-        '-logFile',
+        '--editor-path',
+        $UnityEditorPath,
+        '--timeout',
+        '300',
+        '--log-file',
         $unityLogPath,
+        '--no-tail',
+        '--',
+        '-nographics',
         '-executeMethod',
         'RealisticLiquidTransfer.LiquidSimulationDiagnosticsRunner.Run',
         '-scenario',
         $Scenario,
         '-diagnosticLog',
-        $diagnosticLogPath,
-        '-quit'
+        $diagnosticLogPath
     )
-    & $UnityEditorPath @unityArguments
+    & $unityCli.Source @unityArguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Headless Unity diagnostic runner exited with code $LASTEXITCODE. See $unityLogPath."
+        throw "Headless Unity diagnostic runner exited with code $LASTEXITCODE. See diagnostic log $diagnosticLogPath and Unity log $unityLogPath."
     }
 
     if (-not (Test-Path -LiteralPath $diagnosticLogPath -PathType Leaf)) {
