@@ -45,7 +45,8 @@ internal static class Program
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-            File.WriteAllText(outputPath, WriteCatalog(sprites), new UTF8Encoding(false));
+            var catalog = WriteCatalog(sprites).Replace("\r\n", "\n");
+            File.WriteAllText(outputPath, catalog, new UTF8Encoding(false));
             Console.WriteLine(
                 $"Generated boundaries for {sprites.Length} sprites: {outputPath}");
             foreach (var sprite in sprites)

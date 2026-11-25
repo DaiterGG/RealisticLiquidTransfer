@@ -28,8 +28,6 @@
     <Compile Include="SimulationProfiler.cs" />
     <Compile Include="LiquidSimulation.cs" />
     <Compile Include="LiquidDensityCatalog.cs" />
-    <Compile Include="ContainerMaterialCatalog.cs" />
-    <Compile Include="ContainerImpactAudioCatalog.cs" />
     <Compile Include="ContainerBoundaryData.cs" />
     <Compile Include="Generated\ContainerBoundaries.g.cs" />
     <Compile Include="LiquidShaderAssets.cs" />

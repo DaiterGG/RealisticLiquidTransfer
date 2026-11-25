@@ -1794,9 +1794,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             openingWidth = Vector2.Distance(openingLeft, openingRight);
             hasOpening = true;
             outlinePoints = syringeGeometry.FluidOutline;
-            containerCollisionPoints = ContainerShapeCollision.CreateWallCollisionBand(
-                outlinePoints,
-                SyringeWallHalfWidth);
+            containerCollisionPoints = syringeGeometry.CollisionOutline;
         }
         else if (!hasOpening)
         {
