@@ -20,6 +20,32 @@ internal readonly struct LiquidProfileEntry
     internal Color Color { get; }
 }
 
+internal readonly struct LiquidDropSnapshot
+{
+    internal LiquidDropSnapshot(
+        int id,
+        Vector2 position,
+        Vector2 velocity,
+        byte containerAssignment,
+        int volume,
+        string composition)
+    {
+        Id = id;
+        Position = position;
+        Velocity = velocity;
+        ContainerAssignment = containerAssignment;
+        Volume = volume;
+        Composition = composition;
+    }
+
+    internal int Id { get; }
+    internal Vector2 Position { get; }
+    internal Vector2 Velocity { get; }
+    internal byte ContainerAssignment { get; }
+    internal int Volume { get; }
+    internal string Composition { get; }
+}
+
 internal sealed class LiquidSimulation
 {
     private const int MaximumDrops = 20000;
@@ -51,6 +77,7 @@ internal sealed class LiquidSimulation
     private const int MaximumDensitySwapPairsPerFrame = 2;
     private const float VelocityRampDuration = 2f;
     private const float OutsideDropExtraBoundsPadding = 1f;
+    private readonly bool headless;
     internal const int MinimumDropCollisionPasses = 2;
     internal const int MaximumDropCollisionPasses = 6;
     internal const int DefaultDropCollisionPasses = 6;
@@ -227,9 +254,11 @@ internal sealed class LiquidSimulation
         float secondAmount,
         LiquidProfileEntry[] firstLiquidComposition,
         LiquidProfileEntry[] secondLiquidComposition,
-        float initialPacking = 1.75f)
+        float initialPacking = 1.75f,
+        bool headless = false)
     {
         this.root = root;
+        this.headless = headless;
         liquidProfiles = new[]
         {
             firstLiquidComposition ?? Array.Empty<LiquidProfileEntry>(),
@@ -295,7 +324,10 @@ internal sealed class LiquidSimulation
             GetDropSizeForCapacity(firstCapacity),
             GetDropSizeForCapacity(secondCapacity)
         };
-        CreateGraphics();
+        if (!headless)
+        {
+            CreateGraphics();
+        }
         SeedContainer(containers[0], GetInitialDropCount(firstAmount));
         SeedContainer(containers[1], GetInitialDropCount(secondAmount));
         initialContainerDropCounts = new[]
@@ -939,10 +971,13 @@ internal sealed class LiquidSimulation
     {
         surfaceShaderEnabled = enabled && LiquidShaderAssets.SurfaceMaterial;
         graphicsDirty = true;
-        surfaceGraphic.enabled = surfaceShaderEnabled;
-        foreach (var graphic in individualDropGraphics)
+        if (!headless)
         {
-            graphic.enabled = !surfaceShaderEnabled;
+            surfaceGraphic.enabled = surfaceShaderEnabled;
+            foreach (var graphic in individualDropGraphics)
+            {
+                graphic.enabled = !surfaceShaderEnabled;
+            }
         }
 
         DebugLog.Write(
@@ -952,7 +987,10 @@ internal sealed class LiquidSimulation
 
     internal void SetColorTransitionSharpness(float sharpness)
     {
-        surfaceGraphic.SetColorTransitionSharpness(sharpness);
+        if (!headless)
+        {
+            surfaceGraphic.SetColorTransitionSharpness(sharpness);
+        }
     }
 
     internal int GetContainerDropCount(int containerIndex)
@@ -1009,6 +1047,41 @@ internal sealed class LiquidSimulation
         }
 
         return finalCounts;
+    }
+
+    internal LiquidDropSnapshot[] CaptureDropSnapshots()
+    {
+        var snapshots = new LiquidDropSnapshot[count];
+        for (var drop = 0; drop < count; drop++)
+        {
+            var composition = new System.Text.StringBuilder();
+            for (var unit = dropUnitHeads[drop]; unit >= 0; unit = unitNext[unit])
+            {
+                for (var component = unitComponentHeads[unit];
+                    component >= 0;
+                    component = componentNext[component])
+                {
+                    if (composition.Length > 0)
+                    {
+                        composition.Append(", ");
+                    }
+
+                    composition.Append(liquidIds[componentTypeIndices[component]]);
+                    composition.Append(':');
+                    composition.Append(componentAmounts[component].ToString("F3"));
+                }
+            }
+
+            snapshots[drop] = new LiquidDropSnapshot(
+                dropIds[drop],
+                positions[drop],
+                velocities[drop],
+                containerAssignments[drop],
+                dropVolumes[drop],
+                composition.ToString());
+        }
+
+        return snapshots;
     }
 
     internal bool IsInsideContainer(Vector2 point)
@@ -1351,7 +1424,10 @@ internal sealed class LiquidSimulation
             simulationTime = 0f;
             if (graphicsDirty)
             {
-                UpdateGraphics();
+                if (!headless)
+                {
+                    UpdateGraphics();
+                }
                 graphicsDirty = false;
             }
             return;
@@ -1433,11 +1509,15 @@ internal sealed class LiquidSimulation
             diagnosticTimer %= 1f;
         }
 
-        if (graphicsDirty)
+        if (graphicsDirty && !headless)
         {
             profilingStart = SimulationProfiler.Begin();
             UpdateGraphics();
             SimulationProfiler.End(SimulationProfileStage.RenderScheduling, profilingStart);
+            graphicsDirty = false;
+        }
+        else if (headless)
+        {
             graphicsDirty = false;
         }
     }
