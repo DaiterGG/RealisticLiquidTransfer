@@ -47,7 +47,17 @@ internal static class StartLiquidTransferPatch
         var firstComposition = GetContainerComposition(wat1, "first");
         var secondComposition = GetContainerComposition(wat2, "second");
         var playerBody = PlayerCamera.main ? PlayerCamera.main.body : null;
-        var hasFunnel = playerBody && playerBody.FindByIdThorough(FunnelItem.Id, out _);
+        var transferUsesSyringe = string.Equals(
+                firstSpriteName,
+                "syringe",
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                secondSpriteName,
+                "syringe",
+                StringComparison.OrdinalIgnoreCase);
+        var hasFunnel = !transferUsesSyringe
+            && playerBody
+            && playerBody.FindByIdThorough(FunnelItem.Id, out _);
         MinigameBase.main.StartMinigame(
             new LiquidTransferMinigame(
                 wat1,
