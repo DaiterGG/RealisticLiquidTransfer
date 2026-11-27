@@ -37,7 +37,8 @@ internal static class FunnelItem
             category = "custom",
             weight = 0.1f,
             value = 1,
-            combineable = false
+            combineable = false,
+            untradeable = true
         };
         funnelInfo.SetTags();
         Item.GlobalItems.Add(Id, funnelInfo);
@@ -118,6 +119,19 @@ internal static class FunnelItem
         var funnel = Create(parent.position, parent.eulerAngles.z);
         funnel.transform.SetParent(parent, true);
         return funnel;
+    }
+}
+
+[HarmonyPatch(typeof(ItemLootPool), nameof(ItemLootPool.InitializePool))]
+internal static class FunnelLootPoolPatch
+{
+    [HarmonyPostfix]
+    private static void Postfix()
+    {
+        foreach (var categoryItems in ItemLootPool.pool.Values)
+        {
+            categoryItems.Remove(FunnelItem.Id);
+        }
     }
 }
 
