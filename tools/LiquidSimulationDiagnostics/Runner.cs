@@ -14,7 +14,9 @@ public static class LiquidSimulationDiagnosticsRunner
     private const int SimulationFrames = SimulationDurationSeconds * GameUpdatesPerSecond;
     private const int SettlingWindowFrames = GameUpdatesPerSecond;
     private const float WaterBottleCapacity = 500f;
+    private const float MiniBarrelCapacity = 5000f;
     private const float ReferenceCapacity = 250f;
+    private const float BottleLoweringDurationSeconds = 8f;
     private const float MaximumSettledSpeed = 8f;
     private const float FunnelMaximumFrameMovement = 30f;
     private const float FunnelMaximumSourceRelativeDrift = 120f;
@@ -29,6 +31,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const string SingleDropScenario = "water-bottle-single-drop";
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
     private const string SyringeCenterBottleScenario = "syringe-center-bottle-intake";
+    private const string WaterBottleIntoMiniBarrelScenario = "water-bottle-into-minibarrel";
     private static StreamWriter log;
 
     public static void Run()
@@ -38,6 +41,12 @@ public static class LiquidSimulationDiagnosticsRunner
         try
         {
             var scenario = GetArgument("-scenario");
+            if (scenario == WaterBottleIntoMiniBarrelScenario)
+            {
+                RunWaterBottleIntoMiniBarrelScenario();
+                return;
+            }
+
             if (scenario == SyringeCenterBottleScenario)
             {
                 RunSyringeCenterBottleIntakeScenario();
@@ -1194,6 +1203,383 @@ public static class LiquidSimulationDiagnosticsRunner
             WriteLine(singleDropScenario
                 ? "PASS: single-drop diagnostic completed; inspect observed movement metrics above."
                 : "PASS: full water bottle retained all liquid and settled.");
+        }
+        catch (Exception exception)
+        {
+            WriteLine($"FAIL: {exception}");
+            exitCode = 1;
+        }
+        finally
+        {
+            DebugLog.Sink = null;
+            Plugin.LogSink = null;
+            if (screenObject)
+            {
+                UnityEngine.Object.DestroyImmediate(screenObject);
+            }
+
+            if (log != null)
+            {
+                log.Flush();
+                log.Dispose();
+                log = null;
+            }
+        }
+
+        EditorApplication.Exit(exitCode);
+    }
+
+    private static void RunWaterBottleIntoMiniBarrelScenario()
+    {
+        GameObject screenObject = null;
+        var exitCode = 0;
+        try
+        {
+            var logPath = GetArgument("-diagnosticLog");
+            var repositoryRoot = GetArgument("-repositoryRoot");
+            if (string.IsNullOrWhiteSpace(logPath) || string.IsNullOrWhiteSpace(repositoryRoot))
+            {
+                throw new ArgumentException("Expected diagnostic-log and repository-root arguments.");
+            }
+
+            if (!GeneratedContainerBoundaryCatalog.TryGet("coffee", out var referenceBoundary)
+                || !GeneratedContainerBoundaryCatalog.TryGet("waterbottle", out var bottleBoundary)
+                || !GeneratedContainerBoundaryCatalog.TryGet("minibarreltop", out var barrelBoundary)
+                || !bottleBoundary.HasOpening
+                || !barrelBoundary.HasOpening)
+            {
+                throw new InvalidOperationException(
+                    "Generated coffee, water-bottle, or minibarrel boundaries are missing.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath));
+            log = new StreamWriter(logPath, false, new System.Text.UTF8Encoding(false))
+            {
+                AutoFlush = true
+            };
+            DebugLog.Sink = WriteLine;
+            Plugin.LogSink = WriteLine;
+            WriteLine($"Scenario '{WaterBottleIntoMiniBarrelScenario}' started at {DateTime.Now:O}.");
+
+            var referenceArea = EstimateArea(
+                referenceBoundary.WallCenterlinePoints,
+                referenceBoundary.InteriorWalls);
+            var bottleArea = EstimateArea(
+                bottleBoundary.WallCenterlinePoints,
+                bottleBoundary.InteriorWalls);
+            var barrelArea = EstimateArea(
+                barrelBoundary.WallCenterlinePoints,
+                barrelBoundary.InteriorWalls);
+            if (referenceArea <= 0d || bottleArea <= 0d || barrelArea <= 0d)
+            {
+                throw new InvalidOperationException("Could not calculate gameplay container areas.");
+            }
+
+            var screenPixelSize = new Vector2(Screen.width, Screen.height);
+            var uiScale = screenPixelSize.y / 1080f;
+            if (screenPixelSize.x <= 0f || screenPixelSize.y <= 0f || uiScale <= 0f)
+            {
+                throw new InvalidOperationException($"Invalid Unity screen dimensions: {screenPixelSize}.");
+            }
+
+            var viewportSize = screenPixelSize / uiScale;
+            screenObject = new GameObject("BottleIntoMiniBarrelDiagnosticsCanvas", typeof(RectTransform));
+            var canvasRoot = screenObject.GetComponent<RectTransform>();
+            ConfigureRect(canvasRoot, null, viewportSize, Vector2.zero);
+            canvasRoot.localScale = Vector3.one * uiScale;
+            var screenGameObject = new GameObject(
+                "BottleIntoMiniBarrelDiagnosticsScreen",
+                typeof(RectTransform));
+            var screen = screenGameObject.GetComponent<RectTransform>();
+            ConfigureRect(screen, canvasRoot, viewportSize, Vector2.zero);
+            var rootObject = new GameObject("BottleIntoMiniBarrelDiagnosticsRoot", typeof(RectTransform));
+            var root = rootObject.GetComponent<RectTransform>();
+            ConfigureRect(root, screen, viewportSize, Vector2.zero);
+
+            var bottleSpriteSize = LoadVisibleSpriteSize(
+                Path.Combine(repositoryRoot, "resources", "sprites", "containers", "waterbottle.png"));
+            var barrelSpriteSize = LoadVisibleSpriteSize(
+                Path.Combine(repositoryRoot, "resources", "sprites", "containers", "minibarreltop.png"));
+            var bottle = CreateContainer(root, "EmptyWaterBottle", bottleSpriteSize);
+            var barrel = CreateContainer(root, "FullMiniBarrel", barrelSpriteSize);
+            var bottleScale = LiquidContainerLayout.TryGetAreaScaledScale(
+                WaterBottleCapacity,
+                ReferenceCapacity,
+                referenceArea,
+                bottleArea,
+                out var calculatedBottleScale)
+                ? calculatedBottleScale
+                : throw new InvalidOperationException("Could not calculate the water-bottle scale.");
+            var barrelScale = LiquidContainerLayout.TryGetAreaScaledScale(
+                MiniBarrelCapacity,
+                ReferenceCapacity,
+                referenceArea,
+                barrelArea,
+                out var calculatedBarrelScale)
+                ? calculatedBarrelScale
+                : throw new InvalidOperationException("Could not calculate the minibarrel scale.");
+            bottle.localScale = Vector3.one * bottleScale;
+            bottle.localRotation = Quaternion.Euler(0f, 0f, 180f);
+            barrel.localScale = Vector3.one * barrelScale;
+            barrel.anchoredPosition = Vector2.zero;
+
+            var barrelOpening = (Vector2)root.InverseTransformPoint(
+                barrel.TransformPoint(barrelBoundary.OpeningPosition));
+            var bottleOpening = (Vector2)root.InverseTransformPoint(
+                bottle.TransformPoint(bottleBoundary.OpeningPosition));
+            var startOpening = barrelOpening
+                + Vector2.up * LiquidSimulation.DefaultDropRadius * 2f;
+            bottle.anchoredPosition += startOpening - bottleOpening;
+            var fitScale = LiquidContainerLayout.GetFitScale(screen, root, bottle, barrel);
+            root.localScale = Vector3.one * fitScale;
+
+            var barrelMinimumY = float.PositiveInfinity;
+            foreach (var point in barrelBoundary.WallCenterlinePoints)
+            {
+                barrelMinimumY = Mathf.Min(barrelMinimumY, point.y);
+            }
+
+            var barrelBottom = (Vector2)root.InverseTransformPoint(
+                barrel.TransformPoint(new Vector2(0f, barrelMinimumY)));
+            var endOpeningY = barrelBottom.y + LiquidSimulation.DefaultDropRadius * 2f;
+            if (endOpeningY >= startOpening.y)
+            {
+                throw new InvalidOperationException(
+                    $"Bottle lowering path is invalid: start={startOpening.y:F2}, end={endOpeningY:F2}.");
+            }
+
+            var water = new[]
+            {
+                new LiquidProfileEntry(
+                    "water",
+                    MiniBarrelCapacity,
+                    new Color(0.16f, 0.5f, 0.95f))
+            };
+            var simulation = new LiquidSimulation(
+                root,
+                bottle,
+                bottleBoundary.WallCenterlinePoints,
+                bottleBoundary.InteriorWalls,
+                WaterBottleCapacity,
+                barrel,
+                barrelBoundary.WallCenterlinePoints,
+                barrelBoundary.InteriorWalls,
+                MiniBarrelCapacity,
+                0f,
+                MiniBarrelCapacity,
+                Array.Empty<LiquidProfileEntry>(),
+                water,
+                LiquidSimulation.DefaultPackingTenths / 100f,
+                headless: true);
+            simulation.ConfigureForMinigame(false);
+
+            var initialDrops = simulation.CaptureDropSnapshots();
+            if (simulation.GetInitialContainerDropCount(0) != 0
+                || simulation.GetInitialContainerDropCount(1) != MiniBarrelCapacity
+                || initialDrops.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Fixture did not seed a full minibarrel: bottle="
+                    + $"{simulation.GetInitialContainerDropCount(0)}ml, barrel="
+                    + $"{simulation.GetInitialContainerDropCount(1)}/{MiniBarrelCapacity:F0}ml, "
+                    + $"particles={initialDrops.Length}.");
+            }
+
+            var trackedDrop = initialDrops[0];
+            var trackedInitialOffset = barrel.InverseTransformPoint(root.TransformPoint(trackedDrop.Position));
+            var trackedStartDistance = float.PositiveInfinity;
+            foreach (var drop in initialDrops)
+            {
+                var distance = Vector2.Distance(drop.Position, startOpening);
+                if (distance < trackedStartDistance)
+                {
+                    trackedDrop = drop;
+                    trackedStartDistance = distance;
+                }
+            }
+
+            trackedInitialOffset = barrel.InverseTransformPoint(
+                root.TransformPoint(trackedDrop.Position));
+            var trackedDropId = trackedDrop.Id;
+            var trackedPosition = trackedDrop.Position;
+            var trackedVelocity = trackedDrop.Velocity;
+            var previousTrackedPosition = trackedPosition;
+            var trackedBarrelLocal = (Vector2)trackedInitialOffset;
+            var trackedBottleLocal = (Vector2)bottle.InverseTransformPoint(
+                root.TransformPoint(trackedPosition));
+            var maximumFrameMovement = 0f;
+            var maximumSourceRelativeDrift = 0f;
+            var maximumTrackedSpeed = 0f;
+            var framesWithUnassignedLiquid = 0;
+            var maximumUnassignedUnits = 0;
+            var maximumUnaccountedUnits = 0;
+            var trackedDropRemoved = false;
+            var firstTrackedDropMissingFrame = -1;
+            var trackedDropEnteredBottle = false;
+            var trackedOwner = (byte)2;
+            var expectedUnits = simulation.Count;
+            var loweringFrames = Mathf.CeilToInt(
+                BottleLoweringDurationSeconds * GameUpdatesPerSecond);
+            var movementDistance = startOpening.y - endOpeningY;
+            WriteLine(
+                $"Fixture: empty water bottle={bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0}, "
+                + $"scale={bottleScale:F3}; full minibarrel={barrelSpriteSize.x:F0}x"
+                + $"{barrelSpriteSize.y:F0}, capacity={MiniBarrelCapacity:F0}ml, "
+                + $"scale={barrelScale:F3}; bottle rotated={bottle.localEulerAngles.z:F0}deg.");
+            WriteLine(
+                $"Motion: updates={GameUpdatesPerSecond}Hz, duration={SimulationDurationSeconds}s, "
+                + $"loweringDuration={BottleLoweringDurationSeconds:F1}s, "
+                + $"openingY={startOpening.y:F2}->{endOpeningY:F2}, "
+                + $"distance={movementDistance:F2}px, "
+                + $"initialBottleAmount={simulation.GetContainerLiquidAmount(0):F1}ml, "
+                + $"initialBarrelAmount={simulation.GetContainerLiquidAmount(1):F1}ml, "
+                + $"particles={initialDrops.Length}, trackedDrop={trackedDropId}, "
+                + $"trackedDropVolume={trackedDrop.Volume}ml, "
+                + $"trackedInitialBarrelLocal=({trackedInitialOffset.x:F3},"
+                + $"{trackedInitialOffset.y:F3}), trackedStartDistance={trackedStartDistance:F3}px.");
+
+            for (var frame = 0; frame <= SimulationFrames; frame++)
+            {
+                var loweringProgress = Mathf.Clamp01((float)frame / loweringFrames);
+                var currentOpening = (Vector2)root.InverseTransformPoint(
+                    bottle.TransformPoint(bottleBoundary.OpeningPosition));
+                if (frame > 0 && frame <= loweringFrames)
+                {
+                    var previousPosition = bottle.anchoredPosition;
+                    var targetOpeningY = Mathf.Lerp(startOpening.y, endOpeningY, loweringProgress);
+                    bottle.anchoredPosition += Vector2.up * (targetOpeningY - currentOpening.y);
+                    simulation.ApplyContainerPoseChange(
+                        bottle,
+                        previousPosition,
+                        180f,
+                        bottle.anchoredPosition,
+                        180f,
+                        Vector2.one);
+                }
+
+                currentOpening = (Vector2)root.InverseTransformPoint(
+                    bottle.TransformPoint(bottleBoundary.OpeningPosition));
+                if (frame > 0)
+                {
+                    simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
+                }
+
+                var drops = simulation.CaptureDropSnapshots();
+                var bottleOwnedUnits = 0;
+                var barrelOwnedUnits = 0;
+                var unassignedUnits = 0;
+                var liveUnits = 0;
+                var trackedDropFound = false;
+                foreach (var drop in drops)
+                {
+                    liveUnits += drop.Volume;
+                    if (drop.ContainerAssignment == 1)
+                    {
+                        bottleOwnedUnits += drop.Volume;
+                    }
+                    else if (drop.ContainerAssignment == 2)
+                    {
+                        barrelOwnedUnits += drop.Volume;
+                    }
+                    else
+                    {
+                        unassignedUnits += drop.Volume;
+                    }
+
+                    if (drop.Id != trackedDropId)
+                    {
+                        continue;
+                    }
+
+                    trackedDropFound = true;
+                    var insideBottle = simulation.ContainsContainer(0, drop.Position);
+                    var insideBarrel = simulation.ContainsContainer(1, drop.Position);
+                    var barrelLocal = (Vector2)barrel.InverseTransformPoint(
+                        root.TransformPoint(drop.Position));
+                    var bottleLocal = (Vector2)bottle.InverseTransformPoint(
+                        root.TransformPoint(drop.Position));
+                    var frameMovement = Vector2.Distance(previousTrackedPosition, drop.Position);
+                    var sourceRelativeDrift = Vector2.Distance(trackedInitialOffset, barrelLocal);
+                    maximumFrameMovement = Mathf.Max(maximumFrameMovement, frameMovement);
+                    maximumSourceRelativeDrift = Mathf.Max(
+                        maximumSourceRelativeDrift,
+                        sourceRelativeDrift);
+                    maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
+                    trackedDropEnteredBottle |= insideBottle;
+                    trackedOwner = drop.ContainerAssignment;
+                    WriteLine(
+                        $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s "
+                        + $"lowering={loweringProgress:P1} bottleOpeningY={currentOpening.y:F3} "
+                        + $"id={drop.Id} volume={drop.Volume} insideBottle={insideBottle} "
+                        + $"insideBarrel={insideBarrel} owner={drop.ContainerAssignment} "
+                        + $"position=({drop.Position.x:F3},{drop.Position.y:F3}) "
+                        + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}) "
+                        + $"barrelLocal=({barrelLocal.x:F3},{barrelLocal.y:F3}) "
+                        + $"bottleLocal=({bottleLocal.x:F3},{bottleLocal.y:F3}) "
+                        + $"frameMove={frameMovement:F3} sourceDrift={sourceRelativeDrift:F3} "
+                        + "removed=false.");
+                    trackedPosition = drop.Position;
+                    trackedVelocity = drop.Velocity;
+                    trackedBarrelLocal = barrelLocal;
+                    trackedBottleLocal = bottleLocal;
+                    previousTrackedPosition = drop.Position;
+                }
+
+                if (!trackedDropFound)
+                {
+                    trackedDropRemoved = true;
+                    if (firstTrackedDropMissingFrame < 0)
+                    {
+                        firstTrackedDropMissingFrame = frame;
+                    }
+
+                    WriteLine(
+                        $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s "
+                        + $"lowering={loweringProgress:P1} bottleOpeningY={currentOpening.y:F3} "
+                        + $"id={trackedDropId} insideBottle=false insideBarrel=false "
+                        + $"owner=removed position=({trackedPosition.x:F3},{trackedPosition.y:F3}) "
+                        + $"velocity=({trackedVelocity.x:F3},{trackedVelocity.y:F3}) "
+                        + $"barrelLocal=({trackedBarrelLocal.x:F3},{trackedBarrelLocal.y:F3}) "
+                        + $"bottleLocal=({trackedBottleLocal.x:F3},{trackedBottleLocal.y:F3}) "
+                        + "frameMove=0.000 sourceDrift=0.000 removed=true.");
+                }
+
+                framesWithUnassignedLiquid += unassignedUnits > 0 ? 1 : 0;
+                maximumUnassignedUnits = Mathf.Max(maximumUnassignedUnits, unassignedUnits);
+                var unaccountedUnits = Mathf.Abs(expectedUnits - liveUnits);
+                maximumUnaccountedUnits = Mathf.Max(maximumUnaccountedUnits, unaccountedUnits);
+                if (frame % GameUpdatesPerSecond == 0 || frame == SimulationFrames)
+                {
+                    WriteLine(
+                        $"membership frame={frame} t={frame * UpdateDeltaTime:F1}s "
+                        + $"bottleOwned={bottleOwnedUnits}ml barrelOwned={barrelOwnedUnits}ml "
+                        + $"unassigned={unassignedUnits}ml live={liveUnits}/{expectedUnits}ml "
+                        + $"unaccounted={unaccountedUnits}ml particles={drops.Length}.");
+                }
+            }
+
+            WriteLine(
+                $"Bottle-into-minibarrel observations: finalBottle="
+                + $"{simulation.GetContainerLiquidAmount(0):F1}ml, "
+                + $"finalBarrel={simulation.GetContainerLiquidAmount(1):F1}ml, "
+                + $"liveUnits={simulation.Count}/{expectedUnits}ml, "
+                + $"trackedDropEnteredBottle={trackedDropEnteredBottle}, "
+                + $"trackedDropOwner={trackedOwner}, trackedDropRemoved={trackedDropRemoved} "
+                + $"atFrame={firstTrackedDropMissingFrame}, "
+                + $"unassignedFrames={framesWithUnassignedLiquid}, "
+                + $"maximumUnassigned={maximumUnassignedUnits}ml, "
+                + $"maximumUnaccounted={maximumUnaccountedUnits}ml, "
+                + $"maximumFrameMovement={maximumFrameMovement:F3}px/frame, "
+                + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
+                + $"maximumTrackedSpeed={maximumTrackedSpeed:F3}px/s.");
+            if (maximumUnaccountedUnits > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Bottle immersion lost liquid accounting: expected {expectedUnits}ml, "
+                    + $"observed {simulation.Count}ml, maximum missing={maximumUnaccountedUnits}ml.");
+            }
+
+            WriteLine("PASS: water-bottle-into-minibarrel diagnostic completed; inspect observations above.");
         }
         catch (Exception exception)
         {
