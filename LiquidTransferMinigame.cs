@@ -550,9 +550,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private void CreateFunnelVisuals()
     {
         var sprite = FunnelItem.TransferSprite;
-        funnelFitWidth = Mathf.Max(
-            receivingContainer.Transform.rect.width * receivingContainer.Transform.localScale.x,
-            sourceContainer.Transform.rect.width * sourceContainer.Transform.localScale.x);
+        funnelFitWidth = receivingContainer.Transform.rect.width
+            * Mathf.Abs(receivingContainer.Transform.localScale.x);
         funnelDragSurface = CreateFunnelDragSurface();
         leftFunnelSide = CreateFunnelSide("FunnelLeftSide", sprite);
         rightFunnelSide = CreateFunnelSide("FunnelRightSide", sprite);
