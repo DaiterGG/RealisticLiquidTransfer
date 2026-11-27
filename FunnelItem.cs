@@ -95,7 +95,15 @@ internal static class FunnelItem
         var sprite = Sprite;
         funnel.AddComponent<SpriteRenderer>().sprite = sprite;
         funnel.AddComponent<Rigidbody2D>();
-        funnel.AddComponent<BoxCollider2D>().size = sprite.bounds.size;
+
+        var spriteBounds = sprite.bounds;
+        var bowlCollider = funnel.AddComponent<BoxCollider2D>();
+        bowlCollider.size = new Vector2(spriteBounds.size.x, spriteBounds.size.y * (5f / 9f));
+        bowlCollider.offset = new Vector2(0f, spriteBounds.extents.y - bowlCollider.size.y * 0.5f);
+
+        var stemCollider = funnel.AddComponent<BoxCollider2D>();
+        stemCollider.size = new Vector2(spriteBounds.size.x * 0.25f, spriteBounds.size.y * (5f / 9f));
+        stemCollider.offset = new Vector2(0f, -spriteBounds.extents.y + stemCollider.size.y * 0.5f);
 
         var item = funnel.AddComponent<Item>();
         item.id = Id;
