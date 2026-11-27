@@ -13,7 +13,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float ContainerSeparatedGap = 50f;
     private const float MinimumContainerImpactThreshold = 1f;
     private const float MaximumContainerImpactThreshold = 1500f;
-    private const float DefaultContainerImpactThreshold = 1270f;
+    private const float DefaultContainerImpactThreshold = 900f;
     private const float DefaultContainerImpactPitchVariation = 10f;
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";

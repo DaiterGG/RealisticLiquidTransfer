@@ -7,7 +7,7 @@ internal static class ContainerImpactAudioCatalog
 {
     internal const float DefaultWeakVolumeMultiplier = 1f;
     internal const float DefaultStrongVolumeMultiplier = 1f;
-    internal const float DefaultStrongMinimumVolume = 0.7f;
+    internal const float DefaultStrongMinimumVolume = 0.1f;
     internal const float DefaultFullVolumeVelocity = 2000f;
     internal const float DefaultMasterVolumeMultiplier = 1f;
     internal const float MaximumFullVolumeVelocity = 5000f;
