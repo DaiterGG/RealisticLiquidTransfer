@@ -15,6 +15,10 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float WaterBottleCapacity = 500f;
     private const float ReferenceCapacity = 250f;
     private const float MaximumSettledSpeed = 8f;
+    private const float SyringeMaximumFrameMovement = 18f;
+    private const float SyringeMaximumSourceRelativeDrift = 45f;
+    private const float SyringeMaximumTrackedSpeed = 500f;
+    private const float SyringeMaximumSettledSpeed = 6f;
     private const float FunnelMaximumFrameMovement = 30f;
     private const float FunnelMaximumSourceRelativeDrift = 120f;
     private const float FunnelMaximumTrackedSpeed = 900f;
@@ -22,6 +26,18 @@ public static class LiquidSimulationDiagnosticsRunner
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
+    private const string SyringeCapacityScenario = "syringe-full-capacity";
+    private const float SyringeCapacity = 100f;
+    private const float SyringeTestScale = 1.3f;
+    private const float SyringeDropRadiusMultiplier = 0.68f;
+    private static readonly Vector2[] SyringeFluidOutline =
+    {
+        new Vector2(-9f, 58.5f),
+        new Vector2(9f, 58.5f),
+        new Vector2(9f, -12.5f),
+        new Vector2(-9f, -12.5f),
+        new Vector2(-9f, 58.5f)
+    };
     private static StreamWriter log;
 
     public static void Run()
@@ -35,9 +51,12 @@ public static class LiquidSimulationDiagnosticsRunner
             var repositoryRoot = GetArgument("-repositoryRoot");
             var funnelWallScenario = scenario == FunnelWallSingleDropScenario;
             var singleDropScenario = scenario == SingleDropScenario || funnelWallScenario;
+            var syringeScenario = scenario == SyringeCapacityScenario;
+            var traceDropScenario = singleDropScenario || syringeScenario;
             if ((scenario != "water-bottle-full-idle"
                     && scenario != SingleDropScenario
-                    && !funnelWallScenario)
+                    && !funnelWallScenario
+                    && !syringeScenario)
                 || string.IsNullOrWhiteSpace(logPath)
                 || string.IsNullOrWhiteSpace(repositoryRoot))
             {
@@ -100,8 +119,8 @@ public static class LiquidSimulationDiagnosticsRunner
                 coffeeSpriteSize);
             var source = CreateContainer(
                 root,
-                "FullWaterBottle",
-                bottleSpriteSize);
+                syringeScenario ? "FullSyringe" : "FullWaterBottle",
+                syringeScenario ? new Vector2(30f, 141f) : bottleSpriteSize);
 
             var receiverScale = LiquidContainerLayout.TryGetAreaScaledScale(
                 ReferenceCapacity,
@@ -120,7 +139,10 @@ public static class LiquidSimulationDiagnosticsRunner
                 ? calculatedBottleScale
                 : throw new InvalidOperationException("Could not calculate the water-bottle scale.");
             receiver.localScale = Vector3.one * receiverScale;
-            source.localScale = Vector3.one * bottleScale;
+            var sourceScale = syringeScenario
+                ? LiquidContainerLayout.ContainerScale * SyringeTestScale
+                : bottleScale;
+            source.localScale = Vector3.one * sourceScale;
             if (funnelWallScenario)
             {
                 source.localRotation = Quaternion.Euler(0f, 0f, 180f);
@@ -139,7 +161,7 @@ public static class LiquidSimulationDiagnosticsRunner
                     receiver,
                     referenceBoundary.OpeningPosition,
                     source,
-                    bottleBoundary.OpeningPosition);
+                    syringeScenario ? Vector2.zero : bottleBoundary.OpeningPosition);
             }
 
             var fitScale = LiquidContainerLayout.GetFitScale(screen, root, receiver, source);
@@ -326,10 +348,67 @@ public static class LiquidSimulationDiagnosticsRunner
             {
                 new LiquidProfileEntry(
                     "water",
-                    singleDropScenario ? 1f : WaterBottleCapacity,
+                    singleDropScenario
+                        ? 1f
+                        : syringeScenario
+                            ? SyringeCapacity + 1f
+                            : WaterBottleCapacity,
                     new Color(0.16f, 0.5f, 0.95f))
             };
-            var expectedUnits = singleDropScenario ? 1f : WaterBottleCapacity;
+            var expectedUnits = singleDropScenario
+                ? 1f
+                : syringeScenario
+                    ? SyringeCapacity + 1f
+                    : WaterBottleCapacity;
+            var sourceOutline = syringeScenario
+                ? SyringeFluidOutline
+                : bottleBoundary.WallCenterlinePoints;
+            var sourceInteriorWalls = syringeScenario
+                ? Array.Empty<Vector2[]>()
+                : bottleBoundary.InteriorWalls;
+            var sourceCapacity = syringeScenario ? SyringeCapacity : WaterBottleCapacity;
+            var firstAmount = syringeScenario ? expectedUnits : 0f;
+            var secondAmount = syringeScenario ? 0f : expectedUnits;
+            var firstComposition = syringeScenario ? water : Array.Empty<LiquidProfileEntry>();
+            var secondComposition = syringeScenario ? Array.Empty<LiquidProfileEntry>() : water;
+            var fullSyringeWater = new[]
+            {
+                new LiquidProfileEntry(
+                    "water",
+                    SyringeCapacity,
+                    new Color(0.16f, 0.5f, 0.95f))
+            };
+            var initialSyringeAmount = 0f;
+            if (syringeScenario)
+            {
+                var fullSyringeSimulation = new LiquidSimulation(
+                    root,
+                    receiver,
+                    referenceBoundary.WallCenterlinePoints,
+                    referenceBoundary.InteriorWalls,
+                    250f,
+                    source,
+                    SyringeFluidOutline,
+                    Array.Empty<Vector2[]>(),
+                    SyringeCapacity,
+                    0f,
+                    SyringeCapacity,
+                    Array.Empty<LiquidProfileEntry>(),
+                    fullSyringeWater,
+                    LiquidSimulation.DefaultPackingTenths / 100f,
+                    headless: true,
+                    defaultDropRadiusMultiplier: SyringeDropRadiusMultiplier);
+                initialSyringeAmount = fullSyringeSimulation.GetContainerLiquidAmount(1);
+                var initialHandleY = Mathf.Lerp(
+                    SyringeFluidOutline[3].y,
+                    SyringeFluidOutline[0].y,
+                    Mathf.Clamp01(initialSyringeAmount / SyringeCapacity));
+                WriteLine(
+                    $"Full syringe startup fixture: requested={SyringeCapacity:F0}ml, "
+                    + $"seeded={initialSyringeAmount:F0}ml, handleY={initialHandleY:F1}, "
+                    + $"topY={SyringeFluidOutline[0].y:F1}.");
+            }
+
             var simulation = new LiquidSimulation(
                 root,
                 receiver,
@@ -337,37 +416,98 @@ public static class LiquidSimulationDiagnosticsRunner
                 referenceBoundary.InteriorWalls,
                 250f,
                 source,
-                bottleBoundary.WallCenterlinePoints,
-                bottleBoundary.InteriorWalls,
-                WaterBottleCapacity,
-                0f,
-                expectedUnits,
-                Array.Empty<LiquidProfileEntry>(),
-                water,
+                sourceOutline,
+                sourceInteriorWalls,
+                sourceCapacity,
+                firstAmount,
+                secondAmount,
+                firstComposition,
+                secondComposition,
                 LiquidSimulation.DefaultPackingTenths / 100f,
                 headless: true,
-                funnelWallPoints: funnelWallPoints);
+                funnelWallPoints: funnelWallPoints,
+                defaultDropRadiusMultiplier: syringeScenario
+                    ? SyringeDropRadiusMultiplier
+                    : 1f);
+            if (syringeScenario)
+            {
+                simulation.SetSyringePistonPosition(1, SyringeFluidOutline[0].y);
+                var transferSourcePoint = root.InverseTransformPoint(
+                    receiver.TransformPoint(Vector2.zero));
+                var transferredUnits = 0;
+                while (transferredUnits < SyringeCapacity + 1f)
+                {
+                    var fillRatio = Mathf.Clamp01(
+                        simulation.GetContainerLiquidAmount(1) / SyringeCapacity);
+                    var surfaceY = Mathf.Lerp(
+                        SyringeFluidOutline[3].y,
+                        SyringeFluidOutline[0].y,
+                        fillRatio);
+                    var localDropRadius = LiquidSimulation.DefaultDropRadiusTenths / 10f
+                        * SyringeDropRadiusMultiplier
+                        / Mathf.Max(Mathf.Abs(source.localScale.y), 0.0001f);
+                    var maximumY = SyringeFluidOutline[0].y - localDropRadius;
+                    var destinationY = Mathf.Clamp(
+                        Mathf.Min(surfaceY + localDropRadius, maximumY),
+                        SyringeFluidOutline[3].y + localDropRadius,
+                        maximumY);
+                    var transferDestinationPoint = root.InverseTransformPoint(
+                        source.TransformPoint(new Vector2(0f, destinationY)));
+                    var moved = simulation.TryTransferNearestDrop(
+                        0,
+                        1,
+                        transferSourcePoint,
+                        10000f,
+                        transferDestinationPoint,
+                        1,
+                        Vector2.zero);
+                    if (moved <= 0)
+                    {
+                        break;
+                    }
+
+                    transferredUnits += moved;
+                }
+
+                WriteLine(
+                    $"Syringe intake fixture: requested={SyringeCapacity + 1f:F0}ml, "
+                    + $"transferred={transferredUnits}ml, "
+                    + $"inSyringe={simulation.GetContainerLiquidAmount(1):F0}ml, "
+                    + $"leftOutside={simulation.GetContainerLiquidAmount(0):F0}ml.");
+            }
             simulation.ConfigureForMinigame(false);
 
             var initialDrops = simulation.CaptureDropSnapshots();
-            if (simulation.GetInitialContainerDropCount(0) != 0
-                || simulation.GetInitialContainerDropCount(1) != expectedUnits
-                || (singleDropScenario && initialDrops.Length != 1))
+            if (!syringeScenario
+                && (simulation.GetInitialContainerDropCount(0) != 0
+                    || simulation.GetInitialContainerDropCount(1) != expectedUnits
+                    || (singleDropScenario && initialDrops.Length != 1)))
             {
                 throw new InvalidOperationException(
                     $"Fixture seeded {simulation.GetInitialContainerDropCount(1)} units into the bottle; expected "
                     + $"{expectedUnits} units and "
-                    + (singleDropScenario ? "exactly one drop." : "all 500 ml."));
+                    + (singleDropScenario
+                        ? "exactly one drop."
+                        : syringeScenario
+                            ? "all 100 ml."
+                            : "all 500 ml."));
             }
 
             WriteLine(
                 $"Fixture: 250ml coffee receiver {coffeeSpriteSize.x:F0}x{coffeeSpriteSize.y:F0} "
                 + $"at ({receiver.anchoredPosition.x:F1},{receiver.anchoredPosition.y:F1}) "
-                + $"scale={receiverScale:F3}; water bottle capacity={WaterBottleCapacity:F0}ml, "
-                + $"seeded={expectedUnits:F0}ml "
-                + $"{bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0} "
+                + $"scale={receiverScale:F3}; second container capacity={sourceCapacity:F0}ml, "
+                + $"liquid={expectedUnits:F0}ml "
+                + $"{(syringeScenario ? 30f : bottleSpriteSize.x):F0}x"
+                + $"{(syringeScenario ? 141f : bottleSpriteSize.y):F0} "
                 + $"at ({source.anchoredPosition.x:F1},{source.anchoredPosition.y:F1}) "
-                + $"scale={bottleScale:F3}.");
+                + $"scale={sourceScale:F3}.");
+            if (syringeScenario)
+            {
+                WriteLine(
+                    $"Syringe fixture: scale={SyringeTestScale:F2}, "
+                    + "fluid outline width=18px, height=71px.");
+            }
             if (funnelWallScenario)
             {
                 WriteLine(
@@ -389,15 +529,28 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"settling window={SettlingWindowFrames * UpdateDeltaTime:F1}s.");
             WriteLine(
                 $"Seed: particles={initialDrops.Length}, initial units={simulation.Count}.");
-            var trackedDropId = singleDropScenario ? initialDrops[0].Id : -1;
-            var trackedDropPosition = initialDrops.Length > 0
-                ? initialDrops[0].Position
+            var trackedDrop = initialDrops.Length > 0 ? initialDrops[0] : default;
+            if (syringeScenario)
+            {
+                foreach (var drop in initialDrops)
+                {
+                    if (drop.ContainerAssignment == 2)
+                    {
+                        trackedDrop = drop;
+                        break;
+                    }
+                }
+            }
+
+            var trackedDropId = traceDropScenario ? trackedDrop.Id : -1;
+            var trackedDropPosition = traceDropScenario && initialDrops.Length > 0
+                ? trackedDrop.Position
                 : Vector2.zero;
-            var trackedDropVelocity = initialDrops.Length > 0
-                ? initialDrops[0].Velocity
+            var trackedDropVelocity = traceDropScenario && initialDrops.Length > 0
+                ? trackedDrop.Velocity
                 : Vector2.zero;
-            var trackedSourceOffset = initialDrops.Length > 0
-                ? GetSourceLocalPosition(root, source, initialDrops[0].Position)
+            var trackedSourceOffset = traceDropScenario && initialDrops.Length > 0
+                ? GetSourceLocalPosition(root, source, trackedDrop.Position)
                 : Vector2.zero;
             var initialSourceOffset = trackedSourceOffset;
             var previousTrackedPosition = trackedDropPosition;
@@ -434,17 +587,21 @@ public static class LiquidSimulationDiagnosticsRunner
                 {
                     frameUnits += drop.Volume;
                     frameMaximumSpeed = Mathf.Max(frameMaximumSpeed, drop.Velocity.magnitude);
-                    if (!simulation.ContainsContainer(1, drop.Position))
+                    var insideReceiver = simulation.ContainsContainer(0, drop.Position);
+                    var insideSource = simulation.ContainsContainer(1, drop.Position);
+                    if (!(syringeScenario ? insideReceiver || insideSource : insideSource))
                     {
                         escapedUnits += drop.Volume;
                     }
 
-                    if (drop.ContainerAssignment != 2)
+                    if (syringeScenario
+                        ? drop.ContainerAssignment != (insideReceiver ? 1 : (byte)2)
+                        : drop.ContainerAssignment != 2)
                     {
                         ownershipMismatches += drop.Volume;
                     }
 
-                    if (singleDropScenario && drop.Id == trackedDropId)
+                    if (traceDropScenario && drop.Id == trackedDropId)
                     {
                         trackedDropFound = true;
                         trackedDropInsideReceiver = simulation.ContainsContainer(0, drop.Position);
@@ -487,7 +644,7 @@ public static class LiquidSimulationDiagnosticsRunner
                     }
                 }
 
-                if (singleDropScenario && !trackedDropFound)
+                if (traceDropScenario && !trackedDropFound)
                 {
                     trackedDropRemoved = true;
                     WriteLine(
@@ -539,6 +696,9 @@ public static class LiquidSimulationDiagnosticsRunner
                 }
             }
 
+            var maximumSettledSpeed = syringeScenario
+                ? SyringeMaximumSettledSpeed
+                : MaximumSettledSpeed;
             WriteLine(
                 $"Assertion summary: escapedFrames={framesWithEscapedDrops}, "
                 + $"maxEscapedUnits={maximumEscapedUnits}, "
@@ -546,12 +706,31 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"unitMismatchFrames={framesWithUnitMismatch}, "
                 + $"settlingWindowMaxSpeed={maximumSettlingWindowSpeed:F3}px/s, "
                 + $"finalMaxSpeed={finalMaximumSpeed:F3}px/s.");
-            if (singleDropScenario)
+            if (traceDropScenario)
             {
                 WriteLine(
-                    $"Single-drop observed maxima: frameMovement={maximumFrameMovement:F3}px/frame, "
+                    $"Tracked-drop observed maxima: frameMovement={maximumFrameMovement:F3}px/frame, "
                     + $"sourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
                     + $"velocity={maximumTrackedSpeed:F3}px/s, removed={trackedDropRemoved}.");
+            }
+            var syringeAmount = simulation.GetContainerLiquidAmount(1);
+            if (syringeScenario
+                && (Mathf.Abs(initialSyringeAmount - SyringeCapacity) > 0.001f
+                    || Mathf.Abs(syringeAmount - SyringeCapacity) > 0.001f
+                    || maximumFrameMovement > SyringeMaximumFrameMovement
+                    || maximumSourceRelativeDrift > SyringeMaximumSourceRelativeDrift
+                    || maximumTrackedSpeed > SyringeMaximumTrackedSpeed
+                    || trackedDropRemoved
+                    || !simulation.ContainsContainer(1, trackedDropPosition)
+                    || trackedDropOwner != 2))
+            {
+                throw new InvalidOperationException(
+                    "The syringe did not receive and retain 100 ml, or exceeded observed motion bounds. "
+                    + $"liquid={syringeAmount:F3}/{SyringeCapacity:F3}ml, "
+                    + $"movement={maximumFrameMovement:F3}/{SyringeMaximumFrameMovement:F3}px/frame, "
+                    + $"drift={maximumSourceRelativeDrift:F3}/{SyringeMaximumSourceRelativeDrift:F3}px, "
+                    + $"speed={maximumTrackedSpeed:F3}/{SyringeMaximumTrackedSpeed:F3}px/s, "
+                    + $"removed={trackedDropRemoved}, owner={trackedDropOwner}.");
             }
             if (funnelWallScenario)
             {
@@ -588,18 +767,20 @@ public static class LiquidSimulationDiagnosticsRunner
             }
 
             if (!singleDropScenario
-                && (finalMaximumSpeed > MaximumSettledSpeed
-                    || maximumSettlingWindowSpeed > MaximumSettledSpeed))
+                && (finalMaximumSpeed > maximumSettledSpeed
+                    || maximumSettlingWindowSpeed > maximumSettledSpeed))
             {
                 throw new InvalidOperationException(
-                    $"Drops did not settle below {MaximumSettledSpeed:F1}px/s; "
+                    $"Drops did not settle below {maximumSettledSpeed:F1}px/s; "
                     + $"final={finalMaximumSpeed:F3}px/s, "
                     + $"last-second maximum={maximumSettlingWindowSpeed:F3}px/s.");
             }
 
-            WriteLine(singleDropScenario
-                ? "PASS: single-drop diagnostic completed; inspect observed movement metrics above."
-                : "PASS: full water bottle retained all liquid and settled.");
+            WriteLine(syringeScenario
+                ? "PASS: full-capacity syringe diagnostic retained all requested liquid."
+                : traceDropScenario
+                    ? "PASS: single-drop diagnostic completed; inspect observed movement metrics above."
+                    : "PASS: full water bottle retained all liquid and settled.");
         }
         catch (Exception exception)
         {

@@ -257,10 +257,18 @@ internal sealed class LiquidSimulation
         LiquidProfileEntry[] secondLiquidComposition,
         float initialPacking = 1.75f,
         bool headless = false,
-        Vector2[] funnelWallPoints = null)
+        Vector2[] funnelWallPoints = null,
+        float defaultDropRadiusMultiplier = 1f)
     {
         this.root = root;
         this.headless = headless;
+        if (float.IsNaN(defaultDropRadiusMultiplier)
+            || float.IsInfinity(defaultDropRadiusMultiplier)
+            || defaultDropRadiusMultiplier <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(defaultDropRadiusMultiplier));
+        }
+
         if (funnelWallPoints != null && funnelWallPoints.Length != FunnelGeometry.WallPointCount)
         {
             throw new ArgumentException(
@@ -321,7 +329,7 @@ internal sealed class LiquidSimulation
             maximumScreenY = Mathf.Max(maximumScreenY, localCorner.y);
         }
 
-        SetDropRadius(DefaultDropRadiusTenths / 10f);
+        SetDropRadius(DefaultDropRadiusTenths / 10f * defaultDropRadiusMultiplier);
         SetInitialPacking(initialPacking);
         containers = new[]
         {
