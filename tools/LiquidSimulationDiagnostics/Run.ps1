@@ -5,7 +5,8 @@ param(
         'water-bottle-full-idle',
         'water-bottle-single-drop',
         'funnel-wall-single-drop',
-        'syringe-full-capacity')]
+        'syringe-full-capacity',
+        'syringe-center-bottle-intake')]
     [string]$Scenario,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )

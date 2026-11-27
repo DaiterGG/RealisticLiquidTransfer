@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -23,9 +24,13 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float FunnelMaximumSourceRelativeDrift = 120f;
     private const float FunnelMaximumTrackedSpeed = 900f;
     private const float FunnelMinimumWallClearance = -0.02f;
+    private const float CenterBottleSyringeCapacity = 100f;
+    private const float CenterBottleSyringeIntakeRate = 25.2f;
+    private const float CenterBottleSyringeScaleMultiplier = 1.1f;
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
+    private const string SyringeCenterBottleScenario = "syringe-center-bottle-intake";
     private const string SyringeCapacityScenario = "syringe-full-capacity";
     private const float SyringeCapacity = 100f;
     private const float SyringeTestScale = 1.3f;
@@ -47,6 +52,12 @@ public static class LiquidSimulationDiagnosticsRunner
         try
         {
             var scenario = GetArgument("-scenario");
+            if (scenario == SyringeCenterBottleScenario)
+            {
+                RunSyringeCenterBottleIntakeScenario();
+                return;
+            }
+
             var logPath = GetArgument("-diagnosticLog");
             var repositoryRoot = GetArgument("-repositoryRoot");
             var funnelWallScenario = scenario == FunnelWallSingleDropScenario;
@@ -63,6 +74,426 @@ public static class LiquidSimulationDiagnosticsRunner
                 throw new ArgumentException(
                     "Expected scenario, diagnostic-log, and repository-root arguments.");
             }
+            void RunSyringeCenterBottleIntakeScenario()
+            {
+                GameObject screenObject = null;
+                var exitCode = 0;
+                try
+                {
+                    var logPath = GetArgument("-diagnosticLog");
+                    var repositoryRoot = GetArgument("-repositoryRoot");
+                    if (string.IsNullOrWhiteSpace(logPath) || string.IsNullOrWhiteSpace(repositoryRoot))
+                    {
+                        throw new ArgumentException("Expected diagnostic-log and repository-root arguments.");
+                    }
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(logPath));
+                    log = new StreamWriter(logPath, false, new System.Text.UTF8Encoding(false))
+                    {
+                        AutoFlush = true
+                    };
+                    DebugLog.Sink = WriteLine;
+                    Plugin.LogSink = WriteLine;
+                    WriteLine($"Scenario '{SyringeCenterBottleScenario}' started at {DateTime.Now:O}.");
+
+                    if (!GeneratedContainerBoundaryCatalog.TryGet("coffee", out var referenceBoundary)
+                        || !GeneratedContainerBoundaryCatalog.TryGet("waterbottle", out var bottleBoundary)
+                        || !bottleBoundary.HasOpening)
+                    {
+                        throw new InvalidOperationException("Generated coffee or water-bottle boundaries are missing.");
+                    }
+
+                    var referenceArea = EstimateArea(
+                        referenceBoundary.WallCenterlinePoints,
+                        referenceBoundary.InteriorWalls);
+                    var bottleArea = EstimateArea(
+                        bottleBoundary.WallCenterlinePoints,
+                        bottleBoundary.InteriorWalls);
+                    if (referenceArea <= 0d || bottleArea <= 0d)
+                    {
+                        throw new InvalidOperationException("Could not calculate gameplay container areas.");
+                    }
+
+                    var screenPixelSize = new Vector2(Screen.width, Screen.height);
+                    var uiScale = screenPixelSize.y / 1080f;
+                    if (screenPixelSize.x <= 0f || screenPixelSize.y <= 0f || uiScale <= 0f)
+                    {
+                        throw new InvalidOperationException($"Invalid Unity screen dimensions: {screenPixelSize}.");
+                    }
+
+                    var viewportSize = screenPixelSize / uiScale;
+                    screenObject = new GameObject("SyringeIntakeDiagnosticsCanvas", typeof(RectTransform));
+                    var canvasRoot = screenObject.GetComponent<RectTransform>();
+                    ConfigureRect(canvasRoot, null, viewportSize, Vector2.zero);
+                    canvasRoot.localScale = Vector3.one * uiScale;
+                    var screenGameObject = new GameObject("SyringeIntakeDiagnosticsScreen", typeof(RectTransform));
+                    var screen = screenGameObject.GetComponent<RectTransform>();
+                    ConfigureRect(screen, canvasRoot, viewportSize, Vector2.zero);
+                    var rootObject = new GameObject("SyringeIntakeDiagnosticsRoot", typeof(RectTransform));
+                    var root = rootObject.GetComponent<RectTransform>();
+                    ConfigureRect(root, screen, viewportSize, Vector2.zero);
+
+                    var bottleSpriteSize = LoadVisibleSpriteSize(
+                        Path.Combine(repositoryRoot, "resources", "sprites", "containers", "waterbottle.png"));
+                    var syringeSpriteSize = new Vector2(30f, 141f);
+                    var syringe = CreateContainer(root, "Syringe", syringeSpriteSize);
+                    var bottle = CreateContainer(root, "WaterBottle", bottleSpriteSize);
+                    var bottleScale = LiquidContainerLayout.TryGetAreaScaledScale(
+                        WaterBottleCapacity,
+                        ReferenceCapacity,
+                        referenceArea,
+                        bottleArea,
+                        out var calculatedBottleScale)
+                        ? calculatedBottleScale
+                        : throw new InvalidOperationException("Could not calculate the water-bottle scale.");
+                    var syringeScale = LiquidContainerLayout.ContainerScale * CenterBottleSyringeScaleMultiplier;
+                    syringe.localScale = Vector3.one * syringeScale;
+                    bottle.localScale = Vector3.one * bottleScale;
+                    bottle.anchoredPosition = Vector2.zero;
+
+                    Vector2 SyringeFromTop(float x, float y)
+                    {
+                        return new Vector2(
+                            x - syringeSpriteSize.x * 0.5f,
+                            syringeSpriteSize.y * 0.5f - y);
+                    }
+
+                    var syringeFluidBottom = SyringeFromTop(6f, 87f).y;
+                    var syringeFluidTop = SyringeFromTop(6f, 12f).y;
+                    var syringeNeedle = SyringeFromTop(15f, 140f);
+                    var syringeOutline = new[]
+                    {
+                        SyringeFromTop(6f, 12f),
+                        SyringeFromTop(24f, 12f),
+                        SyringeFromTop(24f, 87f),
+                        SyringeFromTop(6f, 87f),
+                        SyringeFromTop(6f, 12f)
+                    };
+
+                    var bottleBounds = GetBounds(bottleBoundary.WallCenterlinePoints);
+                    var bottleCenter = (Vector2)root.InverseTransformPoint(
+                        bottle.TransformPoint(bottleBounds.center));
+                    syringe.anchoredPosition = bottleCenter
+                        - Vector2.Scale(syringeNeedle, new Vector2(syringeScale, syringeScale));
+                    var fitScale = LiquidContainerLayout.GetFitScale(screen, root, syringe, bottle);
+                    root.localScale = Vector3.one * fitScale;
+                    var needlePoint = syringe.anchoredPosition
+                        + Vector2.Scale(syringeNeedle, new Vector2(syringeScale, syringeScale));
+                    var needleOffsetFromBottleCenter = Vector2.Distance(needlePoint, bottleCenter);
+
+                    var water = new[]
+                    {
+                        new LiquidProfileEntry("water", WaterBottleCapacity, new Color(0.16f, 0.5f, 0.95f))
+                    };
+                    var simulation = new LiquidSimulation(
+                        root,
+                        syringe,
+                        syringeOutline,
+                        Array.Empty<Vector2[]>(),
+                        CenterBottleSyringeCapacity,
+                        bottle,
+                        bottleBoundary.WallCenterlinePoints,
+                        bottleBoundary.InteriorWalls,
+                        WaterBottleCapacity,
+                        0f,
+                        WaterBottleCapacity,
+                        Array.Empty<LiquidProfileEntry>(),
+                        water,
+                        LiquidSimulation.DefaultPackingTenths / 100f,
+                        headless: true);
+                    simulation.SetSyringePistonPosition(0, syringeFluidBottom);
+                    simulation.ConfigureForMinigame(false);
+
+                    var needleInsideBottle = simulation.ContainsContainer(1, needlePoint);
+                    var sourceNearNeedle = simulation.HasContainerDropNear(
+                        1,
+                        needlePoint,
+                        LiquidSimulation.DefaultDropRadius * 3f);
+                    WriteLine(
+                        $"Fixture: syringe capacity={CenterBottleSyringeCapacity:F0}ml, "
+                        + $"stroke=({syringeFluidBottom:F2},"
+                        + $"{syringeFluidTop:F2}), scale={syringeScale:F3}; "
+                        + $"bottle={WaterBottleCapacity:F0}ml, scale={bottleScale:F3}; "
+                        + $"needle=({needlePoint.x:F3},{needlePoint.y:F3}), "
+                        + $"bottleCenter=({bottleCenter.x:F3},{bottleCenter.y:F3}), "
+                        + $"centerOffset={needleOffsetFromBottleCenter:F6}, insideBottle={needleInsideBottle}, "
+                        + $"sourceNearNeedle={sourceNearNeedle}.");
+                    WriteLine(
+                        $"Simulation: updates={GameUpdatesPerSecond}Hz, duration={SimulationDurationSeconds}s, "
+                        + $"liftRate={CenterBottleSyringeIntakeRate:F2}ml/s, expected lift time="
+                        + $"{CenterBottleSyringeCapacity / CenterBottleSyringeIntakeRate:F3}s, "
+                        + $"seeded source amount={simulation.GetContainerLiquidAmount(1):F1}ml.");
+                    if (needleOffsetFromBottleCenter > 0.001f || !needleInsideBottle)
+                    {
+                        throw new InvalidOperationException(
+                            "The syringe needle was not placed at the center of the bottle.");
+                    }
+
+                    var requests = new List<Vector2>();
+                    var movementDeltaTime = Mathf.Min(UpdateDeltaTime, 1f / 30f);
+                    var strokeHeight = syringeFluidTop - syringeFluidBottom;
+                    var maximumUpwardSpeed = Mathf.Min(
+                        420f,
+                        strokeHeight * CenterBottleSyringeIntakeRate / CenterBottleSyringeCapacity);
+                    var handleY = syringeFluidBottom;
+                    var lastRequestedAmount = 0f;
+                    var intakeCredit = 0f;
+                    var totalTransferred = 0f;
+                    var totalExpiredAsAir = 0f;
+                    var framesWithRequests = 0;
+                    var framesWithTransfer = 0;
+                    var framesWithSourceNearNeedle = 0;
+                    var framesWithRequestsButNoTransfer = 0;
+                    var liftFrames = 0;
+                    var consecutiveLiftFramesWithoutTransfer = 0;
+                    var longestLiftGapWithoutTransfer = 0;
+                    var amountAtTop = -1f;
+                    var maximumSyringeAmount = 0f;
+                    for (var frame = 0; frame <= SimulationFrames; frame++)
+                    {
+                        var liftingThisFrame = frame > 0 && handleY < syringeFluidTop;
+                        if (frame > 0)
+                        {
+                            if (handleY < syringeFluidTop)
+                            {
+                                handleY = Mathf.Min(
+                                    syringeFluidTop,
+                                    handleY + maximumUpwardSpeed * movementDeltaTime);
+                            }
+
+                            simulation.SetSyringePistonPosition(0, handleY);
+                            var requestedAmount = Mathf.InverseLerp(
+                                syringeFluidBottom,
+                                syringeFluidTop,
+                                handleY) * CenterBottleSyringeCapacity;
+                            var requestedDelta = requestedAmount - lastRequestedAmount;
+                            if (requestedDelta > 0f)
+                            {
+                                requests.Add(new Vector2(requestedDelta, 0.5f));
+                                framesWithRequests++;
+                                liftFrames++;
+                            }
+
+                            lastRequestedAmount = requestedAmount;
+                        }
+
+                        var pendingVolume = 0f;
+                        var expiredAsAir = 0f;
+                        for (var index = requests.Count - 1; index >= 0; index--)
+                        {
+                            var request = requests[index];
+                            request.y -= UpdateDeltaTime;
+                            if (request.y <= 0f || request.x <= 0f)
+                            {
+                                expiredAsAir += request.x;
+                                requests.RemoveAt(index);
+                            }
+                            else
+                            {
+                                pendingVolume += request.x;
+                                requests[index] = request;
+                            }
+                        }
+
+                        totalExpiredAsAir += expiredAsAir;
+                        var currentAmount = simulation.GetContainerLiquidAmount(0);
+                        var remainingCapacity = Mathf.Max(0f, CenterBottleSyringeCapacity - currentAmount);
+                        var allowedPendingVolume = Mathf.Min(pendingVolume, remainingCapacity);
+                        var sourceNearThisFrame = simulation.HasContainerDropNear(
+                            1,
+                            needlePoint,
+                            LiquidSimulation.DefaultDropRadius * 3f);
+                        if (sourceNearThisFrame)
+                        {
+                            framesWithSourceNearNeedle++;
+                        }
+
+                        var frameTransferred = 0;
+                        if (allowedPendingVolume <= 0f)
+                        {
+                            intakeCredit = 0f;
+                        }
+                        else
+                        {
+                            intakeCredit = Mathf.Min(
+                                intakeCredit + CenterBottleSyringeIntakeRate * movementDeltaTime,
+                                allowedPendingVolume);
+                            var remainingUnits = Mathf.Min(
+                                Mathf.FloorToInt(allowedPendingVolume + 0.001f),
+                                Mathf.FloorToInt(intakeCredit + 0.001f));
+                            if (remainingUnits > 0)
+                            {
+                                var localDropRadius = LiquidSimulation.DefaultDropRadius / syringeScale;
+                                var fillRatio = Mathf.Clamp01(currentAmount / CenterBottleSyringeCapacity);
+                                var surfaceY = Mathf.Lerp(syringeFluidBottom, syringeFluidTop, fillRatio);
+                                var destinationY = Mathf.Clamp(
+                                    Mathf.Min(surfaceY + localDropRadius, handleY - localDropRadius),
+                                    syringeFluidBottom + localDropRadius,
+                                    syringeFluidTop - localDropRadius);
+                                var destinationPoint = syringe.anchoredPosition
+                                    + Vector2.up * destinationY * syringeScale;
+                                while (remainingUnits > 0)
+                                {
+                                    var moved = simulation.TryTransferNearestDrop(
+                                        1,
+                                        0,
+                                        needlePoint,
+                                        LiquidSimulation.DefaultDropRadius * 3f,
+                                        destinationPoint,
+                                        remainingUnits,
+                                        Vector2.zero);
+                                    if (moved <= 0)
+                                    {
+                                        break;
+                                    }
+
+                                    remainingUnits -= moved;
+                                    frameTransferred += moved;
+                                    pendingVolume = Mathf.Max(0f, pendingVolume - moved);
+                                    ConsumeIntakeRequests(requests, moved);
+                                    intakeCredit = Mathf.Max(0f, intakeCredit - moved);
+                                }
+                            }
+                        }
+
+                        if (frameTransferred > 0)
+                        {
+                            framesWithTransfer++;
+                        }
+                        else if (pendingVolume > 0f && frame <= liftFrames + GameUpdatesPerSecond)
+                        {
+                            framesWithRequestsButNoTransfer++;
+                        }
+
+                        totalTransferred += frameTransferred;
+                        var actualSyringeAmount = simulation.GetContainerLiquidAmount(0);
+                        var actualBottleAmount = simulation.GetContainerLiquidAmount(1);
+                        maximumSyringeAmount = Mathf.Max(maximumSyringeAmount, actualSyringeAmount);
+                        if (amountAtTop < 0f && handleY >= syringeFluidTop - 0.001f)
+                        {
+                            amountAtTop = actualSyringeAmount;
+                        }
+
+                        if (liftingThisFrame)
+                        {
+                            if (frameTransferred > 0)
+                            {
+                                consecutiveLiftFramesWithoutTransfer = 0;
+                            }
+                            else
+                            {
+                                consecutiveLiftFramesWithoutTransfer++;
+                                longestLiftGapWithoutTransfer = Mathf.Max(
+                                    longestLiftGapWithoutTransfer,
+                                    consecutiveLiftFramesWithoutTransfer);
+                            }
+                        }
+
+                        if (frame <= liftFrames || frame % GameUpdatesPerSecond == 0)
+                        {
+                            WriteLine(
+                                $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s "
+                                + $"needleInsideBottle={simulation.ContainsContainer(1, needlePoint)} "
+                                + $"sourceNearNeedle={sourceNearThisFrame} "
+                                + $"needle=({needlePoint.x:F3},{needlePoint.y:F3}) "
+                                + $"handleY={handleY:F3}/{syringeFluidTop:F3} "
+                                + $"requested={lastRequestedAmount:F2}ml pending={pendingVolume:F2}ml "
+                                + $"intakeCredit={intakeCredit:F2}ml transferredFrame={frameTransferred}ml "
+                                + $"syringe={actualSyringeAmount:F1}ml bottle={actualBottleAmount:F1}ml "
+                                + $"expiredAsAir={expiredAsAir:F2}ml.");
+                        }
+
+                        if (frame > 0)
+                        {
+                            simulation.Tick(UpdateDeltaTime, false, needlePoint);
+                        }
+                    }
+
+                    var finalSyringeAmount = simulation.GetContainerLiquidAmount(0);
+                    var finalBottleAmount = simulation.GetContainerLiquidAmount(1);
+                    var finalNeedleOffset = Vector2.Distance(needlePoint, bottleCenter);
+                    WriteLine(
+                        $"Syringe intake observations: transferred={totalTransferred:F1}ml, "
+                        + $"finalSyringe={finalSyringeAmount:F1}ml, finalBottle={finalBottleAmount:F1}ml, "
+                        + $"requested={lastRequestedAmount:F1}ml, expiredAsAir={totalExpiredAsAir:F1}ml, "
+                        + $"liftRequestFrames={framesWithRequests}, transferFrames={framesWithTransfer}, "
+                        + $"sourceNearNeedleFrames={framesWithSourceNearNeedle}, "
+                        + $"requestNoTransferFrames={framesWithRequestsButNoTransfer}, "
+                        + $"liftFrames={liftFrames}, finalHandleY={handleY:F3}/{syringeFluidTop:F3}, "
+                        + $"amountAtTop={amountAtTop:F1}ml, maximumSyringeAmount={maximumSyringeAmount:F1}ml, "
+                        + $"longestLiftGapWithoutTransfer={longestLiftGapWithoutTransfer} frames, "
+                        + $"needleCenterOffset={finalNeedleOffset:F6}, totalUnits={simulation.Count}.");
+                    var unaccountedVolume = simulation.Count - finalSyringeAmount - finalBottleAmount;
+                    if (amountAtTop < CenterBottleSyringeCapacity - 0.001f
+                        || Mathf.Abs(unaccountedVolume) > 0.001f)
+                    {
+                        throw new InvalidOperationException(
+                            $"Syringe intake failed full-stroke accounting: expected "
+                            + $"{CenterBottleSyringeCapacity:F1}ml at top, "
+                            + $"observed {amountAtTop:F1}ml (peak={maximumSyringeAmount:F1}ml), "
+                            + $"unaccounted={unaccountedVolume:F1}ml, transferred={totalTransferred:F1}ml.");
+                    }
+
+                    WriteLine("PASS: full-stroke syringe intake filled the syringe and conserved liquid.");
+                }
+                catch (Exception exception)
+                {
+                    WriteLine($"FAIL: {exception}");
+                    exitCode = 1;
+                }
+                finally
+                {
+                    DebugLog.Sink = null;
+                    Plugin.LogSink = null;
+                    if (screenObject)
+                    {
+                        UnityEngine.Object.DestroyImmediate(screenObject);
+                    }
+
+                    if (log != null)
+                    {
+                        log.Flush();
+                        log.Dispose();
+                        log = null;
+                    }
+                }
+
+                EditorApplication.Exit(exitCode);
+            }
+
+            Rect GetBounds(Vector2[] points)
+            {
+                var minimum = points[0];
+                var maximum = points[0];
+                foreach (var point in points)
+                {
+                    minimum = Vector2.Min(minimum, point);
+                    maximum = Vector2.Max(maximum, point);
+                }
+
+                return Rect.MinMaxRect(minimum.x, minimum.y, maximum.x, maximum.y);
+            }
+
+            void ConsumeIntakeRequests(List<Vector2> requests, int volume)
+            {
+                var remainingVolume = (float)volume;
+                while (requests.Count > 0 && remainingVolume > 0f)
+                {
+                    var request = requests[0];
+                    var consumedVolume = Mathf.Min(request.x, remainingVolume);
+                    request.x -= consumedVolume;
+                    remainingVolume -= consumedVolume;
+                    if (request.x <= 0.001f)
+                    {
+                        requests.RemoveAt(0);
+                    }
+                    else
+                    {
+                        requests[0] = request;
+                    }
+                }
+            }
+
 
             Directory.CreateDirectory(Path.GetDirectoryName(logPath));
             log = new StreamWriter(logPath, false, new System.Text.UTF8Encoding(false))
