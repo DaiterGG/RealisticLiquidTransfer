@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('water-bottle-full-idle')]
+    [ValidateSet('water-bottle-full-idle', 'water-bottle-single-drop')]
     [string]$Scenario,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )
@@ -41,6 +41,7 @@ New-Item -ItemType Directory -Path $generatedDirectory | Out-Null
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $sourceFiles = @(
     'LiquidSimulation.cs',
+    'LiquidContainerLayout.cs',
     'ContainerShapeCollision.cs',
     'LiquidDensityCatalog.cs',
     'SimulationProfiler.cs',
@@ -86,7 +87,9 @@ try {
         '-scenario',
         $Scenario,
         '-diagnosticLog',
-        $diagnosticLogPath
+        $diagnosticLogPath,
+        '-repositoryRoot',
+        $repositoryRoot
     )
     & $unityCli.Source @unityArguments
     if ($LASTEXITCODE -ne 0) {

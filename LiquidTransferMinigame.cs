@@ -8,9 +8,6 @@ namespace RealisticLiquidTransfer;
 internal sealed class LiquidTransferMinigame : Minigame
 {
     private const float HandScale = 0.85f;
-    private const float ContainerScale = 4f;
-    private const float ContainerGap = 40f;
-    private const float ScreenPadding = 40f;
     private const float CollisionStep = 2f;
     private const float PivotSwitchHysteresis = 2f;
     private const float RotationMovementInfluence = 1f;
@@ -266,7 +263,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
         if (drainOnly)
         {
-            receivingContainer.Transform.anchoredPosition = -TransformOpeningPoint(
+            receivingContainer.Transform.anchoredPosition = -LiquidContainerLayout.TransformOpeningPoint(
                 receivingContainer.Transform,
                 receivingContainer.OpeningCenterPoint);
             sourceContainer.Transform.anchoredPosition = Vector2.one * 100000f;
@@ -274,7 +271,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
         else
         {
-            PositionContainersSideBySide(receivingContainer, sourceContainer);
+            LiquidContainerLayout.PositionContainersSideBySide(
+                receivingContainer.Transform,
+                receivingContainer.OpeningCenterPoint,
+                sourceContainer.Transform,
+                sourceContainer.OpeningCenterPoint);
         }
 
         handImage = game.handTransform.GetComponent<Image>();
@@ -282,8 +283,15 @@ internal sealed class LiquidTransferMinigame : Minigame
         originalPreserveAspect = handImage.preserveAspect;
 
         fitScale = drainOnly
-            ? GetFitScale(game.minigameScreen, screenRoot, receivingContainer)
-            : GetFitScale(game.minigameScreen, screenRoot, receivingContainer, sourceContainer);
+            ? LiquidContainerLayout.GetFitScale(
+                game.minigameScreen,
+                screenRoot,
+                receivingContainer.Transform)
+            : LiquidContainerLayout.GetFitScale(
+                game.minigameScreen,
+                screenRoot,
+                receivingContainer.Transform,
+                sourceContainer.Transform);
         screenRoot.localScale = Vector3.one * fitScale;
         liquidSimulation = new LiquidSimulation(
             screenRoot,
@@ -965,23 +973,28 @@ internal sealed class LiquidTransferMinigame : Minigame
         string originalSpriteName)
     {
         var spriteArea = EstimateContainerArea(container.OutlinePoints, container.InteriorWalls);
-        if (targetCapacity <= 0f || referenceArea <= 0d || spriteArea <= 0d)
+        if (!LiquidContainerLayout.TryGetAreaScaledScale(
+                targetCapacity,
+                referenceCapacity,
+                referenceArea,
+                spriteArea,
+                out var scale))
         {
-            Plugin.LogWarning(
-                $"Could not area-scale container '{originalSpriteName}': capacity={targetCapacity:F2}, "
-                + $"reference area={referenceArea:F2}, sprite area={spriteArea:F2}; using base scale.");
+            if (targetCapacity <= 0f || referenceCapacity <= 0f || referenceArea <= 0d || spriteArea <= 0d)
+            {
+                Plugin.LogWarning(
+                    $"Could not area-scale container '{originalSpriteName}': capacity={targetCapacity:F2}, "
+                    + $"reference area={referenceArea:F2}, sprite area={spriteArea:F2}; using base scale.");
+            }
+            else
+            {
+                Plugin.LogWarning($"Could not calculate a valid area scale for container '{originalSpriteName}'.");
+            }
+
             return;
         }
 
-        var areaRatio = (targetCapacity / referenceCapacity) * (referenceArea / spriteArea);
-        if (areaRatio <= 0d || double.IsNaN(areaRatio) || double.IsInfinity(areaRatio))
-        {
-            Plugin.LogWarning($"Could not calculate a valid area scale for container '{originalSpriteName}'.");
-            return;
-        }
-
-        var linearScale = (float)System.Math.Sqrt(areaRatio);
-        container.Transform.localScale = Vector3.one * (ContainerScale * linearScale);
+        container.Transform.localScale = Vector3.one * scale;
     }
 
     private static double EstimateSpriteArea(Sprite sprite)
@@ -1935,7 +1948,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         rect.anchoredPosition = position;
         rect.sizeDelta = new Vector2(sprite.rect.width, sprite.rect.height);
         rect.localRotation = Quaternion.Euler(0f, 0f, rotation);
-        rect.localScale = Vector3.one * ContainerScale;
+        rect.localScale = Vector3.one * LiquidContainerLayout.ContainerScale;
 
         image.sprite = sprite;
         image.preserveAspect = false;
@@ -2013,7 +2026,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         if (container.IsSyringe)
         {
             rotationPivotPosition = container.Transform.anchoredPosition
-                + TransformOpeningPoint(container.Transform, container.Geometry.NeedlePoint);
+                + LiquidContainerLayout.TransformOpeningPoint(
+                    container.Transform,
+                    container.Geometry.NeedlePoint);
             var pointerVector = rotationStartPointer - rotationPivotPosition;
             rotationLastPointerAngle = Mathf.Atan2(pointerVector.y, pointerVector.x) * Mathf.Rad2Deg;
             rotationTrackingStarted = true;
@@ -2141,7 +2156,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var pivotPoint = GetRotationPivotPoint(visual);
         visual.Transform.localRotation = Quaternion.Euler(0f, 0f, angle);
         visual.Transform.anchoredPosition = rotationPivotPosition
-            - TransformOpeningPoint(visual.Transform, pivotPoint);
+            - LiquidContainerLayout.TransformOpeningPoint(visual.Transform, pivotPoint);
     }
 
     private static Vector2 GetRotationPivotPoint(ContainerVisual visual)
@@ -2174,7 +2189,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var visual = activeRotationContainer;
         var pivotPoint = GetRotationPivotPoint(visual);
         rotationPivotPosition = visual.Transform.anchoredPosition
-            + TransformOpeningPoint(visual.Transform, pivotPoint);
+            + LiquidContainerLayout.TransformOpeningPoint(visual.Transform, pivotPoint);
         var pointerVector = pointer - rotationPivotPosition;
         rotationLastPointerAngle = Mathf.Atan2(pointerVector.y, pointerVector.x) * Mathf.Rad2Deg;
         rotationTrackingStarted = true;
@@ -2219,7 +2234,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         visual.PivotIsRight = !visual.PivotIsRight;
         var pivotPoint = visual.PivotIsRight ? visual.RightOpeningPoint : visual.LeftOpeningPoint;
         rotationPivotPosition = visual.Transform.anchoredPosition
-            + TransformOpeningPoint(visual.Transform, pivotPoint);
+            + LiquidContainerLayout.TransformOpeningPoint(visual.Transform, pivotPoint);
         var rebasedPointer = pointer - rotationPivotPosition;
         rotationLastPointerAngle = Mathf.Atan2(rebasedPointer.y, rebasedPointer.x) * Mathf.Rad2Deg;
         return true;
@@ -2229,81 +2244,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     {
         var nearestVerticalAngle = Mathf.Round(angle / 180f) * 180f;
         return Mathf.Abs(Mathf.DeltaAngle(angle, nearestVerticalAngle)) <= PivotSwitchHysteresis;
-    }
-
-    private static void PositionContainersSideBySide(
-        ContainerVisual receiver,
-        ContainerVisual source)
-    {
-        var receiverWidth = receiver.Transform.rect.width * receiver.Transform.localScale.x;
-        var sourceWidth = source.Transform.rect.width * source.Transform.localScale.x;
-        var totalWidth = receiverWidth + ContainerGap + sourceWidth;
-        var receiverX = -totalWidth * 0.5f + receiverWidth * 0.5f;
-        var sourceX = receiverX + receiverWidth * 0.5f + ContainerGap + sourceWidth * 0.5f;
-        var receiverOpeningOffset = TransformOpeningPoint(receiver.Transform, receiver.OpeningCenterPoint);
-        var sourceOpeningOffset = TransformOpeningPoint(source.Transform, source.OpeningCenterPoint);
-
-        receiver.Transform.anchoredPosition = new Vector2(receiverX, -receiverOpeningOffset.y);
-        source.Transform.anchoredPosition = new Vector2(sourceX, -sourceOpeningOffset.y);
-    }
-
-    private static float GetFitScale(
-        RectTransform screen,
-        RectTransform layoutRoot,
-        params ContainerVisual[] containers)
-    {
-        var available = screen.rect.size * 0.5f - Vector2.one * ScreenPadding;
-        var maxX = 0f;
-        var maxY = 0f;
-        foreach (var container in containers)
-        {
-            IncludeExtent(layoutRoot, container.Transform, ref maxX, ref maxY);
-        }
-
-        var scaleX = maxX > 0f ? available.x / maxX : 1f;
-        var scaleY = maxY > 0f ? available.y / maxY : 1f;
-        return Mathf.Clamp(Mathf.Min(scaleX, scaleY), 0.01f, 1f);
-    }
-
-    private static void IncludeExtent(
-        RectTransform reference,
-        RectTransform target,
-        ref float maxX,
-        ref float maxY)
-    {
-        var minX = float.PositiveInfinity;
-        var maxTargetX = float.NegativeInfinity;
-        var minY = float.PositiveInfinity;
-        var maxTargetY = float.NegativeInfinity;
-        IncludeBounds(reference, target, ref minX, ref maxTargetX, ref minY, ref maxTargetY);
-        maxX = Mathf.Max(maxX, Mathf.Abs(minX), Mathf.Abs(maxTargetX));
-        maxY = Mathf.Max(maxY, Mathf.Abs(minY), Mathf.Abs(maxTargetY));
-    }
-
-    private static void IncludeBounds(
-        RectTransform reference,
-        RectTransform target,
-        ref float minX,
-        ref float maxX,
-        ref float minY,
-        ref float maxY)
-    {
-        var corners = new Vector3[4];
-        target.GetWorldCorners(corners);
-        foreach (var corner in corners)
-        {
-            var point = reference.InverseTransformPoint(corner);
-            minX = Mathf.Min(minX, point.x);
-            maxX = Mathf.Max(maxX, point.x);
-            minY = Mathf.Min(minY, point.y);
-            maxY = Mathf.Max(maxY, point.y);
-        }
-    }
-
-    private static Vector2 TransformOpeningPoint(RectTransform container, Vector2 point)
-    {
-        var transformed = container.localRotation * Vector3.Scale(point, container.localScale);
-        return new Vector2(transformed.x, transformed.y);
     }
 
     private sealed class ContainerVisual

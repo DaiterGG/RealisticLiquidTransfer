@@ -23,6 +23,7 @@
   <ItemGroup>
     <Compile Include="Plugin.cs" />
     <Compile Include="LiquidTransferMinigame.cs" />
+    <Compile Include="LiquidContainerLayout.cs" />
     <Compile Include="HandAlphaGradient.cs" />
     <Compile Include="DebugLog.cs" />
     <Compile Include="SimulationProfiler.cs" />
