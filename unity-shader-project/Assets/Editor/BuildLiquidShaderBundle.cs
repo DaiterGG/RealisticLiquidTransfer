@@ -22,6 +22,8 @@ namespace RealisticLiquidTransfer.Editor
         private const string BundleName = "liquidshaders.bundle";
         private const string MaterialAddress = "LiquidSurfaceMaterial";
         private const string ComputeShaderAddress = "LiquidDensityCompute";
+        private const string FillLoopAudioAssetPath = "Assets/Audio/Liquid/DrippingLoop.mp3";
+        private const string FillLoopAudioAddress = "Liquid.DrippingLoop";
 
         public static void Build()
         {
@@ -113,6 +115,18 @@ namespace RealisticLiquidTransfer.Editor
                     "The liquid bundle contains no weak or strong container impact audio.");
             }
 
+            var fillLoopImporter = AssetImporter.GetAtPath(FillLoopAudioAssetPath) as AudioImporter;
+            if (fillLoopImporter == null)
+            {
+                throw new InvalidOperationException(
+                    $"The liquid fill loop audio is missing or could not be imported: {FillLoopAudioAssetPath}");
+            }
+
+            fillLoopImporter.loadInBackground = false;
+            EditorUtility.SetDirty(fillLoopImporter);
+            audioAssetNames.Add(FillLoopAudioAssetPath);
+            audioAddressNames.Add(FillLoopAudioAddress);
+
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
@@ -169,7 +183,7 @@ namespace RealisticLiquidTransfer.Editor
                     if (!validationBundle.LoadAsset<AudioClip>(addressName))
                     {
                         throw new InvalidOperationException(
-                            $"The generated bundle does not contain impact audio '{addressName}'.");
+                            $"The generated bundle does not contain audio '{addressName}'.");
                     }
                 }
             }

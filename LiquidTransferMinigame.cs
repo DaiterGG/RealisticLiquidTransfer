@@ -15,6 +15,11 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float MaximumContainerImpactThreshold = 1500f;
     private const float DefaultContainerImpactThreshold = 900f;
     private const float DefaultContainerImpactPitchVariation = 10f;
+    private const float MinimumFillAudioSpeed = 0f;
+    private const float MaximumFillAudioSpeed = 1000f;
+    private const float DefaultMaximumFillAudioSpeed = 100f;
+    private const float FillAudioWindowDuration = 1f;
+    private const string FillAudioAddress = "Liquid.DrippingLoop";
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";
     private const string ContainerImpactWeakVolumeMultiplierPref =
@@ -29,6 +34,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         "realliquidtransfer.containerimpactmastervolumemultiplier";
     private const string ContainerImpactPitchVariationPref =
         "realliquidtransfer.containerimpactpitchvariation";
+    private const string MinimumFillAudioSpeedPref =
+        "realliquidtransfer.minimumfillaudiospeed";
+    private const string MaximumFillAudioSpeedPref =
+        "realliquidtransfer.maximumfillaudiospeed";
+    private const string FillAudioVolumeMultiplierPref =
+        "realliquidtransfer.fillaudiovolumemultiplier";
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
@@ -44,6 +55,18 @@ internal sealed class LiquidTransferMinigame : Minigame
     private static float referenceCapacity = ReferenceCapacity;
 
     private const bool SimulationFrozen = false;
+
+    private readonly struct FillRateSample
+    {
+        internal FillRateSample(float time, float amount)
+        {
+            Time = time;
+            Amount = amount;
+        }
+
+        internal float Time { get; }
+        internal float Amount { get; }
+    }
 
     private readonly WaterContainerItem receivingGameContainer;
     private readonly WaterContainerItem sourceGameContainer;
@@ -72,6 +95,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Slider funnelGapSlider;
     private Text funnelGapLabel;
     private UnityEngine.UI.Slider fullVolumeVelocityDebugSlider;
+    private UnityEngine.UI.Slider minimumFillAudioSpeedDebugSlider;
+    private UnityEngine.UI.Slider maximumFillAudioSpeedDebugSlider;
+    private Text fillAudioRateDebugLabel;
 #endif
     private RectTransform screenRoot;
     private RectTransform overlayRoot;
@@ -82,6 +108,12 @@ internal sealed class LiquidTransferMinigame : Minigame
     private ContainerVisual receivingContainer;
     private ContainerVisual sourceContainer;
     private AudioSource impactAudioSource;
+    private AudioSource fillAudioSource;
+    private AudioClip fillAudioClip;
+    private readonly List<FillRateSample> fillRateSamples =
+        new List<FillRateSample>();
+    private float fillRateWindowAmount;
+    private float lastReceiverLiquidAmount;
     private ContainerMaterial receivingContainerMaterial;
     private ContainerMaterial sourceContainerMaterial;
     private float containerImpactThreshold = DefaultContainerImpactThreshold;
@@ -96,6 +128,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         ContainerImpactAudioCatalog.DefaultFullVolumeVelocity;
     private float containerImpactMasterVolumeMultiplier =
         ContainerImpactAudioCatalog.DefaultMasterVolumeMultiplier;
+    private float minimumFillAudioSpeed = MinimumFillAudioSpeed;
+    private float maximumFillAudioSpeed = DefaultMaximumFillAudioSpeed;
+    private float fillAudioVolumeMultiplier = 1f;
     private bool containerImpactContact;
     private bool funnelImpactContact;
     private RectTransform heldContainer;
@@ -285,6 +320,21 @@ internal sealed class LiquidTransferMinigame : Minigame
         impactAudioSource.spatialBlend = 0f;
         impactAudioSource.volume = 1f;
         impactAudioSource.dopplerLevel = 0f;
+        fillAudioSource = screenRoot.gameObject.AddComponent<AudioSource>();
+        fillAudioSource.playOnAwake = false;
+        fillAudioSource.loop = true;
+        fillAudioSource.spatialBlend = 0f;
+        fillAudioSource.volume = 0f;
+        fillAudioSource.dopplerLevel = 0f;
+        if (LiquidShaderAssets.TryGetAudioClip(FillAudioAddress, out fillAudioClip))
+        {
+            fillAudioSource.clip = fillAudioClip;
+        }
+        else
+        {
+            Debug.LogWarning(
+                $"[RealisticLiquidTransfer] Fill loop audio '{FillAudioAddress}' is missing from the asset bundle.");
+        }
         receivingContainerMaterial = ContainerMaterialCatalog.GetMaterial(receivingGameContainer);
         sourceContainerMaterial = ContainerMaterialCatalog.GetMaterial(sourceGameContainer);
         containerImpactThreshold = Mathf.Clamp(
@@ -325,6 +375,18 @@ internal sealed class LiquidTransferMinigame : Minigame
             PlayerPrefs.GetFloat(
                 ContainerImpactMasterVolumeMultiplierPref,
                 ContainerImpactAudioCatalog.DefaultMasterVolumeMultiplier),
+            0f,
+            2f);
+        minimumFillAudioSpeed = Mathf.Clamp(
+            PlayerPrefs.GetFloat(MinimumFillAudioSpeedPref, MinimumFillAudioSpeed),
+            MinimumFillAudioSpeed,
+            MaximumFillAudioSpeed - 1f);
+        maximumFillAudioSpeed = Mathf.Clamp(
+            PlayerPrefs.GetFloat(MaximumFillAudioSpeedPref, DefaultMaximumFillAudioSpeed),
+            minimumFillAudioSpeed + 1f,
+            MaximumFillAudioSpeed);
+        fillAudioVolumeMultiplier = Mathf.Clamp(
+            PlayerPrefs.GetFloat(FillAudioVolumeMultiplierPref, 1f),
             0f,
             2f);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
@@ -476,6 +538,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         InitializeSyringeHandlePositions();
         liquidSimulation.ConfigureForMinigame(SimulationFrozen);
+        lastReceiverLiquidAmount = liquidSimulation.GetContainerLiquidAmount(0);
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
             + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "
@@ -633,6 +696,64 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
+        var currentReceiverLiquidAmount = liquidSimulation.GetContainerLiquidAmount(0);
+        UpdateFillAudio(lastReceiverLiquidAmount, currentReceiverLiquidAmount, Time.unscaledTime);
+        lastReceiverLiquidAmount = currentReceiverLiquidAmount;
+    }
+
+    private void UpdateFillAudio(
+        float previousReceiverAmount,
+        float currentReceiverAmount,
+        float currentTime)
+    {
+        var enteredAmount = currentReceiverAmount - previousReceiverAmount;
+        if (enteredAmount > 0.001f)
+        {
+            fillRateSamples.Add(new FillRateSample(currentTime, enteredAmount));
+            fillRateWindowAmount += enteredAmount;
+        }
+
+        var cutoffTime = currentTime - FillAudioWindowDuration;
+        while (fillRateSamples.Count > 0 && fillRateSamples[0].Time < cutoffTime)
+        {
+            fillRateWindowAmount -= fillRateSamples[0].Amount;
+            fillRateSamples.RemoveAt(0);
+        }
+
+        fillRateWindowAmount = Mathf.Max(0f, fillRateWindowAmount);
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
+        if (fillAudioRateDebugLabel)
+        {
+            fillAudioRateDebugLabel.text =
+                $"Fill speed (last 1s): {fillRateWindowAmount:F1} mL/s";
+        }
+#endif
+        if (!fillAudioSource || !fillAudioClip)
+        {
+            return;
+        }
+
+        var fullVolumeSpeed = Mathf.Max(
+            maximumFillAudioSpeed,
+            minimumFillAudioSpeed + 1f);
+        var volume = Mathf.Clamp01(
+            Mathf.InverseLerp(
+                minimumFillAudioSpeed,
+                fullVolumeSpeed,
+                fillRateWindowAmount)
+            * fillAudioVolumeMultiplier);
+        fillAudioSource.volume = volume;
+        if (volume > 0f)
+        {
+            if (!fillAudioSource.isPlaying)
+            {
+                fillAudioSource.Play();
+            }
+        }
+        else if (fillAudioSource.isPlaying)
+        {
+            fillAudioSource.Stop();
+        }
     }
 
     private void CreateFunnelVisuals()
@@ -835,7 +956,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
         panelRect.anchoredPosition = new Vector2(24f, -24f);
-        panelRect.sizeDelta = new Vector2(360f, 280f);
+        panelRect.sizeDelta = new Vector2(360f, 420f);
         panel.color = new Color(0f, 0f, 0f, 0.75f);
         panel.raycastTarget = true;
 
@@ -856,7 +977,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         header.fontSize = 14;
         header.fontStyle = FontStyle.Bold;
         header.alignment = TextAnchor.MiddleCenter;
-        header.text = "Container impact audio (debug)";
+        header.text = "Audio tuning (debug)";
         header.color = Color.white;
         header.raycastTarget = false;
 
@@ -947,6 +1068,80 @@ internal sealed class LiquidTransferMinigame : Minigame
                 containerImpactMasterVolumeMultiplier = value;
                 PlayerPrefs.SetFloat(ContainerImpactMasterVolumeMultiplierPref, value);
             });
+        minimumFillAudioSpeedDebugSlider = CreateContainerImpactDebugSlider(
+            panelRect,
+            "MinimumFillSpeed",
+            6,
+            MinimumFillAudioSpeed,
+            maximumFillAudioSpeed - 1f,
+            minimumFillAudioSpeed,
+            value => $"Min fill speed (0%): {value:F0} mL/s",
+            value =>
+            {
+                minimumFillAudioSpeed = value;
+                PlayerPrefs.SetFloat(MinimumFillAudioSpeedPref, value);
+                if (maximumFillAudioSpeedDebugSlider)
+                {
+                    maximumFillAudioSpeedDebugSlider.minValue = value + 1f;
+                    if (maximumFillAudioSpeedDebugSlider.value < value + 1f)
+                    {
+                        maximumFillAudioSpeedDebugSlider.value = value + 1f;
+                    }
+                }
+            });
+        maximumFillAudioSpeedDebugSlider = CreateContainerImpactDebugSlider(
+            panelRect,
+            "MaximumFillSpeed",
+            7,
+            minimumFillAudioSpeed + 1f,
+            MaximumFillAudioSpeed,
+            maximumFillAudioSpeed,
+            value => $"Max fill speed (100%): {value:F0} mL/s",
+            value =>
+            {
+                maximumFillAudioSpeed = value;
+                PlayerPrefs.SetFloat(MaximumFillAudioSpeedPref, value);
+                if (minimumFillAudioSpeedDebugSlider)
+                {
+                    minimumFillAudioSpeedDebugSlider.maxValue = value - 1f;
+                    if (minimumFillAudioSpeedDebugSlider.value > value - 1f)
+                    {
+                        minimumFillAudioSpeedDebugSlider.value = value - 1f;
+                    }
+                }
+            });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "FillAudioVolumeMultiplier",
+            8,
+            0f,
+            2f,
+            fillAudioVolumeMultiplier,
+            value => $"Fill sound volume multiplier: {value:0.00}x",
+            value =>
+            {
+                fillAudioVolumeMultiplier = value;
+                PlayerPrefs.SetFloat(FillAudioVolumeMultiplierPref, value);
+            });
+        var fillAudioRateLabel = new GameObject(
+                "FillAudioRateDebugLabel",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Text))
+            .GetComponent<UnityEngine.UI.Text>();
+        fillAudioRateDebugLabel = fillAudioRateLabel;
+        var fillAudioRateRect = fillAudioRateLabel.rectTransform;
+        fillAudioRateRect.SetParent(panelRect, false);
+        fillAudioRateRect.anchorMin = new Vector2(0f, 1f);
+        fillAudioRateRect.anchorMax = new Vector2(1f, 1f);
+        fillAudioRateRect.pivot = new Vector2(0.5f, 1f);
+        fillAudioRateRect.anchoredPosition = new Vector2(0f, -396f);
+        fillAudioRateRect.sizeDelta = new Vector2(-20f, 18f);
+        fillAudioRateLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        fillAudioRateLabel.fontSize = 12;
+        fillAudioRateLabel.alignment = TextAnchor.MiddleCenter;
+        fillAudioRateLabel.color = Color.white;
+        fillAudioRateLabel.raycastTarget = false;
     }
 
     private static UnityEngine.UI.Slider CreateContainerImpactDebugSlider(
