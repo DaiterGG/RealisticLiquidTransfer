@@ -7,9 +7,11 @@ namespace RealisticLiquidTransfer
 {
 public static class LiquidSimulationDiagnosticsRunner
 {
-    private const float FixedStep = 1f / 30f;
-    private const int SimulationFrames = 900;
-    private const int SettlingWindowFrames = 30;
+    private const int GameUpdatesPerSecond = 60;
+    private const int SimulationDurationSeconds = 30;
+    private const float UpdateDeltaTime = 1f / GameUpdatesPerSecond;
+    private const int SimulationFrames = SimulationDurationSeconds * GameUpdatesPerSecond;
+    private const int SettlingWindowFrames = GameUpdatesPerSecond;
     private const float WaterBottleCapacity = 500f;
     private const float ReferenceCapacity = 250f;
     private const float MaximumSettledSpeed = 8f;
@@ -63,14 +65,20 @@ public static class LiquidSimulationDiagnosticsRunner
                 throw new InvalidOperationException("Could not calculate gameplay container areas.");
             }
 
-            var viewportSize = new Vector2(Screen.width, Screen.height);
-            if (viewportSize.x <= 0f || viewportSize.y <= 0f)
+            var screenPixelSize = new Vector2(Screen.width, Screen.height);
+            var uiScale = screenPixelSize.y / 1080f;
+            if (screenPixelSize.x <= 0f || screenPixelSize.y <= 0f || uiScale <= 0f)
             {
-                throw new InvalidOperationException($"Invalid Unity screen dimensions: {viewportSize}.");
+                throw new InvalidOperationException($"Invalid Unity screen dimensions: {screenPixelSize}.");
             }
-            screenObject = new GameObject("LiquidDiagnosticsScreen", typeof(RectTransform));
-            var screen = screenObject.GetComponent<RectTransform>();
-            ConfigureRect(screen, null, viewportSize, Vector2.zero);
+            var viewportSize = screenPixelSize / uiScale;
+            screenObject = new GameObject("LiquidDiagnosticsCanvas", typeof(RectTransform));
+            var canvasRoot = screenObject.GetComponent<RectTransform>();
+            ConfigureRect(canvasRoot, null, viewportSize, Vector2.zero);
+            canvasRoot.localScale = Vector3.one * uiScale;
+            var screenGameObject = new GameObject("LiquidDiagnosticsScreen", typeof(RectTransform));
+            var screen = screenGameObject.GetComponent<RectTransform>();
+            ConfigureRect(screen, canvasRoot, viewportSize, Vector2.zero);
             var rootObject = new GameObject("LiquidDiagnosticsRoot", typeof(RectTransform));
             var root = rootObject.GetComponent<RectTransform>();
             ConfigureRect(root, screen, viewportSize, Vector2.zero);
@@ -137,6 +145,7 @@ public static class LiquidSimulationDiagnosticsRunner
                 water,
                 LiquidSimulation.DefaultPackingTenths / 100f,
                 headless: true);
+            simulation.ConfigureForMinigame(false);
 
             var initialDrops = simulation.CaptureDropSnapshots();
             if (simulation.GetInitialContainerDropCount(0) != 0
@@ -158,12 +167,15 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"at ({source.anchoredPosition.x:F1},{source.anchoredPosition.y:F1}) "
                 + $"scale={bottleScale:F3}.");
             WriteLine(
-                $"Viewport={viewportSize.x:F0}x{viewportSize.y:F0}, "
+                $"ScreenPixels={screenPixelSize.x:F0}x{screenPixelSize.y:F0}, "
+                + $"gameUiScale={uiScale:F4}, minigameScreen={viewportSize.x:F0}x{viewportSize.y:F0}, "
                 + $"simulationArea={root.rect.width:F0}x{root.rect.height:F0}, "
                 + $"simulationAreaScale={root.localScale.x:F4}.");
             WriteLine(
-                $"Simulation: fixedStep={FixedStep:F6}s, duration={SimulationFrames * FixedStep:F1}s, "
-                + $"settling window={SettlingWindowFrames * FixedStep:F1}s.");
+                $"Simulation: updateDelta={UpdateDeltaTime:F6}s, "
+                + $"physicsStep={LiquidSimulation.FixedStep:F6}s, "
+                + $"duration={SimulationFrames * UpdateDeltaTime:F1}s, "
+                + $"settling window={SettlingWindowFrames * UpdateDeltaTime:F1}s.");
             WriteLine(
                 $"Seed: particles={initialDrops.Length}, initial units={simulation.Count}.");
             var trackedDropId = singleDropScenario ? initialDrops[0].Id : -1;
@@ -193,7 +205,7 @@ public static class LiquidSimulationDiagnosticsRunner
             {
                 if (frame > 0)
                 {
-                    simulation.Tick(FixedStep, false, Vector2.zero);
+                    simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
                 }
 
                 var drops = simulation.CaptureDropSnapshots();
@@ -228,7 +240,7 @@ public static class LiquidSimulationDiagnosticsRunner
                             sourceRelativeDrift);
                         maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
                         WriteLine(
-                            $"trace frame={frame} t={frame * FixedStep:F3}s id={drop.Id} "
+                            $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s id={drop.Id} "
                             + $"insideReceiver={simulation.ContainsContainer(0, drop.Position)} "
                             + $"insideSource={simulation.ContainsContainer(1, drop.Position)} "
                             + $"owner={drop.ContainerAssignment} position=({drop.Position.x:F3},"
@@ -247,7 +259,7 @@ public static class LiquidSimulationDiagnosticsRunner
                 {
                     trackedDropRemoved = true;
                     WriteLine(
-                        $"trace frame={frame} t={frame * FixedStep:F3}s id={trackedDropId} "
+                        $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s id={trackedDropId} "
                         + $"insideReceiver=false insideSource=false owner=removed "
                         + $"position=({trackedDropPosition.x:F3},{trackedDropPosition.y:F3}) "
                         + $"velocity=({trackedDropVelocity.x:F3},{trackedDropVelocity.y:F3}) "
@@ -283,10 +295,11 @@ public static class LiquidSimulationDiagnosticsRunner
                     finalMaximumSpeed = frameMaximumSpeed;
                 }
 
-                if (frame % 30 == 0 || frame == SimulationFrames)
+                if (frame % SettlingWindowFrames == 0 || frame == SimulationFrames)
                 {
                     WriteLine(
-                        $"frame={frame} t={frame * FixedStep:F1}s units={frameUnits}/{expectedUnits:F0}, "
+                        $"frame={frame} t={frame * UpdateDeltaTime:F1}s "
+                        + $"units={frameUnits}/{expectedUnits:F0}, "
                         + $"particles={drops.Length}, escapedUnits={escapedUnits}, "
                         + $"maxSpeed={frameMaximumSpeed:F3}px/s.");
                 }

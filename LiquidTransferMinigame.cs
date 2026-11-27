@@ -329,14 +329,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         UpdateSyringeHandlePositions();
-        liquidSimulation.SetSurfaceShaderEnabled(true);
-        liquidSimulation.SetColorTransitionSharpness(0f);
-        liquidSimulation.SetSimulationFrozen(SimulationFrozen);
-        liquidSimulation.SetDropCollisionPasses(LiquidSimulation.DefaultDropCollisionPasses);
-        liquidSimulation.SetCollisionCorrectionPercent(
-            LiquidSimulation.DefaultCollisionCorrectionPercent);
-        liquidSimulation.SetVelocityContactMarginTenths(
-            LiquidSimulation.DefaultVelocityContactMarginTenths);
+        liquidSimulation.ConfigureForMinigame(SimulationFrozen);
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
             + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "

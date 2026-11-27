@@ -69,7 +69,7 @@ internal sealed class LiquidSimulation
     private const float MergeDelaySeconds = 2f;
     private const float Gravity = 420f;
     private const float GravityMultiplier = 2f;
-    private const float FixedStep = 1f / 30f;
+    internal const float FixedStep = 1f / 30f;
     private const float DensitySwapDuration = 1f;
     private const float DensitySwapMaximumSpeed = 8f;
     private const float DensitySwapComparisonTolerance = 0.005f;
@@ -953,6 +953,16 @@ internal sealed class LiquidSimulation
         velocityContactMargin = margin;
         var contactDistance = dropCollisionDistance + margin;
         velocityContactDistanceSquared = contactDistance * contactDistance;
+    }
+
+    internal void ConfigureForMinigame(bool frozen)
+    {
+        SetSurfaceShaderEnabled(true);
+        SetColorTransitionSharpness(0f);
+        SetSimulationFrozen(frozen);
+        SetDropCollisionPasses(DefaultDropCollisionPasses);
+        SetCollisionCorrectionPercent(DefaultCollisionCorrectionPercent);
+        SetVelocityContactMarginTenths(DefaultVelocityContactMarginTenths);
     }
 
     internal void SetSimulationFrozen(bool frozen)
