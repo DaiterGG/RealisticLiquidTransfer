@@ -93,21 +93,18 @@ internal static class ModSprites
 
     internal static Sprite GetContainer(string originalSpriteName, float capacity)
     {
-        if (!string.IsNullOrWhiteSpace(originalSpriteName)
-            && ContainerSprites.TryGetValue(originalSpriteName, out var matchingSprite))
-        {
-            return matchingSprite;
-        }
-
-        var baseSpriteName = RemoveTrailingStateNumber(originalSpriteName);
-        if (!string.Equals(baseSpriteName, originalSpriteName, StringComparison.Ordinal)
-            && ContainerSprites.TryGetValue(baseSpriteName, out matchingSprite))
+        var matchingSprite = ResolveContainerSprite(
+            originalSpriteName,
+            capacity,
+            out var matchedExplicitly,
+            out var matchedCapacity);
+        if (matchedExplicitly)
         {
             return matchingSprite;
         }
 
         var capacitySpriteName = GetDefaultContainerNameForCapacity(capacity);
-        if (ContainerSprites.TryGetValue(capacitySpriteName, out matchingSprite))
+        if (matchedCapacity)
         {
             Plugin.LogWarning(
                 $"No container sprite resource matched '{originalSpriteName ?? "null"}'; "
@@ -118,6 +115,48 @@ internal static class ModSprites
         Plugin.LogWarning(
             $"No container sprite resource matched '{originalSpriteName ?? "null"}' "
             + $"or capacity default '{capacitySpriteName}.png'; using {DefaultContainerName}.png.");
+        return defaultContainer;
+    }
+
+    internal static Sprite ResolveContainerSprite(string originalSpriteName, float capacity)
+    {
+        return ResolveContainerSprite(
+            originalSpriteName,
+            capacity,
+            out _,
+            out _);
+    }
+
+    private static Sprite ResolveContainerSprite(
+        string originalSpriteName,
+        float capacity,
+        out bool matchedExplicitly,
+        out bool matchedCapacity)
+    {
+        matchedExplicitly = false;
+        matchedCapacity = false;
+        if (!string.IsNullOrWhiteSpace(originalSpriteName)
+            && ContainerSprites.TryGetValue(originalSpriteName, out var matchingSprite))
+        {
+            matchedExplicitly = true;
+            return matchingSprite;
+        }
+
+        var baseSpriteName = RemoveTrailingStateNumber(originalSpriteName);
+        if (!string.Equals(baseSpriteName, originalSpriteName, StringComparison.Ordinal)
+            && ContainerSprites.TryGetValue(baseSpriteName, out matchingSprite))
+        {
+            matchedExplicitly = true;
+            return matchingSprite;
+        }
+
+        var capacitySpriteName = GetDefaultContainerNameForCapacity(capacity);
+        if (ContainerSprites.TryGetValue(capacitySpriteName, out matchingSprite))
+        {
+            matchedCapacity = true;
+            return matchingSprite;
+        }
+
         return defaultContainer;
     }
 

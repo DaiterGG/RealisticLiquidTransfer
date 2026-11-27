@@ -1,5 +1,8 @@
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
+using System;
+using System.Collections.Generic;
 using HarmonyLib;
+using Object = UnityEngine.Object;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -55,6 +58,51 @@ internal static class DebugLaunchMenuPatch
 internal static class DebugLaunchTutorialPatch
 {
     private static int overflowItemCount;
+    private static readonly string[] ContainerSpriteNames =
+    {
+        "alcohol",
+        "applejuice",
+        "bleach",
+        "bowlofcereal",
+        "canteen",
+        "chocolatemilk",
+        "coffee",
+        "default",
+        "default0-150",
+        "default151-350",
+        "default2001-5000",
+        "default351-750",
+        "default5001-999999",
+        "default751-2000",
+        "disinfectant",
+        "emptyjar",
+        "energydrink",
+        "funnel",
+        "icetea",
+        "ketchup",
+        "liquidcentrifuge",
+        "lrd",
+        "makeshiftlrd",
+        "milk",
+        "minibarreltop",
+        "sodacan",
+        "soup",
+        "spraybottle",
+        "syringe",
+        "syringehandle",
+        "waterbottle",
+        "waterjug",
+        "waterpouch"
+    };
+    private static readonly ContainerMaterial[] ContainerMaterials =
+    {
+        ContainerMaterial.Plastic,
+        ContainerMaterial.Glass,
+        ContainerMaterial.Metal,
+        ContainerMaterial.Cardboard,
+        ContainerMaterial.Ceramic,
+        ContainerMaterial.Aluminium
+    };
 
     [HarmonyPostfix]
     private static void AfterStart(TutorialHandler __instance)
@@ -126,31 +174,58 @@ internal static class DebugLaunchTutorialPatch
     {
         overflowItemCount = 0;
         var spawnedCount = 0;
+        var coveredSpriteNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var coveredMaterials = new HashSet<ContainerMaterial>();
         if (GiveFunnel(body))
         {
             spawnedCount++;
+            coveredSpriteNames.Add("funnel");
         }
 
-        if (GiveContainer(body, "syringe", System.Array.Empty<LiquidMix>(), "syringe"))
+        if (GiveContainer(body, "syringe", Array.Empty<LiquidMix>()))
         {
             spawnedCount++;
+            RecordContainerCoverage(
+                "syringe",
+                "syringehandle",
+                "syringe",
+                coveredSpriteNames,
+                coveredMaterials);
         }
 
-        if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }, "waterjug"))
+        if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }))
         {
             spawnedCount++;
+            RecordContainerCoverage(
+                "waterjug",
+                null,
+                "waterjug",
+                coveredSpriteNames,
+                coveredMaterials);
         }
 
-        if (GiveContainer(body, "waterbottle", System.Array.Empty<LiquidMix>(), "waterbottle"))
+        if (GiveContainer(body, "waterbottle", Array.Empty<LiquidMix>()))
         {
             spawnedCount++;
+            RecordContainerCoverage(
+                "waterbottle",
+                null,
+                "waterbottle",
+                coveredSpriteNames,
+                coveredMaterials);
         }
 
         foreach (var mixture in TestLiquidMixtures)
         {
-            if (GiveContainer(body, "minibarrel", mixture, "minibarreltop"))
+            if (GiveContainer(body, "minibarrel", mixture))
             {
                 spawnedCount++;
+                RecordContainerCoverage(
+                    "minibarreltop",
+                    null,
+                    "minibarrel",
+                    coveredSpriteNames,
+                    coveredMaterials);
             }
         }
 
@@ -159,54 +234,136 @@ internal static class DebugLaunchTutorialPatch
             if (GiveContainer(body, "waterbottle", mixture))
             {
                 spawnedCount++;
+                RecordContainerCoverage(
+                    "waterbottle",
+                    null,
+                    "waterbottle",
+                    coveredSpriteNames,
+                    coveredMaterials);
             }
         }
 
-        foreach (var preview in AdditionalContainerPreviews)
-        {
-            if (GiveContainerPreview(body, preview))
-            {
-                spawnedCount++;
-            }
-        }
+        var previewCount = SpawnContainerPreviews(body, coveredSpriteNames, coveredMaterials);
+        spawnedCount += previewCount;
 
         Plugin.LogInfo(
-            $"Debug startup: spawned {spawnedCount} of "
-            + $"{4 + TestLiquidMixtures.Length * 2 + AdditionalContainerPreviews.Length} requested "
-            + $"funnel, syringe, container, and sprite-preview items ({spawnedCount - overflowItemCount} equipped, "
+            $"Debug startup: spawned {spawnedCount} game items, including {previewCount} additional "
+            + $"actual-container previews ({spawnedCount - overflowItemCount} equipped, "
             + $"{overflowItemCount} placed beside the player).");
     }
 
-    private static readonly DebugContainerPreview[] AdditionalContainerPreviews =
+    private static void RecordContainerCoverage(
+        string spriteName,
+        string additionalSpriteName,
+        string itemId,
+        HashSet<string> coveredSpriteNames,
+        HashSet<ContainerMaterial> coveredMaterials)
     {
-        new DebugContainerPreview("alcohol", "alcohol"),
-        new DebugContainerPreview("applejuice", "applejuice"),
-        new DebugContainerPreview("bleach", "bleach"),
-        new DebugContainerPreview("bowlofcereal", "bowlofcereal"),
-        new DebugContainerPreview("canteen", "canteen"),
-        new DebugContainerPreview("chocolatemilk", "chocolatemilk"),
-        new DebugContainerPreview("coffee", "coffee"),
-        new DebugContainerPreview("waterbottle", "default"),
-        new DebugContainerPreview("waterbottle", "default0-150"),
-        new DebugContainerPreview("waterbottle", "default151-350"),
-        new DebugContainerPreview("waterbottle", "default2001-5000"),
-        new DebugContainerPreview("waterbottle", "default351-750"),
-        new DebugContainerPreview("waterbottle", "default5001-999999"),
-        new DebugContainerPreview("waterbottle", "default751-2000"),
-        new DebugContainerPreview("disinfectant", "disinfectant"),
-        new DebugContainerPreview("alcohol", "emptyjar"),
-        new DebugContainerPreview("energydrink", "energydrink"),
-        new DebugContainerPreview("icetea", "icetea"),
-        new DebugContainerPreview("ketchup", "ketchup"),
-        new DebugContainerPreview("liquidcentrifuge", "liquidcentrifuge"),
-        new DebugContainerPreview("lrd", "lrd"),
-        new DebugContainerPreview("makeshiftlrd", "makeshiftlrd"),
-        new DebugContainerPreview("milk", "milk"),
-        new DebugContainerPreview("sodacan", "sodacan"),
-        new DebugContainerPreview("soup", "soup"),
-        new DebugContainerPreview("spraybottle", "spraybottle"),
-        new DebugContainerPreview("liquidpouch", "waterpouch")
-    };
+        coveredSpriteNames.Add(spriteName);
+        if (!string.IsNullOrWhiteSpace(additionalSpriteName))
+        {
+            coveredSpriteNames.Add(additionalSpriteName);
+        }
+
+        var material = ContainerMaterialCatalog.GetMaterial(itemId);
+        if (material != ContainerMaterial.Unknown)
+        {
+            coveredMaterials.Add(material);
+        }
+    }
+
+    private static int SpawnContainerPreviews(
+        Body body,
+        HashSet<string> coveredSpriteNames,
+        HashSet<ContainerMaterial> coveredMaterials)
+    {
+        if (Item.GlobalItems == null)
+        {
+            Plugin.LogError("Debug startup: item definitions are unavailable; cannot discover containers.");
+            return 0;
+        }
+
+        var expectedSpriteNames = new HashSet<string>(
+            ContainerSpriteNames,
+            StringComparer.OrdinalIgnoreCase);
+        var itemIds = new List<string>(Item.GlobalItems.Keys);
+        itemIds.Sort(StringComparer.OrdinalIgnoreCase);
+        var spawnedCount = 0;
+        foreach (var itemId in itemIds)
+        {
+            var prefab = Resources.Load<GameObject>(itemId);
+            if (!prefab)
+            {
+                continue;
+            }
+
+            var item = prefab.GetComponent<Item>();
+            var container = prefab.GetComponent<WaterContainerItem>();
+            var spriteRenderer = prefab.GetComponent<SpriteRenderer>();
+            if (!spriteRenderer)
+            {
+                spriteRenderer = prefab.GetComponentInChildren<SpriteRenderer>();
+            }
+
+            if (!item || !container || !spriteRenderer || !spriteRenderer.sprite)
+            {
+                continue;
+            }
+
+            var originalSpriteName =
+                StartLiquidTransferPatch.GetContainerSpriteName(container, $"debug item '{itemId}'");
+            var minigameSpriteName =
+                ModSprites.ResolveContainerSprite(originalSpriteName, container.Capacity).name;
+            if (!expectedSpriteNames.Contains(minigameSpriteName))
+            {
+                continue;
+            }
+
+            var material = ContainerMaterialCatalog.GetMaterial(container);
+            var needsSprite = !coveredSpriteNames.Contains(minigameSpriteName);
+            var needsMaterial = material != ContainerMaterial.Unknown
+                && !coveredMaterials.Contains(material);
+            if (!needsSprite && !needsMaterial)
+            {
+                continue;
+            }
+
+            if (!GiveContainer(body, itemId, Array.Empty<LiquidMix>()))
+            {
+                continue;
+            }
+
+            spawnedCount++;
+            coveredSpriteNames.Add(minigameSpriteName);
+            if (material != ContainerMaterial.Unknown)
+            {
+                coveredMaterials.Add(material);
+            }
+            Plugin.LogInfo(
+                $"Debug startup: added game container '{itemId}' for sprite '{minigameSpriteName}' "
+                + $"and material '{material}'.");
+        }
+
+        foreach (var spriteName in ContainerSpriteNames)
+        {
+            if (!coveredSpriteNames.Contains(spriteName))
+            {
+                Plugin.LogWarning(
+                    $"Debug startup: no game container was found for minigame sprite '{spriteName}'.");
+            }
+        }
+
+        foreach (var material in ContainerMaterials)
+        {
+            if (!coveredMaterials.Contains(material))
+            {
+                Plugin.LogWarning(
+                    $"Debug startup: no game container was found for material '{material}'.");
+            }
+        }
+
+        return spawnedCount;
+    }
 
     private static readonly LiquidMix[][] TestLiquidMixtures =
     {
@@ -236,29 +393,7 @@ internal static class DebugLaunchTutorialPatch
         }
     };
 
-    private static bool GiveContainerPreview(Body body, DebugContainerPreview preview)
-    {
-        var prefab = Resources.Load<GameObject>(preview.ItemId);
-        if (!prefab || !prefab.GetComponent<WaterContainerItem>())
-        {
-            Plugin.LogError(
-                $"Debug startup: sprite preview '{preview.SpriteName}' has no liquid-container prefab "
-                + $"'{preview.ItemId}'.");
-            return false;
-        }
-
-        return GiveContainer(
-            body,
-            preview.ItemId,
-            System.Array.Empty<LiquidMix>(),
-            preview.SpriteName);
-    }
-
-    private static bool GiveContainer(
-        Body body,
-        string itemId,
-        LiquidMix[] mixture,
-        string spriteName = null)
+    private static bool GiveContainer(Body body, string itemId, LiquidMix[] mixture)
     {
         var prefab = Resources.Load<GameObject>(itemId);
         if (!prefab)
@@ -275,25 +410,6 @@ internal static class DebugLaunchTutorialPatch
             Object.Destroy(instance);
             Plugin.LogError($"Debug startup: '{itemId}' is missing its item or liquid-container component.");
             return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(spriteName))
-        {
-            var spriteRenderer = instance.GetComponent<SpriteRenderer>();
-            if (!spriteRenderer)
-            {
-                spriteRenderer = instance.GetComponentInChildren<SpriteRenderer>();
-            }
-
-            if (!spriteRenderer)
-            {
-                Object.Destroy(instance);
-                Plugin.LogError(
-                    $"Debug startup: '{itemId}' has no sprite renderer for preview '{spriteName}'.");
-                return false;
-            }
-
-            spriteRenderer.sprite = ModSprites.GetSprite(spriteName);
         }
 
         var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
@@ -440,17 +556,6 @@ internal static class DebugLaunchTutorialPatch
         internal float Fraction { get; }
     }
 
-    private readonly struct DebugContainerPreview
-    {
-        internal DebugContainerPreview(string itemId, string spriteName)
-        {
-            ItemId = itemId;
-            SpriteName = spriteName;
-        }
-
-        internal string ItemId { get; }
-        internal string SpriteName { get; }
-    }
 }
 
 [HarmonyPatch(typeof(PlayerCamera), "Update")]
