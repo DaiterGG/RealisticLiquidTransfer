@@ -5,7 +5,8 @@ namespace RealisticLiquidTransfer;
 
 internal static class FunnelGeometry
 {
-    internal const float RimFitRatio = 0.95f;
+    internal const float OutletGapRatio = 0.95f;
+    internal const float RimInsertionMargin = LiquidSimulation.DefaultDropRadius;
     internal const int WallPointCount = 8;
 
     private const float ReferenceSpriteWidth = 59f;
@@ -35,11 +36,12 @@ internal static class FunnelGeometry
 
         var topPoint = ToSpriteLocalPoint(TopPoint, spriteSize);
         var outletPoint = ToSpriteLocalPoint(OutletPoint, spriteSize);
-        var outletGap = OutletGapPixels * spriteSize.x / ReferenceSpriteWidth;
-        var fittedOpeningWidth = openingWidth * RimFitRatio;
-        var scale = fittedOpeningWidth / (2f * (topPoint.x - outletPoint.x) + outletGap);
-        var sideOffset = (-outletPoint.x + outletGap * 0.5f) * scale;
-        var verticalOffset = openingCenter.y - topPoint.y * scale;
+        var targetOutletGap = Mathf.Max(
+            OutletGapPixels * spriteSize.x / ReferenceSpriteWidth,
+            openingWidth * OutletGapRatio);
+        const float scale = 1f;
+        var sideOffset = -outletPoint.x + targetOutletGap * 0.5f;
+        var verticalOffset = openingCenter.y - RimInsertionMargin - outletPoint.y;
 
         leftSide.sizeDelta = spriteSize;
         leftSide.localRotation = Quaternion.identity;

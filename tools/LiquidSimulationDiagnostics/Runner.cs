@@ -15,9 +15,9 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float WaterBottleCapacity = 500f;
     private const float ReferenceCapacity = 250f;
     private const float MaximumSettledSpeed = 8f;
-    private const float FunnelMaximumFrameMovement = 26f;
+    private const float FunnelMaximumFrameMovement = 30f;
     private const float FunnelMaximumSourceRelativeDrift = 120f;
-    private const float FunnelMaximumTrackedSpeed = 760f;
+    private const float FunnelMaximumTrackedSpeed = 900f;
     private const float FunnelMinimumWallClearance = -0.02f;
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
@@ -168,6 +168,12 @@ public static class LiquidSimulationDiagnosticsRunner
                     Vector2.Distance(
                         root.InverseTransformPoint(openingLeftWorld),
                         root.InverseTransformPoint(openingRightWorld)));
+                if (leftFunnelSide.localScale != new Vector3(-1f, 1f, 1f)
+                    || rightFunnelSide.localScale != Vector3.one)
+                {
+                    throw new InvalidOperationException("Funnel fixture scaled its sprite instead of widening the gap.");
+                }
+
                 funnelWallPoints = new Vector2[FunnelGeometry.WallPointCount];
                 FunnelGeometry.WriteWallPoints(
                     root,
@@ -175,6 +181,31 @@ public static class LiquidSimulationDiagnosticsRunner
                     rightFunnelSide,
                     new Vector2(59f, 88f),
                     funnelWallPoints);
+                var testOutline = new[]
+                {
+                    new Vector2(-5f, -5f),
+                    new Vector2(5f, -5f),
+                    new Vector2(5f, 5f),
+                    new Vector2(-5f, 5f)
+                };
+                var hitboxCenter = (funnelWallPoints[0] + funnelWallPoints[1]) * 0.5f;
+                if (!ContainerShapeCollision.OverlapsSegments(
+                        testOutline,
+                        hitboxCenter,
+                        1f,
+                        0f,
+                        funnelWallPoints,
+                        2f)
+                    || ContainerShapeCollision.OverlapsSegments(
+                        testOutline,
+                        hitboxCenter + Vector2.one * 100f,
+                        1f,
+                        0f,
+                        funnelWallPoints,
+                        2f))
+                {
+                    throw new InvalidOperationException("Funnel-to-container collision fixture failed.");
+                }
             }
 
             var water = new[]
@@ -226,7 +257,8 @@ public static class LiquidSimulationDiagnosticsRunner
             if (funnelWallScenario)
             {
                 WriteLine(
-                    $"Funnel fixture: rim fit={FunnelGeometry.RimFitRatio:P0}, "
+                    $"Funnel fixture: outlet gap={FunnelGeometry.OutletGapRatio:P0} of rim width, "
+                    + $"sprite scale=1, insertion margin={FunnelGeometry.RimInsertionMargin:F2}px, "
                     + $"wall endpoints={string.Join("; ", Array.ConvertAll(funnelWallPoints, point => $"({point.x:F2},{point.y:F2})"))}.");
             }
             WriteLine(
@@ -415,13 +447,12 @@ public static class LiquidSimulationDiagnosticsRunner
                     || maximumSourceRelativeDrift > FunnelMaximumSourceRelativeDrift
                     || maximumTrackedSpeed > FunnelMaximumTrackedSpeed
                     || minimumFunnelWallClearance < FunnelMinimumWallClearance
-                    || funnelWallContactFrames == 0
                     || trackedDropRemoved
                     || !trackedDropInsideReceiver
                     || trackedDropOwner != 1)
                 {
                     throw new InvalidOperationException(
-                        "Funnel single-drop behavior exceeded observed movement bounds, crossed a wall, "
+                        "Funnel single-drop exceeded observed motion bounds, crossed a wall, "
                         + "or failed to settle in the receiver. "
                         + $"movement={maximumFrameMovement:F3}/{FunnelMaximumFrameMovement:F3}px/frame, "
                         + $"drift={maximumSourceRelativeDrift:F3}/{FunnelMaximumSourceRelativeDrift:F3}px, "

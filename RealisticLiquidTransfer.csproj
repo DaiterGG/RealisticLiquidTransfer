@@ -50,6 +50,9 @@
     <EmbeddedResource Include="resources\sprites\containers\*.png">
       <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="resources\sprites\funnel.png">
+      <LogicalName>RealisticLiquidTransfer.Resources.funnel-inventory.png</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="resources\*.bundle">
       <LogicalName>RealisticLiquidTransfer.Resources.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>

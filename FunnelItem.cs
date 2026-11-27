@@ -10,7 +10,8 @@ internal static class FunnelItem
 {
     internal const string Id = "funnel";
 
-    internal static Sprite Sprite => ModSprites.GetSprite(Id);
+    internal static Sprite Sprite => ModSprites.GetSprite("funnel-inventory");
+    internal static Sprite TransferSprite => ModSprites.GetSprite(Id);
 
     internal static void Register()
     {
@@ -29,7 +30,7 @@ internal static class FunnelItem
             return;
         }
 
-        Item.GlobalItems.Add(Id, new ItemInfo
+        var funnelInfo = new ItemInfo
         {
             fullName = "Funnel",
             description = "A funnel for transferring liquids.",
@@ -37,7 +38,9 @@ internal static class FunnelItem
             weight = 0.1f,
             value = 1,
             combineable = false
-        });
+        };
+        funnelInfo.SetTags();
+        Item.GlobalItems.Add(Id, funnelInfo);
     }
 
     internal static void RegisterRecipe()

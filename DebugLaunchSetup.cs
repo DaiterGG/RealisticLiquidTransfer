@@ -1,6 +1,7 @@
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace RealisticLiquidTransfer;
 
@@ -43,6 +44,8 @@ internal static class DebugLaunchMenuPatch
 [HarmonyPatch(typeof(TutorialHandler), "Start")]
 internal static class DebugLaunchTutorialPatch
 {
+    private static int overflowItemCount;
+
     [HarmonyPostfix]
     private static void AfterStart(TutorialHandler __instance)
     {
@@ -51,7 +54,6 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        DebugLaunchMenuPatch.ConsumeSandboxSetup();
         if (!__instance)
         {
             Plugin.LogError("Debug startup: tutorial handler is unavailable.");
@@ -77,27 +79,34 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        var equippedCount = 0;
+        DebugLaunchMenuPatch.ConsumeSandboxSetup();
+        SpawnDebugLoadout(body);
+    }
+
+    internal static void SpawnDebugLoadout(Body body)
+    {
+        overflowItemCount = 0;
+        var spawnedCount = 0;
         if (GiveFunnel(body))
         {
-            equippedCount++;
+            spawnedCount++;
         }
 
         if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }))
         {
-            equippedCount++;
+            spawnedCount++;
         }
 
         if (GiveContainer(body, "waterbottle", System.Array.Empty<LiquidMix>()))
         {
-            equippedCount++;
+            spawnedCount++;
         }
 
         foreach (var mixture in TestLiquidMixtures)
         {
             if (GiveContainer(body, "minibarrel", mixture))
             {
-                equippedCount++;
+                spawnedCount++;
             }
         }
 
@@ -105,13 +114,14 @@ internal static class DebugLaunchTutorialPatch
         {
             if (GiveContainer(body, "waterbottle", mixture))
             {
-                equippedCount++;
+                spawnedCount++;
             }
         }
 
         Plugin.LogInfo(
-            $"Debug startup: equipped {equippedCount} of {3 + TestLiquidMixtures.Length * 2} "
-            + "requested funnel, jug, barrel, and bottle test items.");
+            $"Debug startup: spawned {spawnedCount} of {3 + TestLiquidMixtures.Length * 2} requested "
+            + $"funnel, jug, barrel, and bottle test items ({spawnedCount - overflowItemCount} equipped, "
+            + $"{overflowItemCount} placed beside the player).");
     }
 
     private static readonly LiquidMix[][] TestLiquidMixtures =
@@ -162,12 +172,7 @@ internal static class DebugLaunchTutorialPatch
         }
 
         var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
-        if (slotIndex < 0)
-        {
-            Object.Destroy(instance);
-            Plugin.LogWarning($"Debug startup: no compatible inventory slot remains for '{itemId}'.");
-            return false;
-        }
+        var inventorySlotAvailable = slotIndex >= 0;
 
         container.DrainAll();
         foreach (var portion in mixture)
@@ -188,6 +193,16 @@ internal static class DebugLaunchTutorialPatch
                     + $"of '{liquidId}'.");
                 return false;
             }
+        }
+
+        if (!inventorySlotAvailable)
+        {
+            PlaceOverflowItem(body, instance);
+            Plugin.LogWarning(
+                $"Debug startup: inventory is full; spawned '{itemId}' beside the player.");
+            Plugin.LogInfo(
+                $"Debug startup: spawned '{itemId}' beside the player with {container.CurrentTotal:0} mL.");
+            return true;
         }
 
         body.PickUpItem(item, slotIndex, force: true);
@@ -217,9 +232,10 @@ internal static class DebugLaunchTutorialPatch
         var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
         if (slotIndex < 0)
         {
-            Object.Destroy(instance);
-            Plugin.LogWarning("Debug startup: no compatible inventory slot remains for the funnel.");
-            return false;
+            PlaceOverflowItem(body, instance);
+            Plugin.LogWarning(
+                "Debug startup: inventory is full; spawned the funnel beside the player.");
+            return true;
         }
 
         body.PickUpItem(item, slotIndex, force: true);
@@ -232,6 +248,13 @@ internal static class DebugLaunchTutorialPatch
 
         Plugin.LogInfo($"Debug startup: equipped '{FunnelItem.Id}' in slot {slotIndex}.");
         return true;
+    }
+
+    private static void PlaceOverflowItem(Body body, GameObject instance)
+    {
+        instance.transform.position = body.transform.position
+            + Vector3.right * (3f + 2f * overflowItemCount);
+        overflowItemCount++;
     }
 
     private static bool TryResolveLiquidId(string liquidName, out string liquidId)
@@ -286,6 +309,30 @@ internal static class DebugLaunchTutorialPatch
 
         internal string LiquidName { get; }
         internal float Fraction { get; }
+    }
+}
+
+[HarmonyPatch(typeof(PlayerCamera), "Update")]
+internal static class DebugLaunchPlayerUpdatePatch
+{
+    [HarmonyPostfix]
+    private static void AfterUpdate(PlayerCamera __instance)
+    {
+        if (!DebugLaunchMenuPatch.SandboxSetupPending
+            || SceneManager.GetActiveScene().name != "SampleScene")
+        {
+            return;
+        }
+
+        var body = __instance ? __instance.body : null;
+        if (!body)
+        {
+            return;
+        }
+
+        DebugLaunchMenuPatch.ConsumeSandboxSetup();
+        Plugin.LogInfo("Debug startup: gameplay player is ready; spawning the requested loadout.");
+        DebugLaunchTutorialPatch.SpawnDebugLoadout(body);
     }
 }
 #endif

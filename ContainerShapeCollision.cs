@@ -52,6 +52,49 @@ internal static class ContainerShapeCollision
         return IsPointInside(firstPoints[0], secondPoints) || IsPointInside(secondPoints[0], firstPoints);
     }
 
+    internal static bool OverlapsSegments(
+        Vector2[] outline,
+        Vector2 position,
+        float scale,
+        float angle,
+        Vector2[] segments,
+        float collisionRadius)
+    {
+        if (outline == null || outline.Length < 3 || segments == null || segments.Length < 2)
+        {
+            return false;
+        }
+
+        EnsureBuffer(ref firstPoints, outline.Length);
+        TransformPoints(outline, position, scale, angle, firstPoints);
+        var collisionRadiusSquared = collisionRadius * collisionRadius;
+        for (var segmentIndex = 0; segmentIndex + 1 < segments.Length; segmentIndex += 2)
+        {
+            var segmentStart = segments[segmentIndex];
+            var segmentEnd = segments[segmentIndex + 1];
+            if (IsPointInside(segmentStart, firstPoints) || IsPointInside(segmentEnd, firstPoints))
+            {
+                return true;
+            }
+
+            for (var pointIndex = 0; pointIndex < firstPoints.Length; pointIndex++)
+            {
+                var edgeStart = firstPoints[pointIndex];
+                var edgeEnd = firstPoints[(pointIndex + 1) % firstPoints.Length];
+                if (SegmentsIntersect(segmentStart, segmentEnd, edgeStart, edgeEnd)
+                    || PointSegmentDistanceSquared(edgeStart, segmentStart, segmentEnd) <= collisionRadiusSquared
+                    || PointSegmentDistanceSquared(edgeEnd, segmentStart, segmentEnd) <= collisionRadiusSquared
+                    || PointSegmentDistanceSquared(segmentStart, edgeStart, edgeEnd) <= collisionRadiusSquared
+                    || PointSegmentDistanceSquared(segmentEnd, edgeStart, edgeEnd) <= collisionRadiusSquared)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static void EnsureBuffer(ref Vector2[] buffer, int length)
     {
         if (buffer.Length != length)
@@ -120,6 +163,19 @@ internal static class ContainerShapeCollision
             && point.x <= Mathf.Max(start.x, end.x) + Epsilon
             && point.y >= Mathf.Min(start.y, end.y) - Epsilon
             && point.y <= Mathf.Max(start.y, end.y) + Epsilon;
+    }
+
+    private static float PointSegmentDistanceSquared(Vector2 point, Vector2 start, Vector2 end)
+    {
+        var direction = end - start;
+        var lengthSquared = direction.sqrMagnitude;
+        if (lengthSquared <= Epsilon * Epsilon)
+        {
+            return (point - start).sqrMagnitude;
+        }
+
+        var projection = Mathf.Clamp01(Vector2.Dot(point - start, direction) / lengthSquared);
+        return (point - (start + direction * projection)).sqrMagnitude;
     }
 
     private static bool IsPointInside(Vector2 point, Vector2[] polygon)
