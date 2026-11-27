@@ -15,6 +15,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float TranslationVerticalInfluence = 1f;
     private const float SyringeFreePistonSpeed = 420f;
     private const float SyringeVolumeTransferRate = 24f;
+    private const float SyringeIntakeVolumeTransferRate = SyringeVolumeTransferRate * 1.05f;
     private const float SyringeEjectionSpeed = 1000f;
     private const float SyringeIntakeQueueLifetime = 0.5f;
     private const float SyringeContainerScaleMultiplier = 1.3f;
@@ -992,7 +993,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
                 maximumUpwardSpeed = Mathf.Min(
                     maximumUpwardSpeed,
-                    strokeHeight * SyringeVolumeTransferRate / syringe.Capacity);
+                    strokeHeight * SyringeIntakeVolumeTransferRate / syringe.Capacity);
             }
 
             handleY = Mathf.Min(
@@ -1173,7 +1174,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         else
         {
             syringe.IntakeVolumeCredit = Mathf.Min(
-                syringe.IntakeVolumeCredit + SyringeVolumeTransferRate * movementDeltaTime,
+                syringe.IntakeVolumeCredit + SyringeIntakeVolumeTransferRate * movementDeltaTime,
                 allowedPendingVolume);
             var remainingUnits = Mathf.Min(
                 Mathf.FloorToInt(allowedPendingVolume + 0.001f),
@@ -1294,8 +1295,8 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         var fluidTopLeft = FromTop(6f, 12f);
         var fluidTopRight = FromTop(24f, 12f);
-        var fluidBottomRight = FromTop(24f, 83f);
-        var fluidBottomLeft = FromTop(6f, 83f);
+        var fluidBottomRight = FromTop(24f, 87f);
+        var fluidBottomLeft = FromTop(6f, 87f);
         var fluidOutline = new[]
         {
             fluidTopLeft,
