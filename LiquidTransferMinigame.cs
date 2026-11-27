@@ -22,6 +22,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float FillAudioFadeStartFillPercent = 0.7f;
     private const float FillAudioPitchDropStartFillPercent = 0.2f;
     private const float DefaultFullContainerFillAudioPitch = 0.3f;
+    private const float DefaultFillAudioGlobalPitchMultiplier = 1f;
     private const string FillAudioAddress = "Liquid.DrippingLoop";
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";
@@ -45,6 +46,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         "realliquidtransfer.fillaudiovolumemultiplier";
     private const string FullContainerFillAudioPitchPref =
         "realliquidtransfer.fullcontainerfillaudiopitch";
+    private const string FillAudioGlobalPitchMultiplierPref =
+        "realliquidtransfer.fillaudioglobalpitchmultiplier";
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
@@ -141,6 +144,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float maximumFillAudioSpeed = DefaultMaximumFillAudioSpeed;
     private float fillAudioVolumeMultiplier = 1f;
     private float fullContainerFillAudioPitch = DefaultFullContainerFillAudioPitch;
+    private float fillAudioGlobalPitchMultiplier = DefaultFillAudioGlobalPitchMultiplier;
     private bool containerImpactContact;
     private bool funnelImpactContact;
     private RectTransform heldContainer;
@@ -403,6 +407,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             PlayerPrefs.GetFloat(
                 FullContainerFillAudioPitchPref,
                 DefaultFullContainerFillAudioPitch),
+            0.1f,
+            1f);
+        fillAudioGlobalPitchMultiplier = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                FillAudioGlobalPitchMultiplierPref,
+                DefaultFillAudioGlobalPitchMultiplier),
             0.1f,
             1f);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
@@ -816,7 +826,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             FillAudioPitchDropStartFillPercent,
             1f,
             fullness);
-        return Mathf.Lerp(1f, fullContainerFillAudioPitch, pitchDrop);
+        return Mathf.Lerp(1f, fullContainerFillAudioPitch, pitchDrop)
+            * fillAudioGlobalPitchMultiplier;
     }
 
     private float GetFillAudioVolume(int containerIndex)
@@ -1064,7 +1075,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
         panelRect.anchoredPosition = new Vector2(24f, -24f);
-        panelRect.sizeDelta = new Vector2(360f, 460f);
+        panelRect.sizeDelta = new Vector2(360f, 500f);
         panel.color = new Color(0f, 0f, 0f, 0.75f);
         panel.raycastTarget = true;
 
@@ -1244,6 +1255,19 @@ internal sealed class LiquidTransferMinigame : Minigame
                 fullContainerFillAudioPitch = value;
                 PlayerPrefs.SetFloat(FullContainerFillAudioPitchPref, value);
             });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "FillAudioGlobalPitchMultiplier",
+            10,
+            0.1f,
+            1f,
+            fillAudioGlobalPitchMultiplier,
+            value => $"Global fill pitch: {value:0.00}x",
+            value =>
+            {
+                fillAudioGlobalPitchMultiplier = value;
+                PlayerPrefs.SetFloat(FillAudioGlobalPitchMultiplierPref, value);
+            });
         var fillAudioRateLabel = new GameObject(
                 "FillAudioRateDebugLabel",
                 typeof(RectTransform),
@@ -1256,7 +1280,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         fillAudioRateRect.anchorMin = new Vector2(0f, 1f);
         fillAudioRateRect.anchorMax = new Vector2(1f, 1f);
         fillAudioRateRect.pivot = new Vector2(0.5f, 1f);
-        fillAudioRateRect.anchoredPosition = new Vector2(0f, -436f);
+        fillAudioRateRect.anchoredPosition = new Vector2(0f, -476f);
         fillAudioRateRect.sizeDelta = new Vector2(-20f, 18f);
         fillAudioRateLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         fillAudioRateLabel.fontSize = 12;
