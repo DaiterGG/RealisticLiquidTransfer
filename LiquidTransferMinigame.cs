@@ -2840,7 +2840,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (WouldOverlap(visual))
             {
                 blockedByContainer = WouldOverlapOtherContainer(visual);
-                blockedByFunnel = !blockedByContainer && WouldOverlapFunnel(visual);
+                blockedByFunnel = WouldOverlapFunnel(visual);
                 ApplyRotationPose(visual, previousAngle);
                 break;
             }
@@ -2858,7 +2858,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 visual,
                 arcDistance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
         }
-        else if (blockedByFunnel)
+        if (blockedByFunnel)
         {
             PlayFunnelImpact(
                 visual,
@@ -2898,7 +2898,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (WouldOverlap(visual))
             {
                 blockedByContainer = WouldOverlapOtherContainer(visual);
-                blockedByFunnel = !blockedByContainer && WouldOverlapFunnel(visual);
+                blockedByFunnel = WouldOverlapFunnel(visual);
                 transform.anchoredPosition = Vector2.Lerp(startPosition, targetPosition, (float)(step - 1) / steps);
                 break;
             }
@@ -2917,7 +2917,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 visual,
                 distance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
         }
-        else if (blockedByFunnel)
+        if (blockedByFunnel)
         {
             PlayFunnelImpact(
                 visual,
