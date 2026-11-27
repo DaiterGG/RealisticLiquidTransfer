@@ -17,6 +17,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float SyringeVolumeTransferRate = 24f;
     private const float SyringeEjectionSpeed = 1000f;
     private const float SyringeIntakeQueueLifetime = 0.5f;
+    private const float SyringeContainerScaleMultiplier = 1.1f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
@@ -1147,8 +1148,15 @@ internal sealed class LiquidTransferMinigame : Minigame
                 maximumSourceDistance);
         }
 
+        var liquidAmount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
+        var remainingCapacity = Mathf.Max(0f, syringe.Capacity - liquidAmount);
+        var allowedPendingVolume = Mathf.Min(pendingVolume, remainingCapacity);
         var liquidTaken = 0;
         if (pendingVolume <= 0f)
+        {
+            syringe.IntakeVolumeCredit = 0f;
+        }
+        else if (allowedPendingVolume <= 0f)
         {
             syringe.IntakeVolumeCredit = 0f;
         }
@@ -1156,15 +1164,14 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             syringe.IntakeVolumeCredit = Mathf.Min(
                 syringe.IntakeVolumeCredit + SyringeVolumeTransferRate * movementDeltaTime,
-                Mathf.Min(syringe.Capacity, pendingVolume));
+                allowedPendingVolume);
             var remainingUnits = Mathf.Min(
-                Mathf.FloorToInt(pendingVolume + 0.001f),
+                Mathf.FloorToInt(allowedPendingVolume + 0.001f),
                 Mathf.FloorToInt(syringe.IntakeVolumeCredit + 0.001f));
             if (remainingUnits > 0)
             {
                 var localDropRadius = LiquidSimulation.DefaultDropRadius
                     / Mathf.Max(Mathf.Abs(syringe.Container.Transform.localScale.y), 0.0001f);
-                var liquidAmount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
                 var fillRatio = syringe.Capacity > 0f
                     ? Mathf.Clamp01(liquidAmount / syringe.Capacity)
                     : 0f;
@@ -2358,7 +2365,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         rect.anchoredPosition = position;
         rect.sizeDelta = new Vector2(sprite.rect.width, sprite.rect.height);
         rect.localRotation = Quaternion.Euler(0f, 0f, rotation);
-        rect.localScale = Vector3.one * LiquidContainerLayout.ContainerScale;
+        var containerScale = LiquidContainerLayout.ContainerScale
+            * (isSyringe ? SyringeContainerScaleMultiplier : 1f);
+        rect.localScale = Vector3.one * containerScale;
 
         image.sprite = sprite;
         image.preserveAspect = false;

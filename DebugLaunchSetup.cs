@@ -9,7 +9,7 @@ namespace RealisticLiquidTransfer;
 internal static class DebugLaunchMenuPatch
 {
     private static bool _launchStarted;
-    internal static bool SandboxSetupPending { get; private set; }
+    internal static bool BasicTrainingSetupPending { get; private set; }
 
     [HarmonyPostfix]
     private static void AfterStart(PreRunScript __instance)
@@ -36,7 +36,7 @@ internal static class DebugLaunchMenuPatch
             __instance.tutorialWarning.SetActive(false);
         }
 
-        SandboxSetupPending = true;
+        BasicTrainingSetupPending = true;
         SaveSystem.loadedRun = false;
         PlayerPrefs.SetInt("tutorial", 1);
         PlayerPrefs.SetInt("radlinedisable", 0);
@@ -45,9 +45,9 @@ internal static class DebugLaunchMenuPatch
         Plugin.LogInfo("Debug startup: loading tutorial because multiplayer is not running.");
     }
 
-    internal static void ConsumeSandboxSetup()
+    internal static void ConsumeBasicTrainingSetup()
     {
-        SandboxSetupPending = false;
+        BasicTrainingSetupPending = false;
     }
 }
 
@@ -59,7 +59,7 @@ internal static class DebugLaunchTutorialPatch
     [HarmonyPostfix]
     private static void AfterStart(TutorialHandler __instance)
     {
-        if (!DebugLaunchMenuPatch.SandboxSetupPending)
+        if (!DebugLaunchMenuPatch.BasicTrainingSetupPending)
         {
             return;
         }
@@ -70,7 +70,7 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        if (!SelectSandboxCourse(__instance))
+        if (!SelectBasicTrainingCourse(__instance))
         {
             return;
         }
@@ -81,18 +81,18 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        DebugLaunchMenuPatch.ConsumeSandboxSetup();
+        DebugLaunchMenuPatch.ConsumeBasicTrainingSetup();
         SpawnDebugLoadout(body);
     }
 
-    internal static bool SelectSandboxCourse(TutorialHandler tutorialHandler)
+    internal static bool SelectBasicTrainingCourse(TutorialHandler tutorialHandler)
     {
         if (!tutorialHandler)
         {
             return false;
         }
 
-        var alreadySelected = tutorialHandler.activeCourse is SandboxCourse;
+        var alreadySelected = tutorialHandler.activeCourse is BasicCourse;
         if (!alreadySelected)
         {
             if (tutorialHandler.activeCourse)
@@ -100,12 +100,12 @@ internal static class DebugLaunchTutorialPatch
                 tutorialHandler.EndCourse();
             }
 
-            tutorialHandler.StartCourse(typeof(SandboxCourse));
+            tutorialHandler.StartCourse(typeof(BasicCourse));
         }
 
-        if (tutorialHandler.activeCourse is not SandboxCourse)
+        if (tutorialHandler.activeCourse is not BasicCourse)
         {
-            Plugin.LogError("Debug startup: could not start the sandbox course.");
+            Plugin.LogError("Debug startup: could not start Basic Training.");
             return false;
         }
 
@@ -116,7 +116,7 @@ internal static class DebugLaunchTutorialPatch
 
         if (!alreadySelected)
         {
-            Plugin.LogInfo("Debug startup: selected sandbox course.");
+            Plugin.LogInfo("Debug startup: selected Basic Training.");
         }
 
         return true;
@@ -362,7 +362,7 @@ internal static class DebugLaunchPlayerUpdatePatch
     [HarmonyPostfix]
     private static void AfterUpdate(PlayerCamera __instance)
     {
-        if (!DebugLaunchMenuPatch.SandboxSetupPending
+        if (!DebugLaunchMenuPatch.BasicTrainingSetupPending
             || SceneManager.GetActiveScene().name != "SampleScene")
         {
             return;
@@ -370,12 +370,12 @@ internal static class DebugLaunchPlayerUpdatePatch
 
         var body = __instance ? __instance.body : null;
         var tutorialHandler = TutorialHandler.main;
-        if (!body || !DebugLaunchTutorialPatch.SelectSandboxCourse(tutorialHandler))
+        if (!body || !DebugLaunchTutorialPatch.SelectBasicTrainingCourse(tutorialHandler))
         {
             return;
         }
 
-        DebugLaunchMenuPatch.ConsumeSandboxSetup();
+        DebugLaunchMenuPatch.ConsumeBasicTrainingSetup();
         Plugin.LogInfo("Debug startup: gameplay player is ready; spawning the requested loadout.");
         DebugLaunchTutorialPatch.SpawnDebugLoadout(body);
     }
