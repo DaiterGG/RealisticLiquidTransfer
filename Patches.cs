@@ -55,7 +55,11 @@ internal static class StartLiquidTransferPatch
                 secondSpriteName,
                 "syringe",
                 StringComparison.OrdinalIgnoreCase);
+        var receivingIsMiniBarrel = wat1
+            && wat1.TryGetComponent<Item>(out var receivingItem)
+            && string.Equals(receivingItem.id, "minibarrel", StringComparison.OrdinalIgnoreCase);
         var hasFunnel = !transferUsesSyringe
+            && !receivingIsMiniBarrel
             && playerBody
             && playerBody.FindByIdThorough(FunnelItem.Id, out _);
         MinigameBase.main.StartMinigame(
