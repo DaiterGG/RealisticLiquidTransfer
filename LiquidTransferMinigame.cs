@@ -19,8 +19,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float SyringeIntakePistonRate = SyringeIntakeVolumeTransferRate * 0.8f;
     private const float SyringeEjectionSpeed = 1000f;
     private const float SyringeIntakeSourceDistanceMultiplier = 4f;
-    private const float SyringeDropRadiusMultiplier = 0.68f;
-    private const float SyringeContainerScaleMultiplier = 1.3f;
+    private const float SyringeContainerScaleMultiplier = 1.2f;
     private const string ReferenceSpriteName = "coffee";
     private const float ReferenceCapacity = 250f;
     private static float referenceCapacity = ReferenceCapacity;
@@ -360,13 +359,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             firstOriginalLiquidComposition,
             secondOriginalLiquidComposition,
             LiquidSimulation.DefaultPackingTenths / 100f,
-            funnelWallPoints: funnelWallPoints,
-            firstContainerDropRadiusMultiplier: receivingContainer.IsSyringe
-                ? SyringeDropRadiusMultiplier
-                : 1f,
-            secondContainerDropRadiusMultiplier: sourceContainer.IsSyringe
-                ? SyringeDropRadiusMultiplier
-                : 1f);
+            funnelWallPoints: funnelWallPoints);
 
         if (leftFunnelSide)
         {

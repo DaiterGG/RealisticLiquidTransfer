@@ -23,8 +23,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float CenterBottleSyringeCapacity = 100f;
     private const float CenterBottleSyringeIntakeRate = 25.2f;
     private const float CenterBottleSyringePlungerRate = CenterBottleSyringeIntakeRate * 0.8f;
-    private const float CenterBottleSyringeScaleMultiplier = 1.1f;
-    private const float CenterBottleSyringeDropRadiusMultiplier = 0.68f;
+    private const float CenterBottleSyringeScaleMultiplier = 1.2f;
     private const float CenterBottleSyringeSourceDistanceMultiplier = 4f;
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
@@ -209,8 +208,7 @@ public static class LiquidSimulationDiagnosticsRunner
                         Array.Empty<LiquidProfileEntry>(),
                         water,
                         LiquidSimulation.DefaultPackingTenths / 100f,
-                        headless: true,
-                        firstContainerDropRadiusMultiplier: CenterBottleSyringeDropRadiusMultiplier);
+                        headless: true);
                     simulation.SetSyringePistonPosition(0, syringeFluidBottom);
                     simulation.ConfigureForMinigame(false);
 
