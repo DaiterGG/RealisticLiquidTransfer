@@ -852,9 +852,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         handle.SetParent(container.Transform, false);
         handle.anchorMin = new Vector2(0.5f, 0.5f);
         handle.anchorMax = new Vector2(0.5f, 0.5f);
-        handle.pivot = new Vector2(0.5f, 0f);
+        handle.pivot = new Vector2(0.5f, 1f);
         handle.anchoredPosition = new Vector2(0f, container.Geometry.FluidBottom.y);
-        handle.sizeDelta = sprite.rect.size;
+        handle.sizeDelta = new Vector2(
+            sprite.rect.width,
+            container.Geometry.FluidTop.y - container.Geometry.FluidBottom.y);
         image.sprite = sprite;
         image.preserveAspect = false;
         image.raycastTarget = false;
