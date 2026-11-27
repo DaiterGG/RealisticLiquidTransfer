@@ -94,19 +94,32 @@ $unityArguments = @(
 )
 $unityProcess = Start-Process -FilePath $UnityEditorPath -ArgumentList $unityArguments -Wait -PassThru
 if ($unityProcess.ExitCode -ne 0) {
-    throw "Unity shader AssetBundle build failed with exit code $($unityProcess.ExitCode). See $unityBuildLogPath."
-}
+    $audioModuleDisabled = Select-String -LiteralPath $unityBuildLogPath `
+        -Pattern "'AudioClip' is not supported because the module Audio is disabled in the build." `
+        -Quiet
+    $shaderErrors = Select-String -LiteralPath $unityBuildLogPath `
+        -Pattern "Shader error in 'RealisticLiquidTransfer/LiquidSurface'"
 
-$shaderErrors = Select-String -LiteralPath $unityBuildLogPath -Pattern "Shader error in 'RealisticLiquidTransfer/LiquidSurface'"
-if ($shaderErrors) {
-    throw "Unity reported liquid shader compilation errors. See $unityBuildLogPath."
-}
+    if (-not $audioModuleDisabled -or $shaderErrors -or
+        -not (Test-Path -LiteralPath $embeddedShaderBundlePath -PathType Leaf)) {
+        throw "Unity shader AssetBundle build failed with exit code $($unityProcess.ExitCode). See $unityBuildLogPath."
+    }
 
-if (-not (Test-Path -LiteralPath $shaderBundlePath -PathType Leaf)) {
-    throw "Unity exited successfully but did not produce the shader bundle: $shaderBundlePath"
+    Write-Warning "Unity's Audio module is disabled; keeping the existing packaged shader/audio bundle."
 }
+else {
+    $shaderErrors = Select-String -LiteralPath $unityBuildLogPath `
+        -Pattern "Shader error in 'RealisticLiquidTransfer/LiquidSurface'"
+    if ($shaderErrors) {
+        throw "Unity reported liquid shader compilation errors. See $unityBuildLogPath."
+    }
 
-Copy-Item -LiteralPath $shaderBundlePath -Destination $embeddedShaderBundlePath -Force
+    if (-not (Test-Path -LiteralPath $shaderBundlePath -PathType Leaf)) {
+        throw "Unity exited successfully but did not produce the shader bundle: $shaderBundlePath"
+    }
+
+    Copy-Item -LiteralPath $shaderBundlePath -Destination $embeddedShaderBundlePath -Force
+}
 
 $dotnet = Get-Command 'dotnet' -ErrorAction Stop
 & $dotnet.Source build $projectPath --configuration Release --nologo `
