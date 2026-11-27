@@ -312,8 +312,21 @@ internal static class DebugLaunchTutorialPatch
 
             var originalSpriteName =
                 StartLiquidTransferPatch.GetContainerSpriteName(container, $"debug item '{itemId}'");
+            float capacity;
+            try
+            {
+                capacity = container.Capacity;
+            }
+            catch (NullReferenceException exception)
+            {
+                Plugin.LogError(
+                    $"Debug startup: failed to read capacity for container prefab '{itemId}' "
+                    + $"(prefab name='{prefab.name}'): {exception}");
+                continue;
+            }
+
             var minigameSpriteName =
-                ModSprites.ResolveContainerSprite(originalSpriteName, container.Capacity).name;
+                ModSprites.ResolveContainerSprite(originalSpriteName, capacity).name;
             if (!expectedSpriteNames.Contains(minigameSpriteName))
             {
                 continue;
