@@ -5,8 +5,12 @@ namespace RealisticLiquidTransfer;
 
 internal static class ContainerImpactAudioCatalog
 {
-    private const float StrongImpactFullVolumeVelocity = 2000f;
-    private const float StrongImpactMinimumVolume = 0.7f;
+    internal const float DefaultWeakVolumeMultiplier = 1f;
+    internal const float DefaultStrongVolumeMultiplier = 1f;
+    internal const float DefaultStrongMinimumVolume = 0.7f;
+    internal const float DefaultFullVolumeVelocity = 2000f;
+    internal const float DefaultMasterVolumeMultiplier = 1f;
+    internal const float MaximumFullVolumeVelocity = 5000f;
 
     private static readonly Dictionary<ContainerMaterial, int> WeakClipCounts =
         new Dictionary<ContainerMaterial, int>
@@ -32,6 +36,11 @@ internal static class ContainerImpactAudioCatalog
         ContainerMaterial material,
         float velocity,
         float strongThreshold,
+        float weakVolumeMultiplier,
+        float strongVolumeMultiplier,
+        float strongMinimumVolume,
+        float fullVolumeVelocity,
+        float masterVolumeMultiplier,
         float pitchVariationPercent,
         bool forceWeak,
         AudioSource source)
@@ -64,7 +73,14 @@ internal static class ContainerImpactAudioCatalog
             return false;
         }
 
-        var volume = GetVolume(velocity, strongThreshold);
+        var volume = GetVolume(
+            velocity,
+            strongThreshold,
+            weakVolumeMultiplier,
+            strongVolumeMultiplier,
+            strongMinimumVolume,
+            fullVolumeVelocity,
+            masterVolumeMultiplier);
         var pitchOffset = Mathf.Clamp(pitchVariationPercent, 0f, 50f) / 100f;
         var pitch = Random.Range(1f - pitchOffset, 1f + pitchOffset);
         var playbackSource = source.gameObject.AddComponent<AudioSource>();
@@ -86,17 +102,36 @@ internal static class ContainerImpactAudioCatalog
         return true;
     }
 
-    internal static float GetVolume(float velocity, float strongThreshold)
+    internal static float GetVolume(
+        float velocity,
+        float strongThreshold,
+        float weakVolumeMultiplier,
+        float strongVolumeMultiplier,
+        float strongMinimumVolume,
+        float fullVolumeVelocity,
+        float masterVolumeMultiplier)
     {
+        weakVolumeMultiplier = Mathf.Clamp(weakVolumeMultiplier, 0f, 2f);
+        strongVolumeMultiplier = Mathf.Clamp(strongVolumeMultiplier, 0f, 2f);
+        strongMinimumVolume = Mathf.Clamp01(strongMinimumVolume);
+        fullVolumeVelocity = Mathf.Max(strongThreshold + 1f, fullVolumeVelocity);
+        masterVolumeMultiplier = Mathf.Clamp(masterVolumeMultiplier, 0f, 2f);
+
+        float volume;
         if (velocity < strongThreshold)
         {
-            return Mathf.InverseLerp(0f, strongThreshold, velocity);
+            volume = Mathf.InverseLerp(0f, strongThreshold, velocity) * weakVolumeMultiplier;
+        }
+        else
+        {
+            var strongImpactProgress = Mathf.InverseLerp(
+                strongThreshold,
+                fullVolumeVelocity,
+                velocity);
+            volume = Mathf.Lerp(strongMinimumVolume, 1f, strongImpactProgress)
+                * strongVolumeMultiplier;
         }
 
-        var strongImpactProgress = Mathf.InverseLerp(
-            strongThreshold,
-            StrongImpactFullVolumeVelocity,
-            velocity);
-        return Mathf.Lerp(StrongImpactMinimumVolume, 1f, strongImpactProgress);
+        return volume * masterVolumeMultiplier;
     }
 }

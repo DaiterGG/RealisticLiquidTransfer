@@ -17,6 +17,16 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float DefaultContainerImpactPitchVariation = 10f;
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";
+    private const string ContainerImpactWeakVolumeMultiplierPref =
+        "realliquidtransfer.containerimpactweakvolumemultiplier";
+    private const string ContainerImpactStrongVolumeMultiplierPref =
+        "realliquidtransfer.containerimpactstrongvolumemultiplier";
+    private const string ContainerImpactStrongMinimumVolumePref =
+        "realliquidtransfer.containerimpactstrongminimumvolume";
+    private const string ContainerImpactFullVolumeVelocityPref =
+        "realliquidtransfer.containerimpactfullvolumevelocity";
+    private const string ContainerImpactMasterVolumeMultiplierPref =
+        "realliquidtransfer.containerimpactmastervolumemultiplier";
     private const string ContainerImpactPitchVariationPref =
         "realliquidtransfer.containerimpactpitchvariation";
     private const float RotationMovementInfluence = 1f;
@@ -61,6 +71,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
     private Slider funnelGapSlider;
     private Text funnelGapLabel;
+    private UnityEngine.UI.Slider fullVolumeVelocityDebugSlider;
 #endif
     private RectTransform screenRoot;
     private RectTransform overlayRoot;
@@ -75,7 +86,18 @@ internal sealed class LiquidTransferMinigame : Minigame
     private ContainerMaterial sourceContainerMaterial;
     private float containerImpactThreshold = DefaultContainerImpactThreshold;
     private float containerImpactPitchVariation = DefaultContainerImpactPitchVariation;
+    private float containerImpactWeakVolumeMultiplier =
+        ContainerImpactAudioCatalog.DefaultWeakVolumeMultiplier;
+    private float containerImpactStrongVolumeMultiplier =
+        ContainerImpactAudioCatalog.DefaultStrongVolumeMultiplier;
+    private float containerImpactStrongMinimumVolume =
+        ContainerImpactAudioCatalog.DefaultStrongMinimumVolume;
+    private float containerImpactFullVolumeVelocity =
+        ContainerImpactAudioCatalog.DefaultFullVolumeVelocity;
+    private float containerImpactMasterVolumeMultiplier =
+        ContainerImpactAudioCatalog.DefaultMasterVolumeMultiplier;
     private bool containerImpactContact;
+    private bool funnelImpactContact;
     private RectTransform heldContainer;
     private ContainerVisual heldVisual;
     private Vector2 heldOffset;
@@ -277,8 +299,39 @@ internal sealed class LiquidTransferMinigame : Minigame
                 DefaultContainerImpactPitchVariation),
             0f,
             50f);
+        containerImpactWeakVolumeMultiplier = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                ContainerImpactWeakVolumeMultiplierPref,
+                ContainerImpactAudioCatalog.DefaultWeakVolumeMultiplier),
+            0f,
+            2f);
+        containerImpactStrongVolumeMultiplier = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                ContainerImpactStrongVolumeMultiplierPref,
+                ContainerImpactAudioCatalog.DefaultStrongVolumeMultiplier),
+            0f,
+            2f);
+        containerImpactStrongMinimumVolume = Mathf.Clamp01(
+            PlayerPrefs.GetFloat(
+                ContainerImpactStrongMinimumVolumePref,
+                ContainerImpactAudioCatalog.DefaultStrongMinimumVolume));
+        containerImpactFullVolumeVelocity = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                ContainerImpactFullVolumeVelocityPref,
+                ContainerImpactAudioCatalog.DefaultFullVolumeVelocity),
+            containerImpactThreshold + 1f,
+            ContainerImpactAudioCatalog.MaximumFullVolumeVelocity);
+        containerImpactMasterVolumeMultiplier = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                ContainerImpactMasterVolumeMultiplierPref,
+                ContainerImpactAudioCatalog.DefaultMasterVolumeMultiplier),
+            0f,
+            2f);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
         controlsText = CreateControlsText(overlayRoot);
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
+        CreateContainerImpactDebugSliders();
+#endif
         if (drainOnly)
         {
             controlsText.text = "Drag the container to pour | Right-click and drag to rotate | Esc: finish";
@@ -766,6 +819,239 @@ internal sealed class LiquidTransferMinigame : Minigame
             funnelGapLabel.text =
                 $"Funnel gap: {funnelGapMultiplier:0.00}x ({funnelGapMultiplier * FunnelGeometry.OutletGapRatio:P0} of opening)";
         }
+    }
+
+    private void CreateContainerImpactDebugSliders()
+    {
+        var panel = new GameObject(
+                "ContainerImpactDebugPanel",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Image))
+            .GetComponent<UnityEngine.UI.Image>();
+        var panelRect = panel.rectTransform;
+        panelRect.SetParent(overlayRoot, false);
+        panelRect.anchorMin = new Vector2(0f, 1f);
+        panelRect.anchorMax = new Vector2(0f, 1f);
+        panelRect.pivot = new Vector2(0f, 1f);
+        panelRect.anchoredPosition = new Vector2(24f, -24f);
+        panelRect.sizeDelta = new Vector2(360f, 280f);
+        panel.color = new Color(0f, 0f, 0f, 0.75f);
+        panel.raycastTarget = true;
+
+        var header = new GameObject(
+                "ContainerImpactDebugHeader",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Text))
+            .GetComponent<UnityEngine.UI.Text>();
+        var headerRect = header.rectTransform;
+        headerRect.SetParent(panelRect, false);
+        headerRect.anchorMin = new Vector2(0f, 1f);
+        headerRect.anchorMax = new Vector2(1f, 1f);
+        headerRect.pivot = new Vector2(0.5f, 1f);
+        headerRect.anchoredPosition = new Vector2(0f, -4f);
+        headerRect.sizeDelta = new Vector2(-16f, 22f);
+        header.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        header.fontSize = 14;
+        header.fontStyle = FontStyle.Bold;
+        header.alignment = TextAnchor.MiddleCenter;
+        header.text = "Container impact audio (debug)";
+        header.color = Color.white;
+        header.raycastTarget = false;
+
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "StrongThreshold",
+            0,
+            MinimumContainerImpactThreshold,
+            MaximumContainerImpactThreshold,
+            containerImpactThreshold,
+            value => $"Strong threshold: {value:F0} px/s",
+            value =>
+            {
+                containerImpactThreshold = value;
+                PlayerPrefs.SetFloat(ContainerImpactThresholdPref, value);
+                if (fullVolumeVelocityDebugSlider)
+                {
+                    var minimumFullVolumeVelocity = value + 1f;
+                    fullVolumeVelocityDebugSlider.minValue = minimumFullVolumeVelocity;
+                    if (fullVolumeVelocityDebugSlider.value < minimumFullVolumeVelocity)
+                    {
+                        fullVolumeVelocityDebugSlider.value = minimumFullVolumeVelocity;
+                    }
+                }
+            });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "WeakVolumeMultiplier",
+            1,
+            0f,
+            2f,
+            containerImpactWeakVolumeMultiplier,
+            value => $"Weak volume scale: {value:0.00}x",
+            value =>
+            {
+                containerImpactWeakVolumeMultiplier = value;
+                PlayerPrefs.SetFloat(ContainerImpactWeakVolumeMultiplierPref, value);
+            });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "StrongVolumeMultiplier",
+            2,
+            0f,
+            2f,
+            containerImpactStrongVolumeMultiplier,
+            value => $"Strong volume scale: {value:0.00}x",
+            value =>
+            {
+                containerImpactStrongVolumeMultiplier = value;
+                PlayerPrefs.SetFloat(ContainerImpactStrongVolumeMultiplierPref, value);
+            });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "StrongMinimumVolume",
+            3,
+            0f,
+            1f,
+            containerImpactStrongMinimumVolume,
+            value => $"Strong impact floor: {value:P0}",
+            value =>
+            {
+                containerImpactStrongMinimumVolume = value;
+                PlayerPrefs.SetFloat(ContainerImpactStrongMinimumVolumePref, value);
+            });
+        fullVolumeVelocityDebugSlider = CreateContainerImpactDebugSlider(
+            panelRect,
+            "FullVolumeVelocity",
+            4,
+            containerImpactThreshold + 1f,
+            ContainerImpactAudioCatalog.MaximumFullVolumeVelocity,
+            containerImpactFullVolumeVelocity,
+            value => $"Full-volume speed: {value:F0} px/s",
+            value =>
+            {
+                containerImpactFullVolumeVelocity = value;
+                PlayerPrefs.SetFloat(ContainerImpactFullVolumeVelocityPref, value);
+            });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "MasterVolumeMultiplier",
+            5,
+            0f,
+            2f,
+            containerImpactMasterVolumeMultiplier,
+            value => $"Master volume scale: {value:0.00}x",
+            value =>
+            {
+                containerImpactMasterVolumeMultiplier = value;
+                PlayerPrefs.SetFloat(ContainerImpactMasterVolumeMultiplierPref, value);
+            });
+    }
+
+    private static UnityEngine.UI.Slider CreateContainerImpactDebugSlider(
+        RectTransform panel,
+        string objectName,
+        int row,
+        float minimum,
+        float maximum,
+        float initialValue,
+        System.Func<float, string> formatLabel,
+        System.Action<float> onValueChanged)
+    {
+        var label = new GameObject(
+                $"{objectName}Label",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Text))
+            .GetComponent<UnityEngine.UI.Text>();
+        var labelRect = label.rectTransform;
+        labelRect.SetParent(panel, false);
+        labelRect.anchorMin = new Vector2(0f, 1f);
+        labelRect.anchorMax = new Vector2(1f, 1f);
+        labelRect.pivot = new Vector2(0.5f, 1f);
+        labelRect.anchoredPosition = new Vector2(0f, -30f - row * 40f);
+        labelRect.sizeDelta = new Vector2(-20f, 18f);
+        label.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        label.fontSize = 12;
+        label.alignment = TextAnchor.MiddleLeft;
+        label.color = Color.white;
+        label.raycastTarget = false;
+
+        var slider = new GameObject(
+                $"{objectName}Slider",
+                typeof(RectTransform),
+                typeof(UnityEngine.UI.Slider))
+            .GetComponent<UnityEngine.UI.Slider>();
+        var sliderRect = slider.GetComponent<RectTransform>();
+        sliderRect.SetParent(panel, false);
+        sliderRect.anchorMin = new Vector2(0f, 1f);
+        sliderRect.anchorMax = new Vector2(1f, 1f);
+        sliderRect.pivot = new Vector2(0.5f, 1f);
+        sliderRect.anchoredPosition = new Vector2(0f, -49f - row * 40f);
+        sliderRect.sizeDelta = new Vector2(-24f, 14f);
+
+        var background = new GameObject(
+                "Background",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Image))
+            .GetComponent<UnityEngine.UI.Image>();
+        background.rectTransform.SetParent(sliderRect, false);
+        background.rectTransform.anchorMin = Vector2.zero;
+        background.rectTransform.anchorMax = Vector2.one;
+        background.rectTransform.sizeDelta = Vector2.zero;
+        background.color = new Color(0.2f, 0.2f, 0.2f);
+        background.raycastTarget = false;
+
+        var fillArea = new GameObject("FillArea", typeof(RectTransform))
+            .GetComponent<RectTransform>();
+        fillArea.SetParent(sliderRect, false);
+        fillArea.anchorMin = Vector2.zero;
+        fillArea.anchorMax = Vector2.one;
+        fillArea.offsetMin = new Vector2(6f, 2f);
+        fillArea.offsetMax = new Vector2(-6f, -2f);
+
+        var fill = new GameObject(
+                "Fill",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Image))
+            .GetComponent<UnityEngine.UI.Image>();
+        fill.rectTransform.SetParent(fillArea, false);
+        fill.rectTransform.anchorMin = Vector2.zero;
+        fill.rectTransform.anchorMax = Vector2.one;
+        fill.rectTransform.sizeDelta = Vector2.zero;
+        fill.color = new Color(0.25f, 0.72f, 1f);
+        fill.raycastTarget = false;
+
+        var handle = new GameObject(
+                "Handle",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(UnityEngine.UI.Image))
+            .GetComponent<UnityEngine.UI.Image>();
+        handle.rectTransform.SetParent(sliderRect, false);
+        handle.rectTransform.anchorMin = new Vector2(0f, 0f);
+        handle.rectTransform.anchorMax = new Vector2(0f, 1f);
+        handle.rectTransform.sizeDelta = new Vector2(16f, 0f);
+        handle.color = Color.white;
+        handle.raycastTarget = true;
+
+        slider.fillRect = fill.rectTransform;
+        slider.handleRect = handle.rectTransform;
+        slider.targetGraphic = handle;
+        slider.direction = UnityEngine.UI.Slider.Direction.LeftToRight;
+        slider.minValue = minimum;
+        slider.maxValue = maximum;
+        slider.value = Mathf.Clamp(initialValue, minimum, maximum);
+        label.text = formatLabel(slider.value);
+        slider.onValueChanged.AddListener(value =>
+        {
+            label.text = formatLabel(value);
+            onValueChanged(value);
+        });
+        return slider;
     }
 #endif
 
@@ -2545,6 +2831,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var previousPosition = visual.Transform.anchoredPosition;
         var startingAngle = visual.Transform.localEulerAngles.z;
         var blockedByContainer = false;
+        var blockedByFunnel = false;
         for (var step = 0; step < steps; step++)
         {
             var previousAngle = rotationAngle;
@@ -2553,6 +2840,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (WouldOverlap(visual))
             {
                 blockedByContainer = WouldOverlapOtherContainer(visual);
+                blockedByFunnel = !blockedByContainer && WouldOverlapFunnel(visual);
                 ApplyRotationPose(visual, previousAngle);
                 break;
             }
@@ -2570,10 +2858,20 @@ internal sealed class LiquidTransferMinigame : Minigame
                 visual,
                 arcDistance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
         }
+        else if (blockedByFunnel)
+        {
+            PlayFunnelImpact(
+                visual,
+                arcDistance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
+        }
 
         if (IsSeparated(visual))
         {
             containerImpactContact = false;
+        }
+        if (IsSeparatedFromFunnel(visual))
+        {
+            funnelImpactContact = false;
         }
 
         liquidSimulation.ApplyContainerPoseChange(
@@ -2592,6 +2890,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var distance = Vector2.Distance(startPosition, targetPosition);
         var steps = Mathf.Max(1, Mathf.CeilToInt(distance / CollisionStep));
         var blockedByContainer = false;
+        var blockedByFunnel = false;
         for (var step = 1; step <= steps; step++)
         {
             var candidatePosition = Vector2.Lerp(startPosition, targetPosition, (float)step / steps);
@@ -2599,6 +2898,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             if (WouldOverlap(visual))
             {
                 blockedByContainer = WouldOverlapOtherContainer(visual);
+                blockedByFunnel = !blockedByContainer && WouldOverlapFunnel(visual);
                 transform.anchoredPosition = Vector2.Lerp(startPosition, targetPosition, (float)(step - 1) / steps);
                 break;
             }
@@ -2617,10 +2917,20 @@ internal sealed class LiquidTransferMinigame : Minigame
                 visual,
                 distance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
         }
+        else if (blockedByFunnel)
+        {
+            PlayFunnelImpact(
+                visual,
+                distance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
+        }
 
         if (IsSeparated(visual))
         {
             containerImpactContact = false;
+        }
+        if (IsSeparatedFromFunnel(visual))
+        {
+            funnelImpactContact = false;
         }
     }
 
@@ -2644,13 +2954,29 @@ internal sealed class LiquidTransferMinigame : Minigame
     private bool WouldOverlap(ContainerVisual moving)
     {
         return WouldOverlapOtherContainer(moving)
-            || hasFunnel && ContainerShapeCollision.OverlapsPolylineSegments(
-                moving.OutlinePoints,
-                moving.Transform.anchoredPosition,
-                moving.Transform.localScale.x,
-                moving.Transform.localEulerAngles.z,
-                funnelWallPoints,
-                FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale);
+            || WouldOverlapFunnel(moving);
+    }
+
+    private bool WouldOverlapFunnel(ContainerVisual moving)
+    {
+        return hasFunnel && ContainerShapeCollision.OverlapsPolylineSegments(
+            moving.OutlinePoints,
+            moving.Transform.anchoredPosition,
+            moving.Transform.localScale.x,
+            moving.Transform.localEulerAngles.z,
+            funnelWallPoints,
+            FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale);
+    }
+
+    private bool IsSeparatedFromFunnel(ContainerVisual moving)
+    {
+        return !hasFunnel || !ContainerShapeCollision.OverlapsPolylineSegments(
+            moving.OutlinePoints,
+            moving.Transform.anchoredPosition,
+            moving.Transform.localScale.x,
+            moving.Transform.localEulerAngles.z,
+            funnelWallPoints,
+            FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale + ContainerSeparatedGap);
     }
 
     private bool WouldOverlapOtherContainer(ContainerVisual moving)
@@ -2702,15 +3028,31 @@ internal sealed class LiquidTransferMinigame : Minigame
             : sourceContainerMaterial;
 
         containerImpactContact = true;
-        TryPlayContainerImpact(moving, movingMaterial, otherMaterial, velocity);
-        TryPlayContainerImpact(other, otherMaterial, movingMaterial, velocity);
+        TryPlayContainerImpact(movingMaterial, otherMaterial, velocity, moving.IsSyringe);
+        TryPlayContainerImpact(otherMaterial, movingMaterial, velocity, other.IsSyringe);
+    }
+
+    private void PlayFunnelImpact(ContainerVisual moving, float velocity)
+    {
+        if (funnelImpactContact)
+        {
+            return;
+        }
+
+        funnelImpactContact = true;
+        var movingMaterial = moving == receivingContainer
+            ? receivingContainerMaterial
+            : sourceContainerMaterial;
+        var funnelMaterial = ContainerMaterialCatalog.GetMaterial(FunnelItem.Id);
+        TryPlayContainerImpact(movingMaterial, funnelMaterial, velocity, moving.IsSyringe);
+        TryPlayContainerImpact(funnelMaterial, movingMaterial, velocity, false);
     }
 
     private void TryPlayContainerImpact(
-        ContainerVisual container,
         ContainerMaterial material,
         ContainerMaterial otherMaterial,
-        float velocity)
+        float velocity,
+        bool forceWeak)
     {
         if (material == ContainerMaterial.Unknown)
         {
@@ -2728,10 +3070,15 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
-        var isStrongImpact = !container.IsSyringe && velocity >= containerImpactThreshold;
+        var isStrongImpact = !forceWeak && velocity >= containerImpactThreshold;
         var volumePercent = ContainerImpactAudioCatalog.GetVolume(
             velocity,
-            containerImpactThreshold) * 100f;
+            containerImpactThreshold,
+            containerImpactWeakVolumeMultiplier,
+            containerImpactStrongVolumeMultiplier,
+            containerImpactStrongMinimumVolume,
+            containerImpactFullVolumeVelocity,
+            containerImpactMasterVolumeMultiplier) * 100f;
         Debug.Log(
             $"[RealisticLiquidTransfer] Container impact detected: material={material}, "
             + $"otherMaterial={otherMaterial}, impact force proxy={velocity:F1}px/s, "
@@ -2741,8 +3088,13 @@ internal sealed class LiquidTransferMinigame : Minigame
             material,
             velocity,
             containerImpactThreshold,
+            containerImpactWeakVolumeMultiplier,
+            containerImpactStrongVolumeMultiplier,
+            containerImpactStrongMinimumVolume,
+            containerImpactFullVolumeVelocity,
+            containerImpactMasterVolumeMultiplier,
             containerImpactPitchVariation,
-            container.IsSyringe,
+            forceWeak,
             impactAudioSource);
     }
 

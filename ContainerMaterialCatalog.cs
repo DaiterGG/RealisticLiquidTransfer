@@ -87,7 +87,8 @@ internal static class ContainerMaterialCatalog
             "liquidpouch",
             "canteen",
             "craftingbottle",
-            "temporarybottle");
+            "temporarybottle",
+            FunnelItem.Id);
 
         Add(materialById, ContainerMaterial.Glass,
             "reliefcream",
