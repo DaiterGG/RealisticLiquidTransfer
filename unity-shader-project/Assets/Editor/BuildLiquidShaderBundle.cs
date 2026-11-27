@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -15,6 +17,7 @@ namespace RealisticLiquidTransfer.Editor
             "Packages/com.unity.render-pipelines.universal/Runtime/Data/UniversalRendererData.asset";
         private const string RendererPath = "Assets/Generated/UniversalRendererData.asset";
         private const string PipelinePath = "Assets/Generated/UniversalRenderPipelineAsset.asset";
+        private const string AudioDirectory = "Assets/Audio";
         private const string MaterialPath = "Assets/Generated/LiquidSurfaceMaterial.mat";
         private const string BundleName = "liquidshaders.bundle";
         private const string MaterialAddress = "LiquidSurfaceMaterial";
@@ -64,11 +67,64 @@ namespace RealisticLiquidTransfer.Editor
 
             var outputDirectory = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "AssetBundles"));
             Directory.CreateDirectory(outputDirectory);
+            if (!Directory.Exists(AudioDirectory))
+            {
+                throw new DirectoryNotFoundException(
+                    $"Container impact audio directory was not found: {AudioDirectory}");
+            }
+
+            var audioAssetNames = new List<string>();
+            var audioAddressNames = new List<string>();
+            foreach (var materialDirectory in Directory.GetDirectories(AudioDirectory))
+            {
+                var materialName = Path.GetFileName(materialDirectory);
+                foreach (var impactKind in new[] { "Weak", "Strong" })
+                {
+                    var files = Directory.GetFiles(materialDirectory)
+                        .Where(path => Path.GetExtension(path).Equals(
+                            ".mp3",
+                            StringComparison.OrdinalIgnoreCase))
+                        .Where(path => Path.GetFileNameWithoutExtension(path)
+                            .IndexOf(impactKind, StringComparison.OrdinalIgnoreCase) >= 0)
+                        .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    for (var index = 0; index < files.Length; index++)
+                    {
+                        var audioAssetName = files[index].Replace('\\', '/');
+                        var importer = AssetImporter.GetAtPath(audioAssetName) as AudioImporter;
+                        if (importer == null)
+                        {
+                            continue;
+                        }
+
+                        importer.loadInBackground = false;
+                        importer.forceToMono = true;
+                        EditorUtility.SetDirty(importer);
+                        audioAssetNames.Add(audioAssetName);
+                        audioAddressNames.Add(
+                            $"ContainerImpact.{materialName}.{impactKind}.{index + 1}");
+                    }
+                }
+            }
+
+            if (audioAssetNames.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "The liquid bundle contains no weak or strong container impact audio.");
+            }
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            var bundledAssetNames = new List<string> { MaterialPath, ComputeShaderPath };
+            bundledAssetNames.AddRange(audioAssetNames);
+            var bundledAddressNames = new List<string> { MaterialAddress, ComputeShaderAddress };
+            bundledAddressNames.AddRange(audioAddressNames);
             var bundleBuild = new AssetBundleBuild
             {
                 assetBundleName = BundleName,
-                assetNames = new[] { MaterialPath, ComputeShaderPath },
-                addressableNames = new[] { MaterialAddress, ComputeShaderAddress }
+                assetNames = bundledAssetNames.ToArray(),
+                addressableNames = bundledAddressNames.ToArray()
             };
             var manifest = UnityEditor.BuildPipeline.BuildAssetBundles(
                 outputDirectory,
@@ -108,6 +164,14 @@ namespace RealisticLiquidTransfer.Editor
                         "The generated bundle does not contain the LiquidDensityCompute compute shader.");
                 }
 
+                foreach (var addressName in audioAddressNames)
+                {
+                    if (!validationBundle.LoadAsset<AudioClip>(addressName))
+                    {
+                        throw new InvalidOperationException(
+                            $"The generated bundle does not contain impact audio '{addressName}'.");
+                    }
+                }
             }
             finally
             {
@@ -115,7 +179,8 @@ namespace RealisticLiquidTransfer.Editor
             }
 
             Debug.Log(
-                $"Built and loaded URP liquid shader bundle with Unity {Application.unityVersion}: {bundlePath}");
+                $"Built URP liquid shader and container impact audio bundle with "
+                + $"Unity {Application.unityVersion}: {bundlePath}");
         }
 
         private static void EnsureUniversalPipeline()

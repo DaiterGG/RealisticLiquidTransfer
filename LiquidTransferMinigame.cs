@@ -10,6 +10,15 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float HandScale = 0.85f;
     private const float CollisionStep = 2f;
     private const float PivotSwitchHysteresis = 2f;
+    private const float ContainerSeparatedGap = 50f;
+    private const float MinimumContainerImpactThreshold = 1f;
+    private const float MaximumContainerImpactThreshold = 1500f;
+    private const float DefaultContainerImpactThreshold = 1270f;
+    private const float DefaultContainerImpactPitchVariation = 10f;
+    private const string ContainerImpactThresholdPref =
+        "realliquidtransfer.containerimpactthreshold";
+    private const string ContainerImpactPitchVariationPref =
+        "realliquidtransfer.containerimpactpitchvariation";
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
@@ -61,6 +70,12 @@ internal sealed class LiquidTransferMinigame : Minigame
     private bool originalPreserveAspect;
     private ContainerVisual receivingContainer;
     private ContainerVisual sourceContainer;
+    private AudioSource impactAudioSource;
+    private ContainerMaterial receivingContainerMaterial;
+    private ContainerMaterial sourceContainerMaterial;
+    private float containerImpactThreshold = DefaultContainerImpactThreshold;
+    private float containerImpactPitchVariation = DefaultContainerImpactPitchVariation;
+    private bool containerImpactContact;
     private RectTransform heldContainer;
     private ContainerVisual heldVisual;
     private Vector2 heldOffset;
@@ -242,6 +257,26 @@ internal sealed class LiquidTransferMinigame : Minigame
         screenRoot.sizeDelta = game.minigameScreen.rect.size;
         screenRoot.SetSiblingIndex(0);
         game.spawnedMiniGame = screenRoot;
+        impactAudioSource = screenRoot.gameObject.AddComponent<AudioSource>();
+        impactAudioSource.playOnAwake = false;
+        impactAudioSource.loop = false;
+        impactAudioSource.spatialBlend = 0f;
+        impactAudioSource.volume = 1f;
+        impactAudioSource.dopplerLevel = 0f;
+        receivingContainerMaterial = ContainerMaterialCatalog.GetMaterial(receivingGameContainer);
+        sourceContainerMaterial = ContainerMaterialCatalog.GetMaterial(sourceGameContainer);
+        containerImpactThreshold = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                ContainerImpactThresholdPref,
+                DefaultContainerImpactThreshold),
+            MinimumContainerImpactThreshold,
+            MaximumContainerImpactThreshold);
+        containerImpactPitchVariation = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                ContainerImpactPitchVariationPref,
+                DefaultContainerImpactPitchVariation),
+            0f,
+            50f);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
         controlsText = CreateControlsText(overlayRoot);
         if (drainOnly)
@@ -2509,6 +2544,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         var angleStep = deltaAngle / Mathf.Max(1, steps);
         var previousPosition = visual.Transform.anchoredPosition;
         var startingAngle = visual.Transform.localEulerAngles.z;
+        var blockedByContainer = false;
         for (var step = 0; step < steps; step++)
         {
             var previousAngle = rotationAngle;
@@ -2516,6 +2552,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             ApplyRotationPose(visual, candidateAngle);
             if (WouldOverlap(visual))
             {
+                blockedByContainer = WouldOverlapOtherContainer(visual);
                 ApplyRotationPose(visual, previousAngle);
                 break;
             }
@@ -2525,6 +2562,18 @@ internal sealed class LiquidTransferMinigame : Minigame
             {
                 break;
             }
+        }
+
+        if (blockedByContainer)
+        {
+            PlayContainerImpact(
+                visual,
+                arcDistance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
+        }
+
+        if (IsSeparated(visual))
+        {
+            containerImpactContact = false;
         }
 
         liquidSimulation.ApplyContainerPoseChange(
@@ -2542,12 +2591,14 @@ internal sealed class LiquidTransferMinigame : Minigame
         var startPosition = transform.anchoredPosition;
         var distance = Vector2.Distance(startPosition, targetPosition);
         var steps = Mathf.Max(1, Mathf.CeilToInt(distance / CollisionStep));
+        var blockedByContainer = false;
         for (var step = 1; step <= steps; step++)
         {
             var candidatePosition = Vector2.Lerp(startPosition, targetPosition, (float)step / steps);
             transform.anchoredPosition = candidatePosition;
             if (WouldOverlap(visual))
             {
+                blockedByContainer = WouldOverlapOtherContainer(visual);
                 transform.anchoredPosition = Vector2.Lerp(startPosition, targetPosition, (float)(step - 1) / steps);
                 break;
             }
@@ -2559,6 +2610,18 @@ internal sealed class LiquidTransferMinigame : Minigame
             new Vector2(
                 TranslationHorizontalInfluence,
                 TranslationVerticalInfluence));
+
+        if (blockedByContainer)
+        {
+            PlayContainerImpact(
+                visual,
+                distance * fitScale / Mathf.Max(Time.unscaledDeltaTime, 0.001f));
+        }
+
+        if (IsSeparated(visual))
+        {
+            containerImpactContact = false;
+        }
     }
 
     private void ApplyRotationPose(ContainerVisual visual, float angle)
@@ -2580,10 +2643,22 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private bool WouldOverlap(ContainerVisual moving)
     {
+        return WouldOverlapOtherContainer(moving)
+            || hasFunnel && ContainerShapeCollision.OverlapsPolylineSegments(
+                moving.OutlinePoints,
+                moving.Transform.anchoredPosition,
+                moving.Transform.localScale.x,
+                moving.Transform.localEulerAngles.z,
+                funnelWallPoints,
+                FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale);
+    }
+
+    private bool WouldOverlapOtherContainer(ContainerVisual moving)
+    {
         var other = moving == receivingContainer ? sourceContainer : receivingContainer;
         var movingTransform = moving.Transform;
         var otherTransform = other.Transform;
-        var overlapsOtherContainer = ContainerShapeCollision.Overlaps(
+        return ContainerShapeCollision.Overlaps(
             moving.CollisionOutlinePoints,
             movingTransform.anchoredPosition,
             movingTransform.localScale.x,
@@ -2592,14 +2667,83 @@ internal sealed class LiquidTransferMinigame : Minigame
             otherTransform.anchoredPosition,
             otherTransform.localScale.x,
             otherTransform.localEulerAngles.z);
-        return overlapsOtherContainer
-            || hasFunnel && ContainerShapeCollision.OverlapsPolylineSegments(
-                moving.OutlinePoints,
-                movingTransform.anchoredPosition,
-                movingTransform.localScale.x,
-                movingTransform.localEulerAngles.z,
-                funnelWallPoints,
-                FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale);
+    }
+
+    private bool IsSeparated(ContainerVisual moving)
+    {
+        var other = moving == receivingContainer ? sourceContainer : receivingContainer;
+        var movingTransform = moving.Transform;
+        var otherTransform = other.Transform;
+        return !ContainerShapeCollision.Near(
+            moving.CollisionOutlinePoints,
+            movingTransform.anchoredPosition,
+            movingTransform.localScale.x,
+            movingTransform.localEulerAngles.z,
+            other.CollisionOutlinePoints,
+            otherTransform.anchoredPosition,
+            otherTransform.localScale.x,
+            otherTransform.localEulerAngles.z,
+            ContainerSeparatedGap);
+    }
+
+    private void PlayContainerImpact(ContainerVisual moving, float velocity)
+    {
+        if (containerImpactContact)
+        {
+            return;
+        }
+
+        var other = moving == receivingContainer ? sourceContainer : receivingContainer;
+        var movingMaterial = moving == receivingContainer
+            ? receivingContainerMaterial
+            : sourceContainerMaterial;
+        var otherMaterial = other == receivingContainer
+            ? receivingContainerMaterial
+            : sourceContainerMaterial;
+
+        containerImpactContact = true;
+        TryPlayContainerImpact(moving, movingMaterial, otherMaterial, velocity);
+        TryPlayContainerImpact(other, otherMaterial, movingMaterial, velocity);
+    }
+
+    private void TryPlayContainerImpact(
+        ContainerVisual container,
+        ContainerMaterial material,
+        ContainerMaterial otherMaterial,
+        float velocity)
+    {
+        if (material == ContainerMaterial.Unknown)
+        {
+            DebugLog.Write(
+                $"Container impact ignored: unknown material, velocity={velocity:F1}px/s.");
+            return;
+        }
+
+        if (otherMaterial == ContainerMaterial.Cardboard
+            && material != ContainerMaterial.Cardboard)
+        {
+            DebugLog.Write(
+                $"Container impact sound suppressed: cardboard muted material={material}, "
+                + $"velocity={velocity:F1}px/s.");
+            return;
+        }
+
+        var isStrongImpact = !container.IsSyringe && velocity >= containerImpactThreshold;
+        var volumePercent = ContainerImpactAudioCatalog.GetVolume(
+            velocity,
+            containerImpactThreshold) * 100f;
+        Debug.Log(
+            $"[RealisticLiquidTransfer] Container impact detected: material={material}, "
+            + $"otherMaterial={otherMaterial}, impact force proxy={velocity:F1}px/s, "
+            + $"strong threshold={containerImpactThreshold:F0}px/s, "
+            + $"sound={(isStrongImpact ? "strong" : "weak")}, volume={volumePercent:F0}%.");
+        ContainerImpactAudioCatalog.TryPlay(
+            material,
+            velocity,
+            containerImpactThreshold,
+            containerImpactPitchVariation,
+            container.IsSyringe,
+            impactAudioSource);
     }
 
     private void StartPivotTracking(Vector2 pointer)

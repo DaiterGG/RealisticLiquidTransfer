@@ -15,6 +15,9 @@ $projectPath = Join-Path $PSScriptRoot 'RealisticLiquidTransfer.csproj'
 $unityProjectPath = Join-Path $PSScriptRoot 'unity-shader-project'
 $shaderBundlePath = Join-Path $unityProjectPath 'AssetBundles\liquidshaders.bundle'
 $embeddedShaderBundlePath = Join-Path $PSScriptRoot 'resources\liquidshaders.bundle'
+$sourceAudioDirectory = Join-Path $PSScriptRoot 'resources\audio'
+$nestedAudioDirectory = Join-Path $sourceAudioDirectory 'audio'
+$unityAudioDirectory = Join-Path $unityProjectPath 'Assets\Audio'
 $unityBuildLogPath = Join-Path $PSScriptRoot 'obj\unity-shader-build.log'
 $gameAssembly = Join-Path $resolvedGamePath 'CasualtiesUnknown_Data\Managed\Assembly-CSharp.dll'
 $pluginAssembly = Join-Path $resolvedGamePath 'BepInEx\core\BepInEx.dll'
@@ -46,6 +49,13 @@ if ([string]::IsNullOrWhiteSpace($UnityEditorPath) -or -not (Test-Path -LiteralP
 
 $UnityEditorPath = (Resolve-Path -LiteralPath $UnityEditorPath).Path
 
+if (Test-Path -LiteralPath $nestedAudioDirectory -PathType Container) {
+    $sourceAudioDirectory = $nestedAudioDirectory
+}
+if (-not (Test-Path -LiteralPath $sourceAudioDirectory -PathType Container)) {
+    throw "Container impact audio directory not found: $sourceAudioDirectory"
+}
+
 foreach ($requiredFile in @(
     $projectPath,
     (Join-Path $unityProjectPath 'Packages\manifest.json'),
@@ -69,6 +79,10 @@ foreach ($requiredFile in @(
 }
 
 New-Item -ItemType Directory -Path (Split-Path -Parent $unityBuildLogPath) -Force | Out-Null
+New-Item -ItemType Directory -Path $unityAudioDirectory -Force | Out-Null
+Get-ChildItem -LiteralPath $sourceAudioDirectory -Force |
+    Copy-Item -Destination $unityAudioDirectory -Recurse -Force
+
 $unityArguments = @(
     '-batchmode',
     '-nographics',

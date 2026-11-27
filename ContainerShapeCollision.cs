@@ -52,6 +52,72 @@ internal static class ContainerShapeCollision
         return IsPointInside(firstPoints[0], secondPoints) || IsPointInside(secondPoints[0], firstPoints);
     }
 
+    internal static bool Near(
+        Vector2[] firstOutline,
+        Vector2 firstPosition,
+        float firstScale,
+        float firstAngle,
+        Vector2[] secondOutline,
+        Vector2 secondPosition,
+        float secondScale,
+        float secondAngle,
+        float maximumGap)
+    {
+        if (firstOutline == null || secondOutline == null
+            || firstOutline.Length < 3 || secondOutline.Length < 3)
+        {
+            return false;
+        }
+
+        EnsureBuffer(ref firstPoints, firstOutline.Length);
+        EnsureBuffer(ref secondPoints, secondOutline.Length);
+        TransformPoints(firstOutline, firstPosition, firstScale, firstAngle, firstPoints);
+        TransformPoints(secondOutline, secondPosition, secondScale, secondAngle, secondPoints);
+
+        var gap = Mathf.Max(0f, maximumGap);
+        var gapSquared = gap * gap;
+        GetBounds(firstPoints, out var firstMin, out var firstMax);
+        GetBounds(secondPoints, out var secondMin, out var secondMax);
+        var boundsGapX = Mathf.Max(
+            0f,
+            Mathf.Max(firstMin.x - secondMax.x, secondMin.x - firstMax.x));
+        var boundsGapY = Mathf.Max(
+            0f,
+            Mathf.Max(firstMin.y - secondMax.y, secondMin.y - firstMax.y));
+        if (boundsGapX * boundsGapX + boundsGapY * boundsGapY > gapSquared)
+        {
+            return false;
+        }
+
+        if (IsPointInside(firstPoints[0], secondPoints)
+            || IsPointInside(secondPoints[0], firstPoints))
+        {
+            return true;
+        }
+
+        var gapSquaredWithEpsilon = gapSquared + Epsilon;
+        for (var firstIndex = 0; firstIndex < firstPoints.Length; firstIndex++)
+        {
+            var firstStart = firstPoints[firstIndex];
+            var firstEnd = firstPoints[(firstIndex + 1) % firstPoints.Length];
+            for (var secondIndex = 0; secondIndex < secondPoints.Length; secondIndex++)
+            {
+                var secondStart = secondPoints[secondIndex];
+                var secondEnd = secondPoints[(secondIndex + 1) % secondPoints.Length];
+                if (SegmentsIntersect(firstStart, firstEnd, secondStart, secondEnd)
+                    || PointSegmentDistanceSquared(firstStart, secondStart, secondEnd)
+                        <= gapSquaredWithEpsilon
+                    || PointSegmentDistanceSquared(secondStart, firstStart, firstEnd)
+                        <= gapSquaredWithEpsilon)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     internal static bool OverlapsSegments(
         Vector2[] outline,
         Vector2 position,

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -15,9 +16,29 @@ internal static class LiquidShaderAssets
     private static AssetBundle bundle;
     private static Material surfaceMaterial;
     private static ComputeShader densityComputeShader;
+    private static readonly Dictionary<string, AudioClip> AudioClips =
+        new Dictionary<string, AudioClip>(StringComparer.Ordinal);
 
     internal static Material SurfaceMaterial => surfaceMaterial;
     internal static ComputeShader DensityComputeShader => densityComputeShader;
+
+    internal static bool TryGetAudioClip(string addressName, out AudioClip clip)
+    {
+        if (AudioClips.TryGetValue(addressName, out clip))
+        {
+            return true;
+        }
+
+        clip = bundle ? bundle.LoadAsset<AudioClip>(addressName) : null;
+        if (clip)
+        {
+            AudioClips[addressName] = clip;
+            return true;
+        }
+
+        clip = null;
+        return false;
+    }
 
     internal static void Load()
     {
@@ -77,6 +98,15 @@ internal static class LiquidShaderAssets
 
     internal static void Unload()
     {
+        foreach (var clip in AudioClips.Values)
+        {
+            if (clip)
+            {
+                UnityEngine.Object.Destroy(clip);
+            }
+        }
+        AudioClips.Clear();
+
         if (surfaceMaterial)
         {
             UnityEngine.Object.Destroy(surfaceMaterial);

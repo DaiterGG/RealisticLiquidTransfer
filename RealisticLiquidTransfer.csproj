@@ -29,6 +29,8 @@
     <Compile Include="SimulationProfiler.cs" />
     <Compile Include="LiquidSimulation.cs" />
     <Compile Include="LiquidDensityCatalog.cs" />
+    <Compile Include="ContainerMaterialCatalog.cs" />
+    <Compile Include="ContainerImpactAudioCatalog.cs" />
     <Compile Include="ContainerBoundaryData.cs" />
     <Compile Include="Generated\ContainerBoundaries.g.cs" />
     <Compile Include="LiquidShaderAssets.cs" />
@@ -84,6 +86,10 @@
     </Reference>
     <Reference Include="UnityEngine.AssetBundleModule">
       <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
