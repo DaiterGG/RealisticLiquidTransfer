@@ -7,7 +7,8 @@ param(
         'funnel-wall-single-drop',
         'syringe-full-capacity',
         'syringe-center-bottle-intake',
-        'water-bottle-into-minibarrel')]
+        'water-bottle-into-minibarrel',
+        'water-bottle-source-into-minibarrel')]
     [string]$Scenario,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )

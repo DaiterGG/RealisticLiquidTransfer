@@ -15,6 +15,11 @@ public static class LiquidSimulationDiagnosticsRunner
     private const int SettlingWindowFrames = GameUpdatesPerSecond;
     private const float WaterBottleCapacity = 500f;
     private const float MiniBarrelCapacity = 5000f;
+    private const float BottleSourceMaximumFrameMovement = 20f;
+    private const float BottleSourceMaximumRelativeDrift = 25f;
+    private const float BottleSourceMaximumTrackedSpeed = 600f;
+    private const int BottleSourceMaximumUnassignedUnits = 4;
+    private const int BottleSourceMaximumUnassignedFrames = GameUpdatesPerSecond;
     private const float ReferenceCapacity = 250f;
     private const float BottleLoweringDurationSeconds = 8f;
     private const float MaximumSettledSpeed = 8f;
@@ -32,6 +37,8 @@ public static class LiquidSimulationDiagnosticsRunner
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
     private const string SyringeCenterBottleScenario = "syringe-center-bottle-intake";
     private const string WaterBottleIntoMiniBarrelScenario = "water-bottle-into-minibarrel";
+    private const string WaterBottleSourceIntoMiniBarrelScenario =
+        "water-bottle-source-into-minibarrel";
     private static StreamWriter log;
 
     public static void Run()
@@ -41,9 +48,11 @@ public static class LiquidSimulationDiagnosticsRunner
         try
         {
             var scenario = GetArgument("-scenario");
-            if (scenario == WaterBottleIntoMiniBarrelScenario)
+            if (scenario == WaterBottleIntoMiniBarrelScenario
+                || scenario == WaterBottleSourceIntoMiniBarrelScenario)
             {
-                RunWaterBottleIntoMiniBarrelScenario();
+                RunWaterBottleIntoMiniBarrelScenario(
+                    scenario == WaterBottleSourceIntoMiniBarrelScenario);
                 return;
             }
 
@@ -1229,7 +1238,7 @@ public static class LiquidSimulationDiagnosticsRunner
         EditorApplication.Exit(exitCode);
     }
 
-    private static void RunWaterBottleIntoMiniBarrelScenario()
+    private static void RunWaterBottleIntoMiniBarrelScenario(bool bottleIsSource)
     {
         GameObject screenObject = null;
         var exitCode = 0;
@@ -1259,7 +1268,10 @@ public static class LiquidSimulationDiagnosticsRunner
             };
             DebugLog.Sink = WriteLine;
             Plugin.LogSink = WriteLine;
-            WriteLine($"Scenario '{WaterBottleIntoMiniBarrelScenario}' started at {DateTime.Now:O}.");
+            var scenarioName = bottleIsSource
+                ? WaterBottleSourceIntoMiniBarrelScenario
+                : WaterBottleIntoMiniBarrelScenario;
+            WriteLine($"Scenario '{scenarioName}' started at {DateTime.Now:O}.");
 
             var referenceArea = EstimateArea(
                 referenceBoundary.WallCenterlinePoints,
@@ -1348,63 +1360,86 @@ public static class LiquidSimulationDiagnosticsRunner
                     $"Bottle lowering path is invalid: start={startOpening.y:F2}, end={endOpeningY:F2}.");
             }
 
+            var receiverContainer = bottleIsSource ? barrel : bottle;
+            var receiverBoundary = bottleIsSource ? barrelBoundary : bottleBoundary;
+            var receiverCapacity = bottleIsSource ? MiniBarrelCapacity : WaterBottleCapacity;
+            var sourceContainer = bottleIsSource ? bottle : barrel;
+            var sourceBoundary = bottleIsSource ? bottleBoundary : barrelBoundary;
+            var sourceCapacity = bottleIsSource ? WaterBottleCapacity : MiniBarrelCapacity;
+            var sourceAmount = sourceCapacity;
             var water = new[]
             {
                 new LiquidProfileEntry(
                     "water",
-                    MiniBarrelCapacity,
+                    sourceAmount,
                     new Color(0.16f, 0.5f, 0.95f))
             };
+            const float receiverAmount = 0f;
+            var initialBottleAmount = bottleIsSource ? sourceAmount : receiverAmount;
+            var initialBarrelAmount = bottleIsSource ? receiverAmount : sourceAmount;
             var simulation = new LiquidSimulation(
                 root,
-                bottle,
-                bottleBoundary.WallCenterlinePoints,
-                bottleBoundary.InteriorWalls,
-                WaterBottleCapacity,
-                barrel,
-                barrelBoundary.WallCenterlinePoints,
-                barrelBoundary.InteriorWalls,
-                MiniBarrelCapacity,
-                0f,
-                MiniBarrelCapacity,
+                receiverContainer,
+                receiverBoundary.WallCenterlinePoints,
+                receiverBoundary.InteriorWalls,
+                receiverCapacity,
+                sourceContainer,
+                sourceBoundary.WallCenterlinePoints,
+                sourceBoundary.InteriorWalls,
+                sourceCapacity,
+                receiverAmount,
+                sourceAmount,
                 Array.Empty<LiquidProfileEntry>(),
                 water,
                 LiquidSimulation.DefaultPackingTenths / 100f,
                 headless: true);
             simulation.ConfigureForMinigame(false);
 
+            var bottleContainerIndex = bottleIsSource ? 1 : 0;
+            var barrelContainerIndex = bottleIsSource ? 0 : 1;
             var initialDrops = simulation.CaptureDropSnapshots();
-            if (simulation.GetInitialContainerDropCount(0) != 0
-                || simulation.GetInitialContainerDropCount(1) != MiniBarrelCapacity
+            if (simulation.GetInitialContainerDropCount(bottleContainerIndex)
+                    != initialBottleAmount
+                || simulation.GetInitialContainerDropCount(barrelContainerIndex)
+                    != initialBarrelAmount
                 || initialDrops.Length == 0)
             {
                 throw new InvalidOperationException(
-                    $"Fixture did not seed a full minibarrel: bottle="
-                    + $"{simulation.GetInitialContainerDropCount(0)}ml, barrel="
-                    + $"{simulation.GetInitialContainerDropCount(1)}/{MiniBarrelCapacity:F0}ml, "
+                    $"Fixture did not seed the requested source: bottle="
+                    + $"{simulation.GetInitialContainerDropCount(bottleContainerIndex)}"
+                    + $"/{initialBottleAmount:F0}ml, barrel="
+                    + $"{simulation.GetInitialContainerDropCount(barrelContainerIndex)}"
+                    + $"/{initialBarrelAmount:F0}ml, "
                     + $"particles={initialDrops.Length}.");
             }
 
+            const int sourceContainerIndex = 1;
+            const int destinationContainerIndex = 0;
             var trackedDrop = initialDrops[0];
-            var trackedInitialOffset = barrel.InverseTransformPoint(root.TransformPoint(trackedDrop.Position));
-            var trackedStartDistance = float.PositiveInfinity;
+            var trackedInitialOffset = sourceContainer.InverseTransformPoint(
+                root.TransformPoint(trackedDrop.Position));
+            var trackedStartDistance = bottleIsSource
+                ? float.NegativeInfinity
+                : float.PositiveInfinity;
             foreach (var drop in initialDrops)
             {
                 var distance = Vector2.Distance(drop.Position, startOpening);
-                if (distance < trackedStartDistance)
+                if (bottleIsSource
+                    ? distance > trackedStartDistance
+                    : distance < trackedStartDistance)
                 {
                     trackedDrop = drop;
                     trackedStartDistance = distance;
                 }
             }
 
-            trackedInitialOffset = barrel.InverseTransformPoint(
+            trackedInitialOffset = sourceContainer.InverseTransformPoint(
                 root.TransformPoint(trackedDrop.Position));
             var trackedDropId = trackedDrop.Id;
             var trackedPosition = trackedDrop.Position;
             var trackedVelocity = trackedDrop.Velocity;
             var previousTrackedPosition = trackedPosition;
-            var trackedBarrelLocal = (Vector2)trackedInitialOffset;
+            var trackedSourceLocal = (Vector2)trackedInitialOffset;
             var maximumFrameMovement = 0f;
             var maximumSourceRelativeDrift = 0f;
             var maximumTrackedSpeed = 0f;
@@ -1413,27 +1448,30 @@ public static class LiquidSimulationDiagnosticsRunner
             var maximumUnaccountedUnits = 0;
             var trackedDropRemoved = false;
             var firstTrackedDropMissingFrame = -1;
-            var trackedDropEnteredBottle = false;
-            var trackedOwner = (byte)2;
+            var trackedDropEnteredDestination = false;
+            var trackedOwner = (byte)(sourceContainerIndex + 1);
             var expectedUnits = simulation.Count;
             var loweringFrames = Mathf.CeilToInt(
                 BottleLoweringDurationSeconds * GameUpdatesPerSecond);
             var movementDistance = startOpening.y - endOpeningY;
             WriteLine(
-                $"Fixture: empty water bottle={bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0}, "
-                + $"scale={bottleScale:F3}; full minibarrel={barrelSpriteSize.x:F0}x"
+                $"Fixture: water bottle={bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0}, "
+                + $"initial={initialBottleAmount:F0}ml, "
+                + $"scale={bottleScale:F3}; minibarrel={barrelSpriteSize.x:F0}x"
                 + $"{barrelSpriteSize.y:F0}, capacity={MiniBarrelCapacity:F0}ml, "
-                + $"scale={barrelScale:F3}; bottle rotated={bottle.localEulerAngles.z:F0}deg.");
+                + $"initial={initialBarrelAmount:F0}ml, "
+                + $"scale={barrelScale:F3}; bottle rotated={bottle.localEulerAngles.z:F0}deg; "
+                + $"source={(bottleIsSource ? "waterbottle" : "minibarrel")}.");
             WriteLine(
                 $"Motion: updates={GameUpdatesPerSecond}Hz, duration={SimulationDurationSeconds}s, "
                 + $"loweringDuration={BottleLoweringDurationSeconds:F1}s, "
                 + $"openingY={startOpening.y:F2}->{endOpeningY:F2}, "
                 + $"distance={movementDistance:F2}px, "
-                + $"initialBottleAmount={simulation.GetContainerLiquidAmount(0):F1}ml, "
-                + $"initialBarrelAmount={simulation.GetContainerLiquidAmount(1):F1}ml, "
+                + $"initialBottleAmount={initialBottleAmount:F1}ml, "
+                + $"initialBarrelAmount={initialBarrelAmount:F1}ml, "
                 + $"particles={initialDrops.Length}, trackedDrop={trackedDropId}, "
                 + $"trackedDropVolume={trackedDrop.Volume}ml, "
-                + $"trackedInitialBarrelLocal=({trackedInitialOffset.x:F3},"
+                + $"trackedInitialSourceLocal=({trackedInitialOffset.x:F3},"
                 + $"{trackedInitialOffset.y:F3}), trackedStartDistance={trackedStartDistance:F3}px.");
 
             for (var frame = 0; frame <= SimulationFrames; frame++)
@@ -1469,11 +1507,11 @@ public static class LiquidSimulationDiagnosticsRunner
                 foreach (var drop in drops)
                 {
                     liveUnits += drop.Volume;
-                    if (drop.ContainerAssignment == 1)
+                    if (drop.ContainerAssignment == bottleContainerIndex + 1)
                     {
                         bottleOwnedUnits += drop.Volume;
                     }
-                    else if (drop.ContainerAssignment == 2)
+                    else if (drop.ContainerAssignment == barrelContainerIndex + 1)
                     {
                         barrelOwnedUnits += drop.Volume;
                     }
@@ -1488,32 +1526,38 @@ public static class LiquidSimulationDiagnosticsRunner
                     }
 
                     trackedDropFound = true;
-                    var insideBottle = simulation.ContainsContainer(0, drop.Position);
-                    var insideBarrel = simulation.ContainsContainer(1, drop.Position);
-                    var barrelLocal = (Vector2)barrel.InverseTransformPoint(
+                    var insideBottle = simulation.ContainsContainer(bottleContainerIndex, drop.Position);
+                    var insideBarrel = simulation.ContainsContainer(barrelContainerIndex, drop.Position);
+                    var sourceLocal = (Vector2)sourceContainer.InverseTransformPoint(
                         root.TransformPoint(drop.Position));
 
                     var frameMovement = Vector2.Distance(previousTrackedPosition, drop.Position);
-                    var sourceRelativeDrift = Vector2.Distance(trackedInitialOffset, barrelLocal);
+                    var sourceRelativeDrift = Vector2.Distance(trackedInitialOffset, sourceLocal);
+                    var ownerName = drop.ContainerAssignment == bottleContainerIndex + 1
+                        ? "waterbottle"
+                        : drop.ContainerAssignment == barrelContainerIndex + 1
+                            ? "minibarrel"
+                            : "unassigned";
                     maximumFrameMovement = Mathf.Max(maximumFrameMovement, frameMovement);
                     maximumSourceRelativeDrift = Mathf.Max(
                         maximumSourceRelativeDrift,
                         sourceRelativeDrift);
                     maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
-                    trackedDropEnteredBottle |= insideBottle;
+                    trackedDropEnteredDestination |=
+                        simulation.ContainsContainer(destinationContainerIndex, drop.Position);
                     trackedOwner = drop.ContainerAssignment;
                     WriteLine(
                         $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s "
                         + $"id={drop.Id} volume={drop.Volume} insideBottle={insideBottle} "
-                        + $"insideBarrel={insideBarrel} owner={drop.ContainerAssignment} "
+                        + $"insideBarrel={insideBarrel} owner={ownerName}({drop.ContainerAssignment}) "
                         + $"position=({drop.Position.x:F3},{drop.Position.y:F3}) "
                         + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}) "
-                        + $"barrelLocal=({barrelLocal.x:F3},{barrelLocal.y:F3}) "
+                        + $"sourceLocal=({sourceLocal.x:F3},{sourceLocal.y:F3}) "
                         + $"frameMove={frameMovement:F3} sourceDrift={sourceRelativeDrift:F3} "
                         + "removed=false.");
                     trackedPosition = drop.Position;
                     trackedVelocity = drop.Velocity;
-                    trackedBarrelLocal = barrelLocal;
+                    trackedSourceLocal = sourceLocal;
                     previousTrackedPosition = drop.Position;
                 }
 
@@ -1530,7 +1574,7 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"id={trackedDropId} insideBottle=false insideBarrel=false "
                         + $"owner=removed position=({trackedPosition.x:F3},{trackedPosition.y:F3}) "
                         + $"velocity=({trackedVelocity.x:F3},{trackedVelocity.y:F3}) "
-                        + $"barrelLocal=({trackedBarrelLocal.x:F3},{trackedBarrelLocal.y:F3}) "
+                        + $"sourceLocal=({trackedSourceLocal.x:F3},{trackedSourceLocal.y:F3}) "
                         + "frameMove=0.000 sourceDrift=0.000 removed=true.");
                 }
 
@@ -1538,23 +1582,21 @@ public static class LiquidSimulationDiagnosticsRunner
                 maximumUnassignedUnits = Mathf.Max(maximumUnassignedUnits, unassignedUnits);
                 var unaccountedUnits = Mathf.Abs(expectedUnits - liveUnits);
                 maximumUnaccountedUnits = Mathf.Max(maximumUnaccountedUnits, unaccountedUnits);
-                if (frame % GameUpdatesPerSecond == 0 || frame == SimulationFrames)
-                {
-                    WriteLine(
-                        $"membership frame={frame} t={frame * UpdateDeltaTime:F1}s "
-                        + $"bottleOwned={bottleOwnedUnits}ml barrelOwned={barrelOwnedUnits}ml "
-                        + $"unassigned={unassignedUnits}ml live={liveUnits}/{expectedUnits}ml "
-                        + $"unaccounted={unaccountedUnits}ml particles={drops.Length}.");
-                }
+                WriteLine(
+                    $"membership frame={frame} t={frame * UpdateDeltaTime:F3}s "
+                    + $"bottleOwned={bottleOwnedUnits}ml barrelOwned={barrelOwnedUnits}ml "
+                    + $"unassigned={unassignedUnits}ml live={liveUnits}/{expectedUnits}ml "
+                    + $"unaccounted={unaccountedUnits}ml particles={drops.Length}.");
             }
 
-            var finalBottleAmount = simulation.GetContainerLiquidAmount(0);
+            var finalBottleAmount = simulation.GetContainerLiquidAmount(bottleContainerIndex);
+            var finalBarrelAmount = simulation.GetContainerLiquidAmount(barrelContainerIndex);
             WriteLine(
-                $"Bottle-into-minibarrel observations: finalBottle="
+                $"{scenarioName} observations: finalBottle="
                 + $"{finalBottleAmount:F1}ml, "
-                + $"finalBarrel={simulation.GetContainerLiquidAmount(1):F1}ml, "
+                + $"finalBarrel={finalBarrelAmount:F1}ml, "
                 + $"liveUnits={simulation.Count}/{expectedUnits}ml, "
-                + $"trackedDropEnteredBottle={trackedDropEnteredBottle}, "
+                + $"trackedDropEnteredDestination={trackedDropEnteredDestination}, "
                 + $"trackedDropOwner={trackedOwner}, trackedDropRemoved={trackedDropRemoved} "
                 + $"atFrame={firstTrackedDropMissingFrame}, "
                 + $"unassignedFrames={framesWithUnassignedLiquid}, "
@@ -1563,13 +1605,39 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"maximumFrameMovement={maximumFrameMovement:F3}px/frame, "
                 + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
                 + $"maximumTrackedSpeed={maximumTrackedSpeed:F3}px/s.");
-            if (finalBottleAmount <= 0f)
+            var finalDestinationAmount = bottleIsSource
+                ? finalBarrelAmount
+                : finalBottleAmount;
+            if (bottleIsSource
+                && (finalBottleAmount > 1f
+                    || finalDestinationAmount < WaterBottleCapacity - 1f
+                    || maximumUnassignedUnits > BottleSourceMaximumUnassignedUnits
+                    || framesWithUnassignedLiquid > BottleSourceMaximumUnassignedFrames
+                    || maximumUnaccountedUnits > 0
+                    || !trackedDropEnteredDestination
+                    || maximumFrameMovement > BottleSourceMaximumFrameMovement
+                    || maximumSourceRelativeDrift > BottleSourceMaximumRelativeDrift
+                    || maximumTrackedSpeed > BottleSourceMaximumTrackedSpeed))
             {
-                throw new InvalidOperationException("No liquid entered the lowered water bottle.");
+                throw new InvalidOperationException(
+                    $"Bottle-source transfer exceeded observed bounds: source={finalBottleAmount:F1}ml, "
+                    + $"destination={finalDestinationAmount:F1}/{WaterBottleCapacity:F0}ml, "
+                    + $"unassigned={maximumUnassignedUnits}ml/{framesWithUnassignedLiquid}frames, "
+                    + $"unaccounted={maximumUnaccountedUnits}ml, "
+                    + $"movement={maximumFrameMovement:F3}/{BottleSourceMaximumFrameMovement:F3}px/frame, "
+                    + $"drift={maximumSourceRelativeDrift:F3}/{BottleSourceMaximumRelativeDrift:F3}px, "
+                    + $"speed={maximumTrackedSpeed:F3}/{BottleSourceMaximumTrackedSpeed:F3}px/s, "
+                    + $"trackedDropEnteredDestination={trackedDropEnteredDestination}.");
+            }
+
+            if (finalDestinationAmount <= 0f)
+            {
+                throw new InvalidOperationException(
+                    $"No liquid entered the lowered {(bottleIsSource ? "minibarrel" : "water bottle")}.");
             }
 
             WriteLine(
-                "PASS: water-bottle-into-minibarrel diagnostic completed; "
+                $"PASS: {scenarioName} diagnostic completed; "
                 + "liquid loss is logged for observation.");
         }
         catch (Exception exception)
