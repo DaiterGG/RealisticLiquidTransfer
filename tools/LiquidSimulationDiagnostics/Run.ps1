@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('water-bottle-full-idle', 'water-bottle-single-drop')]
+    [ValidateSet('water-bottle-full-idle', 'water-bottle-single-drop', 'funnel-wall-single-drop')]
     [string]$Scenario,
     [string]$UnityEditorPath = $env:UNITY_EDITOR
 )
@@ -42,6 +42,7 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $sourceFiles = @(
     'LiquidSimulation.cs',
     'LiquidContainerLayout.cs',
+    'FunnelGeometry.cs',
     'ContainerShapeCollision.cs',
     'LiquidDensityCatalog.cs',
     'SimulationProfiler.cs',

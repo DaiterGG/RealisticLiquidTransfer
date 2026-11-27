@@ -78,6 +78,11 @@ internal static class DebugLaunchTutorialPatch
         }
 
         var equippedCount = 0;
+        if (GiveFunnel(body))
+        {
+            equippedCount++;
+        }
+
         if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }))
         {
             equippedCount++;
@@ -105,8 +110,8 @@ internal static class DebugLaunchTutorialPatch
         }
 
         Plugin.LogInfo(
-            $"Debug startup: equipped {equippedCount} of {2 + TestLiquidMixtures.Length * 2} "
-            + "requested jug, barrel, and bottle test containers.");
+            $"Debug startup: equipped {equippedCount} of {3 + TestLiquidMixtures.Length * 2} "
+            + "requested funnel, jug, barrel, and bottle test items.");
     }
 
     private static readonly LiquidMix[][] TestLiquidMixtures =
@@ -195,6 +200,37 @@ internal static class DebugLaunchTutorialPatch
 
         Plugin.LogInfo(
             $"Debug startup: equipped '{itemId}' in slot {slotIndex} with {container.CurrentTotal:0} mL.");
+        return true;
+    }
+
+    private static bool GiveFunnel(Body body)
+    {
+        var instance = FunnelItem.Create(body.transform.position, 0f);
+        var item = instance.GetComponent<Item>();
+        if (!item)
+        {
+            Object.Destroy(instance);
+            Plugin.LogError("Debug startup: the funnel is missing its item component.");
+            return false;
+        }
+
+        var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
+        if (slotIndex < 0)
+        {
+            Object.Destroy(instance);
+            Plugin.LogWarning("Debug startup: no compatible inventory slot remains for the funnel.");
+            return false;
+        }
+
+        body.PickUpItem(item, slotIndex, force: true);
+        if (body.GetItem(slotIndex) != item)
+        {
+            Object.Destroy(instance);
+            Plugin.LogError("Debug startup: could not equip the funnel.");
+            return false;
+        }
+
+        Plugin.LogInfo($"Debug startup: equipped '{FunnelItem.Id}' in slot {slotIndex}.");
         return true;
     }
 

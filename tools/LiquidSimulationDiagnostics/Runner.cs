@@ -15,8 +15,13 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float WaterBottleCapacity = 500f;
     private const float ReferenceCapacity = 250f;
     private const float MaximumSettledSpeed = 8f;
+    private const float FunnelMaximumFrameMovement = 26f;
+    private const float FunnelMaximumSourceRelativeDrift = 120f;
+    private const float FunnelMaximumTrackedSpeed = 760f;
+    private const float FunnelMinimumWallClearance = -0.02f;
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
+    private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
     private static StreamWriter log;
 
     public static void Run()
@@ -28,8 +33,11 @@ public static class LiquidSimulationDiagnosticsRunner
             var scenario = GetArgument("-scenario");
             var logPath = GetArgument("-diagnosticLog");
             var repositoryRoot = GetArgument("-repositoryRoot");
-            var singleDropScenario = scenario == SingleDropScenario;
-            if ((scenario != "water-bottle-full-idle" && !singleDropScenario)
+            var funnelWallScenario = scenario == FunnelWallSingleDropScenario;
+            var singleDropScenario = scenario == SingleDropScenario || funnelWallScenario;
+            if ((scenario != "water-bottle-full-idle"
+                    && scenario != SingleDropScenario
+                    && !funnelWallScenario)
                 || string.IsNullOrWhiteSpace(logPath)
                 || string.IsNullOrWhiteSpace(repositoryRoot))
             {
@@ -113,13 +121,61 @@ public static class LiquidSimulationDiagnosticsRunner
                 : throw new InvalidOperationException("Could not calculate the water-bottle scale.");
             receiver.localScale = Vector3.one * receiverScale;
             source.localScale = Vector3.one * bottleScale;
-            LiquidContainerLayout.PositionContainersSideBySide(
-                receiver,
-                referenceBoundary.OpeningPosition,
-                source,
-                bottleBoundary.OpeningPosition);
+            if (funnelWallScenario)
+            {
+                source.localRotation = Quaternion.Euler(0f, 0f, 180f);
+                var receiverOpening = (Vector2)root.InverseTransformPoint(
+                    receiver.TransformPoint(referenceBoundary.OpeningPosition));
+                var sourceOpening = (Vector2)root.InverseTransformPoint(
+                    source.TransformPoint(bottleBoundary.OpeningPosition));
+                source.anchoredPosition += receiverOpening
+                    + Vector2.right * (LiquidSimulation.DefaultDropRadius * 2f)
+                    + Vector2.up * 60f
+                    - sourceOpening;
+            }
+            else
+            {
+                LiquidContainerLayout.PositionContainersSideBySide(
+                    receiver,
+                    referenceBoundary.OpeningPosition,
+                    source,
+                    bottleBoundary.OpeningPosition);
+            }
+
             var fitScale = LiquidContainerLayout.GetFitScale(screen, root, receiver, source);
             root.localScale = Vector3.one * fitScale;
+            Vector2[] funnelWallPoints = null;
+            if (funnelWallScenario)
+            {
+                var leftFunnelSide = CreateContainer(
+                    root,
+                    "DiagnosticFunnelLeftSide",
+                    new Vector2(59f, 88f));
+                var rightFunnelSide = CreateContainer(
+                    root,
+                    "DiagnosticFunnelRightSide",
+                    new Vector2(59f, 88f));
+                var openingCenterWorld = receiver.TransformPoint(referenceBoundary.OpeningPosition);
+                var openingLeftWorld = receiver.TransformPoint(
+                    referenceBoundary.OpeningPosition - Vector2.right * referenceBoundary.OpeningWidth * 0.5f);
+                var openingRightWorld = receiver.TransformPoint(
+                    referenceBoundary.OpeningPosition + Vector2.right * referenceBoundary.OpeningWidth * 0.5f);
+                FunnelGeometry.PositionSides(
+                    leftFunnelSide,
+                    rightFunnelSide,
+                    new Vector2(59f, 88f),
+                    root.InverseTransformPoint(openingCenterWorld),
+                    Vector2.Distance(
+                        root.InverseTransformPoint(openingLeftWorld),
+                        root.InverseTransformPoint(openingRightWorld)));
+                funnelWallPoints = new Vector2[FunnelGeometry.WallPointCount];
+                FunnelGeometry.WriteWallPoints(
+                    root,
+                    leftFunnelSide,
+                    rightFunnelSide,
+                    new Vector2(59f, 88f),
+                    funnelWallPoints);
+            }
 
             var water = new[]
             {
@@ -144,7 +200,8 @@ public static class LiquidSimulationDiagnosticsRunner
                 Array.Empty<LiquidProfileEntry>(),
                 water,
                 LiquidSimulation.DefaultPackingTenths / 100f,
-                headless: true);
+                headless: true,
+                funnelWallPoints: funnelWallPoints);
             simulation.ConfigureForMinigame(false);
 
             var initialDrops = simulation.CaptureDropSnapshots();
@@ -166,6 +223,12 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"{bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0} "
                 + $"at ({source.anchoredPosition.x:F1},{source.anchoredPosition.y:F1}) "
                 + $"scale={bottleScale:F3}.");
+            if (funnelWallScenario)
+            {
+                WriteLine(
+                    $"Funnel fixture: rim fit={FunnelGeometry.RimFitRatio:P0}, "
+                    + $"wall endpoints={string.Join("; ", Array.ConvertAll(funnelWallPoints, point => $"({point.x:F2},{point.y:F2})"))}.");
+            }
             WriteLine(
                 $"ScreenPixels={screenPixelSize.x:F0}x{screenPixelSize.y:F0}, "
                 + $"gameUiScale={uiScale:F4}, minigameScreen={viewportSize.x:F0}x{viewportSize.y:F0}, "
@@ -194,6 +257,11 @@ public static class LiquidSimulationDiagnosticsRunner
             var maximumSourceRelativeDrift = 0f;
             var maximumTrackedSpeed = 0f;
             var trackedDropRemoved = false;
+            var trackedDropInsideReceiver = false;
+            byte trackedDropOwner = 0;
+            var minimumFunnelWallClearance = float.PositiveInfinity;
+            var funnelWallContactFrames = 0;
+            var trackedDropRadius = LiquidSimulation.DefaultDropRadiusTenths / 10f;
 
             var framesWithEscapedDrops = 0;
             var framesWithOwnershipMismatch = 0;
@@ -231,6 +299,8 @@ public static class LiquidSimulationDiagnosticsRunner
                     if (singleDropScenario && drop.Id == trackedDropId)
                     {
                         trackedDropFound = true;
+                        trackedDropInsideReceiver = simulation.ContainsContainer(0, drop.Position);
+                        trackedDropOwner = drop.ContainerAssignment;
                         var sourceLocalPosition = GetSourceLocalPosition(root, source, drop.Position);
                         var frameMovement = Vector2.Distance(previousTrackedPosition, drop.Position);
                         var sourceRelativeDrift = Vector2.Distance(initialSourceOffset, sourceLocalPosition);
@@ -239,6 +309,18 @@ public static class LiquidSimulationDiagnosticsRunner
                             maximumSourceRelativeDrift,
                             sourceRelativeDrift);
                         maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
+                        var wallClearance = funnelWallScenario
+                            ? GetFunnelWallClearance(drop.Position, trackedDropRadius, funnelWallPoints)
+                            : float.NaN;
+                        if (funnelWallScenario)
+                        {
+                            minimumFunnelWallClearance = Mathf.Min(minimumFunnelWallClearance, wallClearance);
+                            if (wallClearance <= 0.02f)
+                            {
+                                funnelWallContactFrames++;
+                            }
+                        }
+
                         WriteLine(
                             $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s id={drop.Id} "
                             + $"insideReceiver={simulation.ContainsContainer(0, drop.Position)} "
@@ -247,7 +329,9 @@ public static class LiquidSimulationDiagnosticsRunner
                             + $"{drop.Position.y:F3}) velocity=({drop.Velocity.x:F3},"
                             + $"{drop.Velocity.y:F3}) sourceLocal=({sourceLocalPosition.x:F3},"
                             + $"{sourceLocalPosition.y:F3}) frameMove={frameMovement:F3} "
-                            + $"sourceDrift={sourceRelativeDrift:F3} removed=false.");
+                            + $"sourceDrift={sourceRelativeDrift:F3} "
+                            + (funnelWallScenario ? $"wallClearance={wallClearance:F3} " : string.Empty)
+                            + "removed=false.");
                         trackedDropPosition = drop.Position;
                         trackedDropVelocity = drop.Velocity;
                         trackedSourceOffset = sourceLocalPosition;
@@ -264,7 +348,9 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"position=({trackedDropPosition.x:F3},{trackedDropPosition.y:F3}) "
                         + $"velocity=({trackedDropVelocity.x:F3},{trackedDropVelocity.y:F3}) "
                         + $"sourceLocal=({trackedSourceOffset.x:F3},{trackedSourceOffset.y:F3}) "
-                        + "frameMove=0.000 sourceDrift=0.000 removed=true.");
+                        + "frameMove=0.000 sourceDrift=0.000 "
+                        + (funnelWallScenario ? "wallClearance=removed " : string.Empty)
+                        + "removed=true.");
                 }
 
                 if (escapedUnits > 0)
@@ -319,13 +405,39 @@ public static class LiquidSimulationDiagnosticsRunner
                     + $"sourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
                     + $"velocity={maximumTrackedSpeed:F3}px/s, removed={trackedDropRemoved}.");
             }
+            if (funnelWallScenario)
+            {
+                WriteLine(
+                    $"Funnel wall observations: minimumClearance={minimumFunnelWallClearance:F3}px "
+                    + $"for drop radius={trackedDropRadius:F3}px, "
+                    + $"contactFrames={funnelWallContactFrames}.");
+                if (maximumFrameMovement > FunnelMaximumFrameMovement
+                    || maximumSourceRelativeDrift > FunnelMaximumSourceRelativeDrift
+                    || maximumTrackedSpeed > FunnelMaximumTrackedSpeed
+                    || minimumFunnelWallClearance < FunnelMinimumWallClearance
+                    || funnelWallContactFrames == 0
+                    || trackedDropRemoved
+                    || !trackedDropInsideReceiver
+                    || trackedDropOwner != 1)
+                {
+                    throw new InvalidOperationException(
+                        "Funnel single-drop behavior exceeded observed movement bounds, crossed a wall, "
+                        + "or failed to settle in the receiver. "
+                        + $"movement={maximumFrameMovement:F3}/{FunnelMaximumFrameMovement:F3}px/frame, "
+                        + $"drift={maximumSourceRelativeDrift:F3}/{FunnelMaximumSourceRelativeDrift:F3}px, "
+                        + $"speed={maximumTrackedSpeed:F3}/{FunnelMaximumTrackedSpeed:F3}px/s, "
+                        + $"minimumClearance={minimumFunnelWallClearance:F3}px, "
+                        + $"contactFrames={funnelWallContactFrames}, removed={trackedDropRemoved}, "
+                        + $"receiver={trackedDropInsideReceiver}, owner={trackedDropOwner}.");
+                }
+            }
 
-            if (framesWithEscapedDrops > 0
-                || framesWithOwnershipMismatch > 0
+            if ((!funnelWallScenario && framesWithEscapedDrops > 0)
+                || (!funnelWallScenario && framesWithOwnershipMismatch > 0)
                 || framesWithUnitMismatch > 0)
             {
                 throw new InvalidOperationException(
-                    "Liquid escaped the bottle, changed accounting owner, or the simulation lost units.");
+                    "The simulation lost units or violated the container idle-scenario invariants.");
             }
 
             if (!singleDropScenario
@@ -376,6 +488,32 @@ public static class LiquidSimulationDiagnosticsRunner
         }
 
         return Math.Max(0d, area);
+    }
+
+    private static float GetFunnelWallClearance(
+        Vector2 position,
+        float radius,
+        Vector2[] wallPoints)
+    {
+        var minimumDistanceSquared = float.PositiveInfinity;
+        for (var index = 0; index < wallPoints.Length; index += 2)
+        {
+            var start = wallPoints[index];
+            var direction = wallPoints[index + 1] - start;
+            var lengthSquared = direction.sqrMagnitude;
+            if (lengthSquared <= 0.0001f)
+            {
+                continue;
+            }
+
+            var ratio = Mathf.Clamp01(Vector2.Dot(position - start, direction) / lengthSquared);
+            var nearestPoint = start + direction * ratio;
+            minimumDistanceSquared = Mathf.Min(
+                minimumDistanceSquared,
+                (position - nearestPoint).sqrMagnitude);
+        }
+
+        return Mathf.Sqrt(minimumDistanceSquared) - radius;
     }
 
     private static double EstimatePolygonArea(Vector2[] points)

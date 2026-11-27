@@ -46,6 +46,8 @@ internal static class StartLiquidTransferPatch
         var secondAmount = GetContainerAmount(wat2, "second");
         var firstComposition = GetContainerComposition(wat1, "first");
         var secondComposition = GetContainerComposition(wat2, "second");
+        var playerBody = PlayerCamera.main ? PlayerCamera.main.body : null;
+        var hasFunnel = playerBody && playerBody.FindByIdThorough(FunnelItem.Id, out _);
         MinigameBase.main.StartMinigame(
             new LiquidTransferMinigame(
                 wat1,
@@ -57,7 +59,8 @@ internal static class StartLiquidTransferPatch
                 secondSpriteName,
                 secondCapacity,
                 secondAmount,
-                secondComposition),
+                secondComposition,
+                hasFunnel),
             null);
         return false;
     }

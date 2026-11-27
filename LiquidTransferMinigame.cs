@@ -41,6 +41,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly ushort sourceSyncId;
     private readonly byte sourceSyncVersion;
     private Image handImage;
+    private Image leftFunnelSide;
+    private Image rightFunnelSide;
     private Text controlsText;
     private RectTransform screenRoot;
     private RectTransform overlayRoot;
@@ -67,6 +69,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private int rotationVerticalSector;
     private bool rotationTrackingStarted;
     private bool transferCommitted;
+    private readonly bool hasFunnel;
+    private Vector2[] funnelWallPoints;
+    private bool warnedMissingFunnelOpening;
     private float fitScale;
     private float[] initialSimulatedLiquidAmounts;
     private float[] finalSimulatedLiquidAmounts;
@@ -83,10 +88,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         string secondOriginalContainerSpriteName,
         float secondOriginalContainerCapacity,
         float secondOriginalContainerAmount,
-        LiquidProfileEntry[] secondOriginalLiquidComposition)
+        LiquidProfileEntry[] secondOriginalLiquidComposition,
+        bool hasFunnel = false)
     {
         this.receivingGameContainer = receivingGameContainer;
         this.sourceGameContainer = sourceGameContainer;
+        this.hasFunnel = hasFunnel;
         receivingDrainPlan = CreateDrainPlan(receivingGameContainer);
         sourceDrainPlan = CreateDrainPlan(sourceGameContainer);
         this.firstOriginalContainerSpriteName = firstOriginalContainerSpriteName;
@@ -293,6 +300,12 @@ internal sealed class LiquidTransferMinigame : Minigame
                 receivingContainer.Transform,
                 sourceContainer.Transform);
         screenRoot.localScale = Vector3.one * fitScale;
+        if (hasFunnel)
+        {
+            CreateFunnelVisuals();
+            UpdateFunnelGeometry();
+        }
+
         liquidSimulation = new LiquidSimulation(
             screenRoot,
             receivingContainer.Transform,
@@ -307,7 +320,13 @@ internal sealed class LiquidTransferMinigame : Minigame
             secondOriginalContainerAmount,
             firstOriginalLiquidComposition,
             secondOriginalLiquidComposition,
-            LiquidSimulation.DefaultPackingTenths / 100f);
+            LiquidSimulation.DefaultPackingTenths / 100f,
+            funnelWallPoints: funnelWallPoints);
+        if (leftFunnelSide)
+        {
+            leftFunnelSide.transform.SetAsLastSibling();
+            rightFunnelSide.transform.SetAsLastSibling();
+        }
         var amountBufferLength = liquidSimulation.LiquidTypeBufferLength * 2;
         initialSimulatedLiquidAmounts = new float[amountBufferLength];
         finalSimulatedLiquidAmounts = new float[amountBufferLength];
@@ -468,7 +487,75 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         UpdateSyringeIntakeQueues();
+        if (hasFunnel)
+        {
+            UpdateFunnelGeometry();
+        }
+
         liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
+    }
+
+    private void CreateFunnelVisuals()
+    {
+        var sprite = FunnelItem.Sprite;
+        leftFunnelSide = CreateFunnelSide("FunnelLeftSide", sprite);
+        rightFunnelSide = CreateFunnelSide("FunnelRightSide", sprite);
+        funnelWallPoints = new Vector2[FunnelGeometry.WallPointCount];
+    }
+
+    private Image CreateFunnelSide(string name, Sprite sprite)
+    {
+        var image = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image))
+            .GetComponent<Image>();
+        var rect = image.rectTransform;
+        rect.SetParent(screenRoot, false);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.sizeDelta = sprite.rect.size;
+        image.sprite = sprite;
+        image.preserveAspect = false;
+        image.raycastTarget = false;
+        return image;
+    }
+
+    private void UpdateFunnelGeometry()
+    {
+        if (!receivingContainer.HasOpening && !warnedMissingFunnelOpening)
+        {
+            Plugin.LogWarning(
+                "The receiving container has no detected opening; fitting the funnel to its upper rim.");
+            warnedMissingFunnelOpening = true;
+        }
+
+        var localCenter = receivingContainer.HasOpening
+            ? receivingContainer.OpeningCenterPoint
+            : new Vector2(0f, receivingContainer.Transform.rect.height * 0.5f);
+        var localLeft = receivingContainer.HasOpening
+            ? receivingContainer.LeftOpeningPoint
+            : localCenter - new Vector2(receivingContainer.Transform.rect.width * 0.375f, 0f);
+        var localRight = receivingContainer.HasOpening
+            ? receivingContainer.RightOpeningPoint
+            : localCenter + new Vector2(receivingContainer.Transform.rect.width * 0.375f, 0f);
+        var openingCenterWorld = receivingContainer.Transform.TransformPoint(localCenter);
+        var openingLeftWorld = receivingContainer.Transform.TransformPoint(localLeft);
+        var openingRightWorld = receivingContainer.Transform.TransformPoint(localRight);
+        var openingCenter = screenRoot.InverseTransformPoint(openingCenterWorld);
+        var openingWidth = Vector2.Distance(
+            screenRoot.InverseTransformPoint(openingLeftWorld),
+            screenRoot.InverseTransformPoint(openingRightWorld));
+        FunnelGeometry.PositionSides(
+            leftFunnelSide.rectTransform,
+            rightFunnelSide.rectTransform,
+            FunnelItem.Sprite.rect.size,
+            openingCenter,
+            openingWidth);
+        FunnelGeometry.WriteWallPoints(
+            screenRoot,
+            leftFunnelSide.rectTransform,
+            rightFunnelSide.rectTransform,
+            FunnelItem.Sprite.rect.size,
+            funnelWallPoints);
     }
 
     private SyringeVisual CreateSyringeVisual(

@@ -89,6 +89,7 @@ internal sealed class LiquidSimulation
     internal const int DefaultVelocityContactMarginTenths = 5;
     private readonly RectTransform root;
     private readonly ContainerShape[] containers;
+    private readonly Vector2[] funnelWallPoints;
     private readonly bool[] openingTransitions;
     private readonly float[] syringePistonLocalY = { float.NaN, float.NaN };
     private readonly int[] containerDropSizes;
@@ -255,10 +256,19 @@ internal sealed class LiquidSimulation
         LiquidProfileEntry[] firstLiquidComposition,
         LiquidProfileEntry[] secondLiquidComposition,
         float initialPacking = 1.75f,
-        bool headless = false)
+        bool headless = false,
+        Vector2[] funnelWallPoints = null)
     {
         this.root = root;
         this.headless = headless;
+        if (funnelWallPoints != null && funnelWallPoints.Length != FunnelGeometry.WallPointCount)
+        {
+            throw new ArgumentException(
+                $"Funnel wall points must contain exactly {FunnelGeometry.WallPointCount} endpoints.",
+                nameof(funnelWallPoints));
+        }
+
+        this.funnelWallPoints = funnelWallPoints;
         liquidProfiles = new[]
         {
             firstLiquidComposition ?? Array.Empty<LiquidProfileEntry>(),
@@ -330,6 +340,7 @@ internal sealed class LiquidSimulation
         }
         SeedContainer(containers[0], GetInitialDropCount(firstAmount));
         SeedContainer(containers[1], GetInitialDropCount(secondAmount));
+        ResolveFunnelWallPositions();
         initialContainerDropCounts = new[]
         {
             GetContainerDropCount(0),
@@ -1952,6 +1963,8 @@ internal sealed class LiquidSimulation
             ResolveDropCollisions();
         }
 
+        ResolveFunnelWallPositions();
+
         profilingStart = SimulationProfiler.Begin();
         for (var i = 0; i < count; i++)
         {
@@ -1973,11 +1986,126 @@ internal sealed class LiquidSimulation
             }
         }
 
+        ResolveFunnelWallVelocities();
+
         profilingStart = SimulationProfiler.Begin();
         RemoveOffscreenDrops();
         SimulationProfiler.End(SimulationProfileStage.OffscreenCleanup, profilingStart);
         UpdateDensitySwapDiagnostics(deltaTime);
         graphicsDirty = true;
+    }
+
+    private void ResolveFunnelWallPositions()
+    {
+        if (funnelWallPoints == null)
+        {
+            return;
+        }
+
+        for (var drop = 0; drop < count; drop++)
+        {
+            var previous = previousPositions[drop];
+            var position = positions[drop];
+            var radius = GetDropRadius(drop);
+            for (var wall = 0; wall < funnelWallPoints.Length; wall += 2)
+            {
+                var start = funnelWallPoints[wall];
+                var end = funnelWallPoints[wall + 1];
+                var wallDirection = end - start;
+                var movement = position - previous;
+                var denominator = Cross(movement, wallDirection);
+                if (Mathf.Abs(denominator) > 0.0001f)
+                {
+                    var offset = start - previous;
+                    var movementRatio = Cross(offset, wallDirection) / denominator;
+                    var wallRatio = Cross(offset, movement) / denominator;
+                    if (movementRatio >= 0f && movementRatio <= 1f
+                        && wallRatio >= 0f && wallRatio <= 1f)
+                    {
+                        var normal = GetFunnelWallNormal(start, end, previous);
+                        position = previous + movement * movementRatio + normal * (radius + 0.01f);
+                    }
+                }
+
+                var wallLengthSquared = wallDirection.sqrMagnitude;
+                if (wallLengthSquared <= 0.0001f)
+                {
+                    continue;
+                }
+
+                var nearestRatio = Mathf.Clamp01(Vector2.Dot(position - start, wallDirection)
+                    / wallLengthSquared);
+                var nearestPoint = start + wallDirection * nearestRatio;
+                var separation = position - nearestPoint;
+                var distanceSquared = separation.sqrMagnitude;
+                if (distanceSquared < radius * radius)
+                {
+                    var normal = distanceSquared > 0.0001f
+                        ? separation / Mathf.Sqrt(distanceSquared)
+                        : GetFunnelWallNormal(start, end, previous);
+                    position = nearestPoint + normal * (radius + 0.01f);
+                }
+            }
+
+            positions[drop] = position;
+        }
+    }
+
+    private void ResolveFunnelWallVelocities()
+    {
+        if (funnelWallPoints == null)
+        {
+            return;
+        }
+
+        for (var drop = 0; drop < count; drop++)
+        {
+            var position = positions[drop];
+            var velocity = velocities[drop];
+            var radius = GetDropRadius(drop);
+            for (var wall = 0; wall < funnelWallPoints.Length; wall += 2)
+            {
+                var start = funnelWallPoints[wall];
+                var direction = funnelWallPoints[wall + 1] - start;
+                var lengthSquared = direction.sqrMagnitude;
+                if (lengthSquared <= 0.0001f)
+                {
+                    continue;
+                }
+
+                var ratio = Mathf.Clamp01(Vector2.Dot(position - start, direction) / lengthSquared);
+                var nearestPoint = start + direction * ratio;
+                var separation = position - nearestPoint;
+                if (separation.sqrMagnitude > (radius + 0.02f) * (radius + 0.02f))
+                {
+                    continue;
+                }
+
+                var normal = separation.sqrMagnitude > 0.0001f
+                    ? separation.normalized
+                    : GetFunnelWallNormal(start, start + direction, previousPositions[drop]);
+                var inwardSpeed = Vector2.Dot(velocity, normal);
+                if (inwardSpeed < 0f)
+                {
+                    velocity -= normal * inwardSpeed;
+                }
+            }
+
+            velocities[drop] = velocity;
+        }
+    }
+
+    private static Vector2 GetFunnelWallNormal(Vector2 start, Vector2 end, Vector2 referencePoint)
+    {
+        var direction = end - start;
+        var signedSide = Cross(direction, referencePoint - start);
+        var normal = new Vector2(-direction.y, direction.x).normalized;
+        return signedSide < 0f ? -normal : normal;
+    }
+
+    private static float Cross(Vector2 first, Vector2 second)
+    {
+        return first.x * second.y - first.y * second.x;
     }
 
     private void RefreshContainerGeometry()
