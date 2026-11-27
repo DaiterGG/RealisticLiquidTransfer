@@ -19,6 +19,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float MaximumFillAudioSpeed = 1000f;
     private const float DefaultMaximumFillAudioSpeed = 100f;
     private const float FillAudioWindowDuration = 1f;
+    private const float FillAudioFullVolumePitch = 0.65f;
+    private const float FillAudioPitchDropDuration = 12f;
+    private const float FillAudioFadeStartFillPercent = 0.7f;
     private const string FillAudioAddress = "Liquid.DrippingLoop";
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";
@@ -58,12 +61,14 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     private readonly struct FillRateSample
     {
-        internal FillRateSample(float time, float amount)
+        internal FillRateSample(int containerIndex, float time, float amount)
         {
+            ContainerIndex = containerIndex;
             Time = time;
             Amount = amount;
         }
 
+        internal int ContainerIndex { get; }
         internal float Time { get; }
         internal float Amount { get; }
     }
@@ -112,8 +117,10 @@ internal sealed class LiquidTransferMinigame : Minigame
     private AudioClip fillAudioClip;
     private readonly List<FillRateSample> fillRateSamples =
         new List<FillRateSample>();
-    private float fillRateWindowAmount;
-    private float lastReceiverLiquidAmount;
+    private readonly float[] fillRateWindowAmounts = new float[2];
+    private readonly float[] lastContainerLiquidAmounts = new float[2];
+    private readonly float[] currentContainerLiquidAmounts = new float[2];
+    private float fillAudioPlaybackDuration;
     private ContainerMaterial receivingContainerMaterial;
     private ContainerMaterial sourceContainerMaterial;
     private float containerImpactThreshold = DefaultContainerImpactThreshold;
@@ -538,7 +545,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         InitializeSyringeHandlePositions();
         liquidSimulation.ConfigureForMinigame(SimulationFrozen);
-        lastReceiverLiquidAmount = liquidSimulation.GetContainerLiquidAmount(0);
+        liquidSimulation.GetContainerLiquidAmounts(lastContainerLiquidAmounts);
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
             + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "
@@ -696,36 +703,51 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
-        var currentReceiverLiquidAmount = liquidSimulation.GetContainerLiquidAmount(0);
-        UpdateFillAudio(lastReceiverLiquidAmount, currentReceiverLiquidAmount, Time.unscaledTime);
-        lastReceiverLiquidAmount = currentReceiverLiquidAmount;
+        liquidSimulation.GetContainerLiquidAmounts(currentContainerLiquidAmounts);
+        UpdateFillAudio(Time.unscaledTime);
+        System.Array.Copy(
+            currentContainerLiquidAmounts,
+            lastContainerLiquidAmounts,
+            currentContainerLiquidAmounts.Length);
     }
 
-    private void UpdateFillAudio(
-        float previousReceiverAmount,
-        float currentReceiverAmount,
-        float currentTime)
+    private void UpdateFillAudio(float currentTime)
     {
-        var enteredAmount = currentReceiverAmount - previousReceiverAmount;
-        if (enteredAmount > 0.001f)
+        for (var containerIndex = 0;
+            containerIndex < currentContainerLiquidAmounts.Length;
+            containerIndex++)
         {
-            fillRateSamples.Add(new FillRateSample(currentTime, enteredAmount));
-            fillRateWindowAmount += enteredAmount;
+            var enteredAmount = currentContainerLiquidAmounts[containerIndex]
+                - lastContainerLiquidAmounts[containerIndex];
+            if (enteredAmount > 0.001f)
+            {
+                fillRateSamples.Add(
+                    new FillRateSample(containerIndex, currentTime, enteredAmount));
+                fillRateWindowAmounts[containerIndex] += enteredAmount;
+            }
         }
 
         var cutoffTime = currentTime - FillAudioWindowDuration;
         while (fillRateSamples.Count > 0 && fillRateSamples[0].Time < cutoffTime)
         {
-            fillRateWindowAmount -= fillRateSamples[0].Amount;
+            var sample = fillRateSamples[0];
+            fillRateWindowAmounts[sample.ContainerIndex] -= sample.Amount;
             fillRateSamples.RemoveAt(0);
         }
 
-        fillRateWindowAmount = Mathf.Max(0f, fillRateWindowAmount);
+        for (var containerIndex = 0;
+            containerIndex < fillRateWindowAmounts.Length;
+            containerIndex++)
+        {
+            fillRateWindowAmounts[containerIndex] =
+                Mathf.Max(0f, fillRateWindowAmounts[containerIndex]);
+        }
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
         if (fillAudioRateDebugLabel)
         {
             fillAudioRateDebugLabel.text =
-                $"Fill speed (last 1s): {fillRateWindowAmount:F1} mL/s";
+                $"Inflow (last 1s): receiver {fillRateWindowAmounts[0]:F1} | "
+                + $"source {fillRateWindowAmounts[1]:F1} mL/s";
         }
 #endif
         if (!fillAudioSource || !fillAudioClip)
@@ -733,27 +755,76 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
-        var fullVolumeSpeed = Mathf.Max(
-            maximumFillAudioSpeed,
-            minimumFillAudioSpeed + 1f);
-        var volume = Mathf.Clamp01(
-            Mathf.InverseLerp(
-                minimumFillAudioSpeed,
-                fullVolumeSpeed,
-                fillRateWindowAmount)
-            * fillAudioVolumeMultiplier);
+        var volume = Mathf.Max(
+            GetFillAudioVolume(0),
+            GetFillAudioVolume(1));
         fillAudioSource.volume = volume;
         if (volume > 0f)
         {
             if (!fillAudioSource.isPlaying)
             {
+                fillAudioPlaybackDuration = 0f;
+                fillAudioSource.pitch = 1f;
                 fillAudioSource.Play();
             }
+
+            fillAudioPlaybackDuration += Time.unscaledDeltaTime;
+            fillAudioSource.pitch = Mathf.Lerp(
+                1f,
+                FillAudioFullVolumePitch,
+                Mathf.Clamp01(fillAudioPlaybackDuration / FillAudioPitchDropDuration));
         }
         else if (fillAudioSource.isPlaying)
         {
             fillAudioSource.Stop();
+            fillAudioSource.pitch = 1f;
+            fillAudioPlaybackDuration = 0f;
         }
+    }
+
+    private float GetFillAudioVolume(int containerIndex)
+    {
+        if (fillRateWindowAmounts[containerIndex] <= minimumFillAudioSpeed
+            || IsMiniBarrelContainer(containerIndex))
+        {
+            return 0f;
+        }
+
+        var capacity = containerIndex == 0
+            ? firstOriginalContainerCapacity
+            : secondOriginalContainerCapacity;
+        if (capacity <= 0f)
+        {
+            return 0f;
+        }
+
+        var fullness = Mathf.Clamp01(currentContainerLiquidAmounts[containerIndex] / capacity);
+        var fullnessMultiplier = 1f - Mathf.InverseLerp(
+            FillAudioFadeStartFillPercent,
+            1f,
+            fullness);
+        var fullVolumeSpeed = Mathf.Max(
+            maximumFillAudioSpeed,
+            minimumFillAudioSpeed + 1f);
+        var speedMultiplier = Mathf.InverseLerp(
+            minimumFillAudioSpeed,
+            fullVolumeSpeed,
+            fillRateWindowAmounts[containerIndex]);
+        return Mathf.Clamp01(speedMultiplier * fillAudioVolumeMultiplier)
+            * fullnessMultiplier;
+    }
+
+    private bool IsMiniBarrelContainer(int containerIndex)
+    {
+        var container = containerIndex == 0
+            ? receivingGameContainer
+            : sourceGameContainer;
+        return container
+            && container.TryGetComponent<Item>(out var item)
+            && string.Equals(
+                item.id,
+                "minibarrel",
+                System.StringComparison.OrdinalIgnoreCase);
     }
 
     private void CreateFunnelVisuals()

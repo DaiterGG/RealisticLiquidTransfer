@@ -464,6 +464,45 @@ internal sealed class LiquidSimulation
         return amount;
     }
 
+    internal void GetContainerLiquidAmounts(float[] amounts)
+    {
+        if (amounts == null || amounts.Length < containers.Length)
+        {
+            throw new ArgumentException(
+                "The container liquid amount buffer is too small.",
+                nameof(amounts));
+        }
+
+        Array.Clear(amounts, 0, containers.Length);
+        for (var drop = 0; drop < count; drop++)
+        {
+            var position = positions[drop];
+            var inReceiver = containers[0].Contains(position);
+            var inSource = containers[1].Contains(position);
+            var assignedContainerIndex = inReceiver && inSource
+                ? (containerAssignments[drop] == 2 ? 1 : 0)
+                : inReceiver
+                    ? 0
+                    : inSource
+                        ? 1
+                        : -1;
+            if (assignedContainerIndex < 0)
+            {
+                continue;
+            }
+
+            for (var unit = dropUnitHeads[drop]; unit >= 0; unit = unitNext[unit])
+            {
+                for (var component = unitComponentHeads[unit];
+                    component >= 0;
+                    component = componentNext[component])
+                {
+                    amounts[assignedContainerIndex] += componentAmounts[component];
+                }
+            }
+        }
+    }
+
     private void CopyLiquidAmounts(float[] source, float[] destination)
     {
         if (destination == null || destination.Length < source.Length)
