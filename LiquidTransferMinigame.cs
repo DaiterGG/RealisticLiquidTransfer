@@ -21,8 +21,13 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float FillAudioWindowDuration = 1f;
     private const float FillAudioFadeStartFillPercent = 0.7f;
     private const float FillAudioPitchDropStartFillPercent = 0.2f;
-    private const float DefaultFullContainerFillAudioPitch = 0.3f;
-    private const float DefaultFillAudioGlobalPitchMultiplier = 1f;
+    private const float DefaultFillAudioSpeedAtFull = 0.7f;
+    private const float MinimumFillAudioSpeedAtFull = 0.1f;
+    private const float MaximumFillAudioSpeedAtFull = 1f;
+    private const float DefaultFillAudioLowPassCutoff = 22000f;
+    private const float DefaultFillAudioLowPassCutoffAtFull = 1200f;
+    private const float MinimumFillAudioLowPassCutoff = 10f;
+    private const float MaximumFillAudioLowPassCutoff = 22000f;
     private const string FillAudioAddress = "Liquid.DrippingLoop";
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";
@@ -44,10 +49,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         "realliquidtransfer.maximumfillaudiospeed";
     private const string FillAudioVolumeMultiplierPref =
         "realliquidtransfer.fillaudiovolumemultiplier";
-    private const string FullContainerFillAudioPitchPref =
-        "realliquidtransfer.fullcontainerfillaudiopitch";
-    private const string FillAudioGlobalPitchMultiplierPref =
-        "realliquidtransfer.fillaudioglobalpitchmultiplier";
+    private const string FillAudioSpeedAtFullPref =
+        "realliquidtransfer.fillaudiospeedatfull";
+    private const string FillAudioLowPassCutoffAtFullPref =
+        "realliquidtransfer.fillaudiolowpasscutoffatfull";
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
@@ -119,6 +124,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private ContainerVisual sourceContainer;
     private AudioSource impactAudioSource;
     private AudioSource fillAudioSource;
+    private AudioLowPassFilter fillAudioLowPassFilter;
     private AudioClip fillAudioClip;
     private readonly List<FillRateSample> fillRateSamples =
         new List<FillRateSample>();
@@ -143,8 +149,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float minimumFillAudioSpeed = MinimumFillAudioSpeed;
     private float maximumFillAudioSpeed = DefaultMaximumFillAudioSpeed;
     private float fillAudioVolumeMultiplier = 1f;
-    private float fullContainerFillAudioPitch = DefaultFullContainerFillAudioPitch;
-    private float fillAudioGlobalPitchMultiplier = DefaultFillAudioGlobalPitchMultiplier;
+    private float fillAudioSpeedAtFull = DefaultFillAudioSpeedAtFull;
+    private float fillAudioLowPassCutoffAtFull = DefaultFillAudioLowPassCutoffAtFull;
     private bool containerImpactContact;
     private bool funnelImpactContact;
     private RectTransform heldContainer;
@@ -334,12 +340,16 @@ internal sealed class LiquidTransferMinigame : Minigame
         impactAudioSource.spatialBlend = 0f;
         impactAudioSource.volume = 1f;
         impactAudioSource.dopplerLevel = 0f;
-        fillAudioSource = screenRoot.gameObject.AddComponent<AudioSource>();
+        var fillAudioObject = new GameObject("LiquidFillAudioSource");
+        fillAudioObject.transform.SetParent(screenRoot, false);
+        fillAudioSource = fillAudioObject.AddComponent<AudioSource>();
         fillAudioSource.playOnAwake = false;
         fillAudioSource.loop = true;
         fillAudioSource.spatialBlend = 0f;
         fillAudioSource.volume = 0f;
         fillAudioSource.dopplerLevel = 0f;
+        fillAudioLowPassFilter = fillAudioObject.AddComponent<AudioLowPassFilter>();
+        fillAudioLowPassFilter.cutoffFrequency = DefaultFillAudioLowPassCutoff;
         if (LiquidShaderAssets.TryGetAudioClip(FillAudioAddress, out fillAudioClip))
         {
             fillAudioSource.clip = fillAudioClip;
@@ -403,18 +413,18 @@ internal sealed class LiquidTransferMinigame : Minigame
             PlayerPrefs.GetFloat(FillAudioVolumeMultiplierPref, 1f),
             0f,
             2f);
-        fullContainerFillAudioPitch = Mathf.Clamp(
+        fillAudioSpeedAtFull = Mathf.Clamp(
             PlayerPrefs.GetFloat(
-                FullContainerFillAudioPitchPref,
-                DefaultFullContainerFillAudioPitch),
-            0.1f,
-            1f);
-        fillAudioGlobalPitchMultiplier = Mathf.Clamp(
+                FillAudioSpeedAtFullPref,
+                DefaultFillAudioSpeedAtFull),
+            MinimumFillAudioSpeedAtFull,
+            MaximumFillAudioSpeedAtFull);
+        fillAudioLowPassCutoffAtFull = Mathf.Clamp(
             PlayerPrefs.GetFloat(
-                FillAudioGlobalPitchMultiplierPref,
-                DefaultFillAudioGlobalPitchMultiplier),
-            0.1f,
-            1f);
+                FillAudioLowPassCutoffAtFullPref,
+                DefaultFillAudioLowPassCutoffAtFull),
+            MinimumFillAudioLowPassCutoff,
+            MaximumFillAudioLowPassCutoff);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
         controlsText = CreateControlsText(overlayRoot);
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
@@ -788,16 +798,22 @@ internal sealed class LiquidTransferMinigame : Minigame
                 fillAudioSource.Play();
             }
 
-            fillAudioSource.pitch = GetFillAudioPitch();
+            var effectProgress = GetFillAudioEffectProgress();
+            fillAudioSource.pitch = Mathf.Lerp(1f, fillAudioSpeedAtFull, effectProgress);
+            fillAudioLowPassFilter.cutoffFrequency = Mathf.Lerp(
+                DefaultFillAudioLowPassCutoff,
+                fillAudioLowPassCutoffAtFull,
+                effectProgress);
         }
         else if (fillAudioSource.isPlaying)
         {
             fillAudioSource.Stop();
             fillAudioSource.pitch = 1f;
+            fillAudioLowPassFilter.cutoffFrequency = DefaultFillAudioLowPassCutoff;
         }
     }
 
-    private float GetFillAudioPitch()
+    private float GetFillAudioEffectProgress()
     {
         var loudestContainer = -1;
         var loudestVolume = 0f;
@@ -813,7 +829,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         if (loudestContainer < 0)
         {
-            return 1f;
+            return 0f;
         }
 
         var capacity = loudestContainer == 0
@@ -822,12 +838,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         var fullness = capacity > 0f
             ? currentContainerLiquidAmounts[loudestContainer] / capacity
             : 0f;
-        var pitchDrop = Mathf.InverseLerp(
+        return Mathf.InverseLerp(
             FillAudioPitchDropStartFillPercent,
             1f,
             fullness);
-        return Mathf.Lerp(1f, fullContainerFillAudioPitch, pitchDrop)
-            * fillAudioGlobalPitchMultiplier;
     }
 
     private float GetFillAudioVolume(int containerIndex)
@@ -1244,29 +1258,29 @@ internal sealed class LiquidTransferMinigame : Minigame
             });
         CreateContainerImpactDebugSlider(
             panelRect,
-            "FullContainerFillAudioPitch",
+            "FillAudioSpeedAtFull",
             9,
-            0.1f,
-            1f,
-            fullContainerFillAudioPitch,
-            value => $"Fill pitch at 100%: {value:0.00}",
+            MinimumFillAudioSpeedAtFull,
+            MaximumFillAudioSpeedAtFull,
+            fillAudioSpeedAtFull,
+            value => $"Fill speed at 100%: {value:0.00}x",
             value =>
             {
-                fullContainerFillAudioPitch = value;
-                PlayerPrefs.SetFloat(FullContainerFillAudioPitchPref, value);
+                fillAudioSpeedAtFull = value;
+                PlayerPrefs.SetFloat(FillAudioSpeedAtFullPref, value);
             });
         CreateContainerImpactDebugSlider(
             panelRect,
-            "FillAudioGlobalPitchMultiplier",
+            "FillAudioLowPassCutoffAtFull",
             10,
-            0.1f,
-            1f,
-            fillAudioGlobalPitchMultiplier,
-            value => $"Global fill pitch: {value:0.00}x",
+            MinimumFillAudioLowPassCutoff,
+            MaximumFillAudioLowPassCutoff,
+            fillAudioLowPassCutoffAtFull,
+            value => $"Fill low-pass at 100%: {value:F0} Hz",
             value =>
             {
-                fillAudioGlobalPitchMultiplier = value;
-                PlayerPrefs.SetFloat(FillAudioGlobalPitchMultiplierPref, value);
+                fillAudioLowPassCutoffAtFull = value;
+                PlayerPrefs.SetFloat(FillAudioLowPassCutoffAtFullPref, value);
             });
         var fillAudioRateLabel = new GameObject(
                 "FillAudioRateDebugLabel",
