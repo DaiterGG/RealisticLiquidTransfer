@@ -131,6 +131,11 @@ internal static class DebugLaunchTutorialPatch
             spawnedCount++;
         }
 
+        if (GiveContainer(body, "syringe", System.Array.Empty<LiquidMix>()))
+        {
+            spawnedCount++;
+        }
+
         if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }))
         {
             spawnedCount++;
@@ -158,8 +163,8 @@ internal static class DebugLaunchTutorialPatch
         }
 
         Plugin.LogInfo(
-            $"Debug startup: spawned {spawnedCount} of {3 + TestLiquidMixtures.Length * 2} requested "
-            + $"funnel, jug, barrel, and bottle test items ({spawnedCount - overflowItemCount} equipped, "
+            $"Debug startup: spawned {spawnedCount} of {4 + TestLiquidMixtures.Length * 2} requested "
+            + $"funnel, syringe, jug, barrel, and bottle test items ({spawnedCount - overflowItemCount} equipped, "
             + $"{overflowItemCount} placed beside the player).");
     }
 
