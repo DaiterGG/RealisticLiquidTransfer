@@ -131,24 +131,24 @@ internal static class DebugLaunchTutorialPatch
             spawnedCount++;
         }
 
-        if (GiveContainer(body, "syringe", System.Array.Empty<LiquidMix>()))
+        if (GiveContainer(body, "syringe", System.Array.Empty<LiquidMix>(), "syringe"))
         {
             spawnedCount++;
         }
 
-        if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }))
+        if (GiveContainer(body, "waterjug", new[] { new LiquidMix("water", 1f) }, "waterjug"))
         {
             spawnedCount++;
         }
 
-        if (GiveContainer(body, "waterbottle", System.Array.Empty<LiquidMix>()))
+        if (GiveContainer(body, "waterbottle", System.Array.Empty<LiquidMix>(), "waterbottle"))
         {
             spawnedCount++;
         }
 
         foreach (var mixture in TestLiquidMixtures)
         {
-            if (GiveContainer(body, "minibarrel", mixture))
+            if (GiveContainer(body, "minibarrel", mixture, "minibarreltop"))
             {
                 spawnedCount++;
             }
@@ -162,11 +162,51 @@ internal static class DebugLaunchTutorialPatch
             }
         }
 
+        foreach (var preview in AdditionalContainerPreviews)
+        {
+            if (GiveContainerPreview(body, preview))
+            {
+                spawnedCount++;
+            }
+        }
+
         Plugin.LogInfo(
-            $"Debug startup: spawned {spawnedCount} of {4 + TestLiquidMixtures.Length * 2} requested "
-            + $"funnel, syringe, jug, barrel, and bottle test items ({spawnedCount - overflowItemCount} equipped, "
+            $"Debug startup: spawned {spawnedCount} of "
+            + $"{4 + TestLiquidMixtures.Length * 2 + AdditionalContainerPreviews.Length} requested "
+            + $"funnel, syringe, container, and sprite-preview items ({spawnedCount - overflowItemCount} equipped, "
             + $"{overflowItemCount} placed beside the player).");
     }
+
+    private static readonly DebugContainerPreview[] AdditionalContainerPreviews =
+    {
+        new DebugContainerPreview("alcohol", "alcohol"),
+        new DebugContainerPreview("applejuice", "applejuice"),
+        new DebugContainerPreview("bleach", "bleach"),
+        new DebugContainerPreview("bowlofcereal", "bowlofcereal"),
+        new DebugContainerPreview("canteen", "canteen"),
+        new DebugContainerPreview("chocolatemilk", "chocolatemilk"),
+        new DebugContainerPreview("coffee", "coffee"),
+        new DebugContainerPreview("waterbottle", "default"),
+        new DebugContainerPreview("waterbottle", "default0-150"),
+        new DebugContainerPreview("waterbottle", "default151-350"),
+        new DebugContainerPreview("waterbottle", "default2001-5000"),
+        new DebugContainerPreview("waterbottle", "default351-750"),
+        new DebugContainerPreview("waterbottle", "default5001-999999"),
+        new DebugContainerPreview("waterbottle", "default751-2000"),
+        new DebugContainerPreview("disinfectant", "disinfectant"),
+        new DebugContainerPreview("alcohol", "emptyjar"),
+        new DebugContainerPreview("energydrink", "energydrink"),
+        new DebugContainerPreview("icetea", "icetea"),
+        new DebugContainerPreview("ketchup", "ketchup"),
+        new DebugContainerPreview("liquidcentrifuge", "liquidcentrifuge"),
+        new DebugContainerPreview("lrd", "lrd"),
+        new DebugContainerPreview("makeshiftlrd", "makeshiftlrd"),
+        new DebugContainerPreview("milk", "milk"),
+        new DebugContainerPreview("sodacan", "sodacan"),
+        new DebugContainerPreview("soup", "soup"),
+        new DebugContainerPreview("spraybottle", "spraybottle"),
+        new DebugContainerPreview("liquidpouch", "waterpouch")
+    };
 
     private static readonly LiquidMix[][] TestLiquidMixtures =
     {
@@ -196,7 +236,29 @@ internal static class DebugLaunchTutorialPatch
         }
     };
 
-    private static bool GiveContainer(Body body, string itemId, LiquidMix[] mixture)
+    private static bool GiveContainerPreview(Body body, DebugContainerPreview preview)
+    {
+        var prefab = Resources.Load<GameObject>(preview.ItemId);
+        if (!prefab || !prefab.GetComponent<WaterContainerItem>())
+        {
+            Plugin.LogError(
+                $"Debug startup: sprite preview '{preview.SpriteName}' has no liquid-container prefab "
+                + $"'{preview.ItemId}'.");
+            return false;
+        }
+
+        return GiveContainer(
+            body,
+            preview.ItemId,
+            System.Array.Empty<LiquidMix>(),
+            preview.SpriteName);
+    }
+
+    private static bool GiveContainer(
+        Body body,
+        string itemId,
+        LiquidMix[] mixture,
+        string spriteName = null)
     {
         var prefab = Resources.Load<GameObject>(itemId);
         if (!prefab)
@@ -213,6 +275,25 @@ internal static class DebugLaunchTutorialPatch
             Object.Destroy(instance);
             Plugin.LogError($"Debug startup: '{itemId}' is missing its item or liquid-container component.");
             return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(spriteName))
+        {
+            var spriteRenderer = instance.GetComponent<SpriteRenderer>();
+            if (!spriteRenderer)
+            {
+                spriteRenderer = instance.GetComponentInChildren<SpriteRenderer>();
+            }
+
+            if (!spriteRenderer)
+            {
+                Object.Destroy(instance);
+                Plugin.LogError(
+                    $"Debug startup: '{itemId}' has no sprite renderer for preview '{spriteName}'.");
+                return false;
+            }
+
+            spriteRenderer.sprite = ModSprites.GetSprite(spriteName);
         }
 
         var slotIndex = FindEmptySlot(body, item.Stats.onlyHoldInHands);
@@ -296,8 +377,12 @@ internal static class DebugLaunchTutorialPatch
 
     private static void PlaceOverflowItem(Body body, GameObject instance)
     {
+        const int ItemsPerRow = 6;
         instance.transform.position = body.transform.position
-            + Vector3.right * (3f + 2f * overflowItemCount);
+            + new Vector3(
+                3f + 2f * (overflowItemCount % ItemsPerRow),
+                2f * (overflowItemCount / ItemsPerRow),
+                0f);
         overflowItemCount++;
     }
 
@@ -353,6 +438,18 @@ internal static class DebugLaunchTutorialPatch
 
         internal string LiquidName { get; }
         internal float Fraction { get; }
+    }
+
+    private readonly struct DebugContainerPreview
+    {
+        internal DebugContainerPreview(string itemId, string spriteName)
+        {
+            ItemId = itemId;
+            SpriteName = spriteName;
+        }
+
+        internal string ItemId { get; }
+        internal string SpriteName { get; }
     }
 }
 
