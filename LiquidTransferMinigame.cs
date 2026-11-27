@@ -16,6 +16,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float SyringeFreePistonSpeed = 420f;
     private const float SyringeVolumeTransferRate = 24f;
     private const float SyringeIntakeVolumeTransferRate = SyringeVolumeTransferRate * 1.05f;
+    private const float SyringeIntakePistonRate = SyringeIntakeVolumeTransferRate * 0.8f;
     private const float SyringeEjectionSpeed = 1000f;
     private const float SyringeIntakeSourceDistanceMultiplier = 4f;
     private const float SyringeDropRadiusMultiplier = 0.68f;
@@ -993,7 +994,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 var strokeHeight = geometry.FluidTop.y - geometry.FluidBottom.y;
                 maximumUpwardSpeed = Mathf.Min(
                     maximumUpwardSpeed,
-                    strokeHeight * SyringeIntakeVolumeTransferRate / syringe.Capacity);
+                    strokeHeight * SyringeIntakePistonRate / syringe.Capacity);
             }
 
             handleY = Mathf.Min(

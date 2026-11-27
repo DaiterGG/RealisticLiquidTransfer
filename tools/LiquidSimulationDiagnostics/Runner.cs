@@ -22,6 +22,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float FunnelMinimumWallClearance = -0.02f;
     private const float CenterBottleSyringeCapacity = 100f;
     private const float CenterBottleSyringeIntakeRate = 25.2f;
+    private const float CenterBottleSyringePlungerRate = CenterBottleSyringeIntakeRate * 0.8f;
     private const float CenterBottleSyringeScaleMultiplier = 1.1f;
     private const float CenterBottleSyringeDropRadiusMultiplier = 0.68f;
     private const float CenterBottleSyringeSourceDistanceMultiplier = 4f;
@@ -243,8 +244,9 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"barrelClearance={barrelClearance:F2}.");
                     WriteLine(
                         $"Simulation: updates={GameUpdatesPerSecond}Hz, duration={SimulationDurationSeconds}s, "
-                        + $"liftRate={CenterBottleSyringeIntakeRate:F2}ml/s, expected lift time="
-                        + $"{CenterBottleSyringeCapacity / CenterBottleSyringeIntakeRate:F3}s, "
+                        + $"liftRate={CenterBottleSyringePlungerRate:F2}ml/s, "
+                        + $"intakeRate={CenterBottleSyringeIntakeRate:F2}ml/s, expected lift time="
+                        + $"{CenterBottleSyringeCapacity / CenterBottleSyringePlungerRate:F3}s, "
                         + $"seeded source amount={simulation.GetContainerLiquidAmount(1):F1}ml.");
                     if (needleOffsetFromBottleCenterX > 0.001f
                         || needleDepthBelowSurface < 2f * LiquidSimulation.DefaultDropRadius
@@ -261,7 +263,7 @@ public static class LiquidSimulationDiagnosticsRunner
                     var strokeHeight = syringeFluidTop - syringeFluidBottom;
                     var maximumUpwardSpeed = Mathf.Min(
                         420f,
-                        strokeHeight * CenterBottleSyringeIntakeRate / CenterBottleSyringeCapacity);
+                        strokeHeight * CenterBottleSyringePlungerRate / CenterBottleSyringeCapacity);
                     var handleY = syringeFluidBottom;
                     var lastRequestedAmount = 0f;
                     var intakeCredit = 0f;
@@ -562,7 +564,8 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"{CenterBottleSyringeCapacity - amountAtTop:F1}ml, "
                         + $"finalShortfall={CenterBottleSyringeCapacity - finalSyringeAmount:F1}ml, "
                         + $"finalUnaccounted={finalUnaccountedVolume:F1}ml.");
-                    if (finalSyringeAmount < CenterBottleSyringeCapacity - 0.001f
+                    if (amountAtTop < CenterBottleSyringeCapacity - 0.001f
+                        || finalSyringeAmount < CenterBottleSyringeCapacity - 0.001f
                         || Mathf.Abs(finalUnaccountedVolume) > 0.001f
                         || maximumUnaccountedVolume > 0.001f
                         || syringeOwnedDropsOutside.Count > 0)
