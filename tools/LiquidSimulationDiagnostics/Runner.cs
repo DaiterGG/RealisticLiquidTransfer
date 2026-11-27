@@ -1327,13 +1327,6 @@ public static class LiquidSimulationDiagnosticsRunner
                 barrel.TransformPoint(barrelBoundary.OpeningPosition));
             var bottleOpening = (Vector2)root.InverseTransformPoint(
                 bottle.TransformPoint(bottleBoundary.OpeningPosition));
-            var bottleOpeningLeft = bottleBoundary.OpeningPosition
-                + Vector2.left * (bottleBoundary.OpeningWidth * 0.5f);
-            var bottleOpeningRight = bottleBoundary.OpeningPosition
-                + Vector2.right * (bottleBoundary.OpeningWidth * 0.5f);
-            var bottleApertureWidth = Vector2.Distance(
-                root.InverseTransformPoint(bottle.TransformPoint(bottleOpeningLeft)),
-                root.InverseTransformPoint(bottle.TransformPoint(bottleOpeningRight)));
             var startOpening = barrelOpening
                 + Vector2.up * LiquidSimulation.DefaultDropRadius * 2f;
             bottle.anchoredPosition += startOpening - bottleOpening;
@@ -1412,8 +1405,6 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedVelocity = trackedDrop.Velocity;
             var previousTrackedPosition = trackedPosition;
             var trackedBarrelLocal = (Vector2)trackedInitialOffset;
-            var trackedBottleLocal = (Vector2)bottle.InverseTransformPoint(
-                root.TransformPoint(trackedPosition));
             var maximumFrameMovement = 0f;
             var maximumSourceRelativeDrift = 0f;
             var maximumTrackedSpeed = 0f;
@@ -1423,8 +1414,6 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedDropRemoved = false;
             var firstTrackedDropMissingFrame = -1;
             var trackedDropEnteredBottle = false;
-            var firstBottleMouthCrossingFrame = -1;
-            var minimumBottleOpeningClearance = float.PositiveInfinity;
             var trackedOwner = (byte)2;
             var expectedUnits = simulation.Count;
             var loweringFrames = Mathf.CeilToInt(
@@ -1444,23 +1433,19 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"initialBarrelAmount={simulation.GetContainerLiquidAmount(1):F1}ml, "
                 + $"particles={initialDrops.Length}, trackedDrop={trackedDropId}, "
                 + $"trackedDropVolume={trackedDrop.Volume}ml, "
-                + $"trackedDropRadius={trackedDrop.Radius:F3}px, "
-                + $"dropDiameterLocal={trackedDrop.Radius * 2f / bottleScale:F3}, "
-                + $"bottleOpeningWidth={bottleBoundary.OpeningWidth:F3}local/"
-                + $"{bottleApertureWidth:F3}px, "
                 + $"trackedInitialBarrelLocal=({trackedInitialOffset.x:F3},"
                 + $"{trackedInitialOffset.y:F3}), trackedStartDistance={trackedStartDistance:F3}px.");
 
             for (var frame = 0; frame <= SimulationFrames; frame++)
             {
                 var loweringProgress = Mathf.Clamp01((float)frame / loweringFrames);
-                var currentOpening = (Vector2)root.InverseTransformPoint(
-                    bottle.TransformPoint(bottleBoundary.OpeningPosition));
                 if (frame > 0 && frame <= loweringFrames)
                 {
                     var previousPosition = bottle.anchoredPosition;
                     var targetOpeningY = Mathf.Lerp(startOpening.y, endOpeningY, loweringProgress);
-                    bottle.anchoredPosition += Vector2.up * (targetOpeningY - currentOpening.y);
+                    var currentOpeningY = root.InverseTransformPoint(
+                        bottle.TransformPoint(bottleBoundary.OpeningPosition)).y;
+                    bottle.anchoredPosition += Vector2.up * (targetOpeningY - currentOpeningY);
                     simulation.ApplyContainerPoseChange(
                         bottle,
                         previousPosition,
@@ -1470,8 +1455,6 @@ public static class LiquidSimulationDiagnosticsRunner
                         Vector2.one);
                 }
 
-                currentOpening = (Vector2)root.InverseTransformPoint(
-                    bottle.TransformPoint(bottleBoundary.OpeningPosition));
                 if (frame > 0)
                 {
                     simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
@@ -1509,22 +1492,6 @@ public static class LiquidSimulationDiagnosticsRunner
                     var insideBarrel = simulation.ContainsContainer(1, drop.Position);
                     var barrelLocal = (Vector2)barrel.InverseTransformPoint(
                         root.TransformPoint(drop.Position));
-                    var bottleLocal = (Vector2)bottle.InverseTransformPoint(
-                        root.TransformPoint(drop.Position));
-                    var dropRadiusLocal = drop.Radius / bottleScale;
-                    var horizontalOpeningClearance = bottleBoundary.OpeningWidth * 0.5f
-                        - Mathf.Abs(bottleLocal.x - bottleBoundary.OpeningPosition.x)
-                        - dropRadiusLocal;
-                    var nearBottleMouth = Mathf.Abs(
-                        bottleLocal.y - bottleBoundary.OpeningPosition.y) <= dropRadiusLocal;
-                    var crossedBottleMouth =
-                        (trackedBottleLocal.y - bottleBoundary.OpeningPosition.y)
-                            * (bottleLocal.y - bottleBoundary.OpeningPosition.y) <= 0f
-                        && Mathf.Abs(trackedBottleLocal.y - bottleLocal.y) > 0.001f;
-                    if (crossedBottleMouth && firstBottleMouthCrossingFrame < 0)
-                    {
-                        firstBottleMouthCrossingFrame = frame;
-                    }
 
                     var frameMovement = Vector2.Distance(previousTrackedPosition, drop.Position);
                     var sourceRelativeDrift = Vector2.Distance(trackedInitialOffset, barrelLocal);
@@ -1533,34 +1500,20 @@ public static class LiquidSimulationDiagnosticsRunner
                         maximumSourceRelativeDrift,
                         sourceRelativeDrift);
                     maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
-                    if (nearBottleMouth)
-                    {
-                        minimumBottleOpeningClearance = Mathf.Min(
-                            minimumBottleOpeningClearance,
-                            horizontalOpeningClearance);
-                    }
                     trackedDropEnteredBottle |= insideBottle;
                     trackedOwner = drop.ContainerAssignment;
                     WriteLine(
                         $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s "
-                        + $"lowering={loweringProgress:P1} bottleOpeningY={currentOpening.y:F3} "
                         + $"id={drop.Id} volume={drop.Volume} insideBottle={insideBottle} "
                         + $"insideBarrel={insideBarrel} owner={drop.ContainerAssignment} "
                         + $"position=({drop.Position.x:F3},{drop.Position.y:F3}) "
                         + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}) "
-                        + $"radius={drop.Radius:F3}px dropDiameterLocal={dropRadiusLocal * 2f:F3} "
-                        + $"bottleOpeningWidth={bottleBoundary.OpeningWidth:F3}local "
-                        + $"horizontalOpeningClearance={horizontalOpeningClearance:F3}local "
-                        + $"nearBottleMouth={nearBottleMouth} "
-                        + $"bottleMouthCrossed={crossedBottleMouth} "
                         + $"barrelLocal=({barrelLocal.x:F3},{barrelLocal.y:F3}) "
-                        + $"bottleLocal=({bottleLocal.x:F3},{bottleLocal.y:F3}) "
                         + $"frameMove={frameMovement:F3} sourceDrift={sourceRelativeDrift:F3} "
                         + "removed=false.");
                     trackedPosition = drop.Position;
                     trackedVelocity = drop.Velocity;
                     trackedBarrelLocal = barrelLocal;
-                    trackedBottleLocal = bottleLocal;
                     previousTrackedPosition = drop.Position;
                 }
 
@@ -1574,12 +1527,10 @@ public static class LiquidSimulationDiagnosticsRunner
 
                     WriteLine(
                         $"trace frame={frame} t={frame * UpdateDeltaTime:F3}s "
-                        + $"lowering={loweringProgress:P1} bottleOpeningY={currentOpening.y:F3} "
                         + $"id={trackedDropId} insideBottle=false insideBarrel=false "
                         + $"owner=removed position=({trackedPosition.x:F3},{trackedPosition.y:F3}) "
                         + $"velocity=({trackedVelocity.x:F3},{trackedVelocity.y:F3}) "
                         + $"barrelLocal=({trackedBarrelLocal.x:F3},{trackedBarrelLocal.y:F3}) "
-                        + $"bottleLocal=({trackedBottleLocal.x:F3},{trackedBottleLocal.y:F3}) "
                         + "frameMove=0.000 sourceDrift=0.000 removed=true.");
                 }
 
@@ -1597,22 +1548,26 @@ public static class LiquidSimulationDiagnosticsRunner
                 }
             }
 
+            var finalBottleAmount = simulation.GetContainerLiquidAmount(0);
             WriteLine(
                 $"Bottle-into-minibarrel observations: finalBottle="
-                + $"{simulation.GetContainerLiquidAmount(0):F1}ml, "
+                + $"{finalBottleAmount:F1}ml, "
                 + $"finalBarrel={simulation.GetContainerLiquidAmount(1):F1}ml, "
                 + $"liveUnits={simulation.Count}/{expectedUnits}ml, "
                 + $"trackedDropEnteredBottle={trackedDropEnteredBottle}, "
                 + $"trackedDropOwner={trackedOwner}, trackedDropRemoved={trackedDropRemoved} "
                 + $"atFrame={firstTrackedDropMissingFrame}, "
-                + $"firstBottleMouthCrossingFrame={firstBottleMouthCrossingFrame}, "
-                + $"minimumBottleOpeningClearance={minimumBottleOpeningClearance:F3}local, "
                 + $"unassignedFrames={framesWithUnassignedLiquid}, "
                 + $"maximumUnassigned={maximumUnassignedUnits}ml, "
                 + $"maximumUnaccounted={maximumUnaccountedUnits}ml, "
                 + $"maximumFrameMovement={maximumFrameMovement:F3}px/frame, "
                 + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
                 + $"maximumTrackedSpeed={maximumTrackedSpeed:F3}px/s.");
+            if (finalBottleAmount <= 0f)
+            {
+                throw new InvalidOperationException("No liquid entered the lowered water bottle.");
+            }
+
             WriteLine(
                 "PASS: water-bottle-into-minibarrel diagnostic completed; "
                 + "liquid loss is logged for observation.");

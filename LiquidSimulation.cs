@@ -28,7 +28,6 @@ internal readonly struct LiquidDropSnapshot
         Vector2 velocity,
         byte containerAssignment,
         int volume,
-        float radius,
         string composition)
     {
         Id = id;
@@ -36,7 +35,6 @@ internal readonly struct LiquidDropSnapshot
         Velocity = velocity;
         ContainerAssignment = containerAssignment;
         Volume = volume;
-        Radius = radius;
         Composition = composition;
     }
 
@@ -45,7 +43,6 @@ internal readonly struct LiquidDropSnapshot
     internal Vector2 Velocity { get; }
     internal byte ContainerAssignment { get; }
     internal int Volume { get; }
-    internal float Radius { get; }
     internal string Composition { get; }
 }
 
@@ -1125,7 +1122,6 @@ internal sealed class LiquidSimulation
                 velocities[drop],
                 containerAssignments[drop],
                 dropVolumes[drop],
-                GetDropRadius(drop),
                 composition.ToString());
         }
 
@@ -2359,11 +2355,7 @@ internal sealed class LiquidSimulation
                 anyOpeningTransition |= openingTransitions[containerIndex];
             }
 
-            var assignedContainerOpeningTransition =
-                assignment > 0
-                && assignment <= containers.Length
-                && openingTransitions[assignment - 1];
-            if ((assignment == 0 && anyOpeningTransition) || assignedContainerOpeningTransition)
+            if (anyOpeningTransition)
             {
                 assignment = GetContainerAssignment(position, radius);
             }
@@ -2377,6 +2369,15 @@ internal sealed class LiquidSimulation
                 }
 
                 var shouldBeInside = assignment == containerIndex + 1;
+                if (!shouldBeInside
+                    && assignment > 0
+                    && assignment <= containers.Length
+                    && assignment - 1 < containerIndex
+                    && containers[assignment - 1].Contains(position))
+                {
+                    continue;
+                }
+
                 if (shouldBeInside && radius <= dropRadius && container.IsInsidePaddedRectangle(position))
                 {
                     continue;
