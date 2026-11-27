@@ -89,6 +89,7 @@ internal sealed class LiquidSimulation
     internal const int DefaultVelocityContactMarginTenths = 5;
     private readonly RectTransform root;
     private readonly ContainerShape[] containers;
+    private readonly float[] containerDropRadiusMultipliers;
     private readonly Vector2[] funnelWallPoints;
     private readonly bool[] openingTransitions;
     private readonly float[] syringePistonLocalY = { float.NaN, float.NaN };
@@ -258,16 +259,22 @@ internal sealed class LiquidSimulation
         float initialPacking = 1.75f,
         bool headless = false,
         Vector2[] funnelWallPoints = null,
-        float defaultDropRadiusMultiplier = 1f)
+        float firstContainerDropRadiusMultiplier = 1f,
+        float secondContainerDropRadiusMultiplier = 1f)
     {
         this.root = root;
         this.headless = headless;
-        if (float.IsNaN(defaultDropRadiusMultiplier)
-            || float.IsInfinity(defaultDropRadiusMultiplier)
-            || defaultDropRadiusMultiplier <= 0f)
+        ValidateDropRadiusMultiplier(
+            firstContainerDropRadiusMultiplier,
+            nameof(firstContainerDropRadiusMultiplier));
+        ValidateDropRadiusMultiplier(
+            secondContainerDropRadiusMultiplier,
+            nameof(secondContainerDropRadiusMultiplier));
+        containerDropRadiusMultipliers = new[]
         {
-            throw new ArgumentOutOfRangeException(nameof(defaultDropRadiusMultiplier));
-        }
+            firstContainerDropRadiusMultiplier,
+            secondContainerDropRadiusMultiplier
+        };
 
         if (funnelWallPoints != null && funnelWallPoints.Length != FunnelGeometry.WallPointCount)
         {
@@ -329,7 +336,7 @@ internal sealed class LiquidSimulation
             maximumScreenY = Mathf.Max(maximumScreenY, localCorner.y);
         }
 
-        SetDropRadius(DefaultDropRadiusTenths / 10f * defaultDropRadiusMultiplier);
+        SetDropRadius(DefaultDropRadiusTenths / 10f);
         SetInitialPacking(initialPacking);
         containers = new[]
         {
@@ -921,6 +928,14 @@ internal sealed class LiquidSimulation
         DebugLog.Write($"Base drop radius changed to {dropRadius:F2}px.");
     }
 
+    private static void ValidateDropRadiusMultiplier(float multiplier, string parameterName)
+    {
+        if (float.IsNaN(multiplier) || float.IsInfinity(multiplier) || multiplier <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(parameterName);
+        }
+    }
+
     internal void SetInitialPacking(float packing)
     {
         initialPacking = Mathf.Clamp(
@@ -1251,11 +1266,7 @@ internal sealed class LiquidSimulation
         {
             if (!forceDestination)
             {
-                var radius = GetDropRadius(closestDrop);
-                if (isPartialTransfer)
-                {
-                    radius = dropRadius * Mathf.Sqrt(transferVolume);
-                }
+                var radius = GetContainerDropRadius(destinationContainerIndex, transferVolume);
 
                 if (!TryFindTransferPosition(
                         destinationContainerIndex,
@@ -1658,23 +1669,23 @@ internal sealed class LiquidSimulation
         var seeded = 0;
         var remaining = amount;
         var targetVolume = GetContainerDropSize(containerIndex + 1);
+        var targetDropRadius = GetContainerDropRadius(containerIndex, targetVolume);
         var row = 0;
         var topSeededPosition = Vector2.zero;
         for (var y = minimum.y;
             y <= maximum.y && remaining > 0 && count < MaximumDrops;
-            y += dropRadius * Mathf.Sqrt(targetVolume) * initialPacking * 0.8660254f, row++)
+            y += targetDropRadius * initialPacking * 0.8660254f, row++)
         {
-            var aggregateRadius = dropRadius * Mathf.Sqrt(targetVolume);
-            var xOffset = (row & 1) == 0 ? 0f : aggregateRadius;
-            for (var x = minimum.x + aggregateRadius + xOffset;
-                x <= maximum.x - aggregateRadius
+            var xOffset = (row & 1) == 0 ? 0f : targetDropRadius;
+            for (var x = minimum.x + targetDropRadius + xOffset;
+                x <= maximum.x - targetDropRadius
                     && remaining > 0
                     && count < MaximumDrops;
-                x += aggregateRadius * initialPacking)
+                x += targetDropRadius * initialPacking)
             {
                 var candidate = new Vector2(x, y);
                 var volume = Mathf.Min(targetVolume, remaining);
-                var candidateRadius = dropRadius * Mathf.Sqrt(volume);
+                var candidateRadius = GetContainerDropRadius(containerIndex, volume);
                 var classification = container.Classify(candidate);
                 if (!classification.IsInside
                     || classification.DistanceSquared < candidateRadius * candidateRadius)
@@ -1734,7 +1745,9 @@ internal sealed class LiquidSimulation
             ? GetContainerDropSize(assignment)
             : 1;
         volume = Mathf.Min(volume, MaximumDrops - totalLiquidUnits);
-        var aggregateRadius = dropRadius * Mathf.Sqrt(volume);
+        var aggregateRadius = assignment > 0
+            ? GetContainerDropRadius(assignment - 1, volume)
+            : dropRadius * Mathf.Sqrt(volume);
         var hexPosition = FindNearestEmptySpawnPosition(position, aggregateRadius);
         AddDrop(
             hexPosition,
@@ -2472,7 +2485,7 @@ internal sealed class LiquidSimulation
         byte containerAssignment,
         int targetVolume)
     {
-        var aggregateRadius = dropRadius * Mathf.Sqrt(targetVolume);
+        var aggregateRadius = GetContainerDropRadius(containerAssignment - 1, targetVolume);
         var container = containers[containerAssignment - 1];
         var centroid = Vector2.zero;
         for (var i = 0; i < pendingCount; i++)
@@ -2974,7 +2987,18 @@ internal sealed class LiquidSimulation
 
     private float GetDropRadius(int index)
     {
-        return dropRadius * Mathf.Sqrt(Mathf.Max(1, dropVolumes[index]));
+        var assignment = containerAssignments[index];
+        var multiplier = assignment > 0 && assignment <= containerDropRadiusMultipliers.Length
+            ? containerDropRadiusMultipliers[assignment - 1]
+            : 1f;
+        return dropRadius * Mathf.Sqrt(Mathf.Max(1, dropVolumes[index])) * multiplier;
+    }
+
+    private float GetContainerDropRadius(int containerIndex, int volume)
+    {
+        return dropRadius
+            * Mathf.Sqrt(Mathf.Max(1, volume))
+            * containerDropRadiusMultipliers[containerIndex];
     }
 
     private void ReorderParticlesByCell()

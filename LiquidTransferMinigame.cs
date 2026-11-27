@@ -359,7 +359,10 @@ internal sealed class LiquidTransferMinigame : Minigame
             secondOriginalLiquidComposition,
             LiquidSimulation.DefaultPackingTenths / 100f,
             funnelWallPoints: funnelWallPoints,
-            defaultDropRadiusMultiplier: receivingContainer.IsSyringe || sourceContainer.IsSyringe
+            firstContainerDropRadiusMultiplier: receivingContainer.IsSyringe
+                ? SyringeDropRadiusMultiplier
+                : 1f,
+            secondContainerDropRadiusMultiplier: sourceContainer.IsSyringe
                 ? SyringeDropRadiusMultiplier
                 : 1f);
 

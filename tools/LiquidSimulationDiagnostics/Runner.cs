@@ -397,7 +397,7 @@ public static class LiquidSimulationDiagnosticsRunner
                     fullSyringeWater,
                     LiquidSimulation.DefaultPackingTenths / 100f,
                     headless: true,
-                    defaultDropRadiusMultiplier: SyringeDropRadiusMultiplier);
+                    secondContainerDropRadiusMultiplier: SyringeDropRadiusMultiplier);
                 initialSyringeAmount = fullSyringeSimulation.GetContainerLiquidAmount(1);
                 var initialHandleY = Mathf.Lerp(
                     SyringeFluidOutline[3].y,
@@ -426,7 +426,8 @@ public static class LiquidSimulationDiagnosticsRunner
                 LiquidSimulation.DefaultPackingTenths / 100f,
                 headless: true,
                 funnelWallPoints: funnelWallPoints,
-                defaultDropRadiusMultiplier: syringeScenario
+                firstContainerDropRadiusMultiplier: 1f,
+                secondContainerDropRadiusMultiplier: syringeScenario
                     ? SyringeDropRadiusMultiplier
                     : 1f);
             if (syringeScenario)
