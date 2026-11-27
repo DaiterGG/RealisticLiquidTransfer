@@ -391,7 +391,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 secondOriginalContainerCapacity);
         }
 
-        UpdateSyringeHandlePositions();
+        InitializeSyringeHandlePositions();
         liquidSimulation.ConfigureForMinigame(SimulationFrozen);
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
@@ -864,25 +864,20 @@ internal sealed class LiquidTransferMinigame : Minigame
         return new SyringeVisual(container, containerIndex, capacity, handle);
     }
 
-    private void UpdateSyringeHandlePositions()
+    private void InitializeSyringeHandlePositions()
     {
-        UpdateSyringeHandlePosition(receivingSyringe);
-        UpdateSyringeHandlePosition(sourceSyringe);
+        InitializeSyringeHandlePosition(receivingSyringe, firstOriginalContainerAmount);
+        InitializeSyringeHandlePosition(sourceSyringe, secondOriginalContainerAmount);
     }
 
-    private void UpdateSyringeHandlePosition(SyringeVisual syringe)
+    private void InitializeSyringeHandlePosition(SyringeVisual syringe, float amount)
     {
         if (syringe == null)
         {
             return;
         }
 
-        if (syringe == activeSyringe && Minigame.game.handClicking)
-        {
-            return;
-        }
-
-        var amount = liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex);
+        amount = Mathf.Clamp(amount, 0f, syringe.Capacity);
         syringe.LastRequestedAmount = amount;
         var fillRatio = syringe.Capacity > 0f
             ? Mathf.Clamp01(amount / syringe.Capacity)
@@ -896,6 +891,11 @@ internal sealed class LiquidTransferMinigame : Minigame
         liquidSimulation.SetSyringePistonPosition(
             syringe.ContainerIndex,
             syringe.HandleTransform.anchoredPosition.y);
+        DebugLog.Write(
+            $"Syringe initialized index={syringe.ContainerIndex}: "
+            + $"amount={amount:F1}/{syringe.Capacity:F1} mL, "
+            + $"simulated={liquidSimulation.GetContainerLiquidAmount(syringe.ContainerIndex):F1} mL, "
+            + $"handleY={syringe.HandleTransform.anchoredPosition.y:F1}.");
     }
 
     private SyringeVisual GetSyringeHandleUnderPointer(Vector2 pointerPosition)
