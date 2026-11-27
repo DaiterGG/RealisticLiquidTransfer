@@ -63,6 +63,16 @@ internal static class ModSprites
         return GetContainer(originalSpriteName, float.NaN);
     }
 
+    internal static Sprite GetSprite(string spriteName)
+    {
+        if (ContainerSprites.TryGetValue(spriteName, out var sprite))
+        {
+            return sprite;
+        }
+
+        throw new InvalidDataException($"Required embedded sprite '{spriteName}.png' was not found.");
+    }
+
     internal static Sprite GetContainer(string originalSpriteName, float capacity)
     {
         if (!string.IsNullOrWhiteSpace(originalSpriteName)

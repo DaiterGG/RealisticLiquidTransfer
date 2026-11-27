@@ -34,6 +34,7 @@
     <Compile Include="LiquidShaderAssets.cs" />
     <Compile Include="ContainerShapeCollision.cs" />
     <Compile Include="ModSprites.cs" />
+    <Compile Include="FunnelItem.cs" />
     <Compile Include="MultiplayerTransferBridge.cs" />
     <Compile Include="Patches.cs" />
     <Compile Include="DebugLaunchSetup.cs" />
@@ -71,6 +72,10 @@
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.Physics2DModule">
+      <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\UnityEngine.Physics2DModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.AssetBundleModule">
