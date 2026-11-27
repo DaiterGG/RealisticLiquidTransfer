@@ -95,6 +95,44 @@ internal static class ContainerShapeCollision
         return false;
     }
 
+    internal static bool OverlapsPolylineSegments(
+        Vector2[] outline,
+        Vector2 position,
+        float scale,
+        float angle,
+        Vector2[] segments,
+        float collisionRadius)
+    {
+        if (outline == null || outline.Length < 2 || segments == null || segments.Length < 2)
+        {
+            return false;
+        }
+
+        EnsureBuffer(ref firstPoints, outline.Length);
+        TransformPoints(outline, position, scale, angle, firstPoints);
+        var collisionRadiusSquared = collisionRadius * collisionRadius;
+        for (var segmentIndex = 0; segmentIndex + 1 < segments.Length; segmentIndex += 2)
+        {
+            var segmentStart = segments[segmentIndex];
+            var segmentEnd = segments[segmentIndex + 1];
+            for (var pointIndex = 0; pointIndex + 1 < firstPoints.Length; pointIndex++)
+            {
+                var edgeStart = firstPoints[pointIndex];
+                var edgeEnd = firstPoints[pointIndex + 1];
+                if (SegmentsIntersect(segmentStart, segmentEnd, edgeStart, edgeEnd)
+                    || PointSegmentDistanceSquared(edgeStart, segmentStart, segmentEnd) <= collisionRadiusSquared
+                    || PointSegmentDistanceSquared(edgeEnd, segmentStart, segmentEnd) <= collisionRadiusSquared
+                    || PointSegmentDistanceSquared(segmentStart, edgeStart, edgeEnd) <= collisionRadiusSquared
+                    || PointSegmentDistanceSquared(segmentEnd, edgeStart, edgeEnd) <= collisionRadiusSquared)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static void EnsureBuffer(ref Vector2[] buffer, int length)
     {
         if (buffer.Length != length)

@@ -145,6 +145,7 @@ public static class LiquidSimulationDiagnosticsRunner
             var fitScale = LiquidContainerLayout.GetFitScale(screen, root, receiver, source);
             root.localScale = Vector3.one * fitScale;
             Vector2[] funnelWallPoints = null;
+            var funnelScale = 0f;
             if (funnelWallScenario)
             {
                 var leftFunnelSide = CreateContainer(
@@ -156,22 +157,19 @@ public static class LiquidSimulationDiagnosticsRunner
                     "DiagnosticFunnelRightSide",
                     new Vector2(59f, 88f));
                 var openingCenterWorld = receiver.TransformPoint(referenceBoundary.OpeningPosition);
-                var openingLeftWorld = receiver.TransformPoint(
-                    referenceBoundary.OpeningPosition - Vector2.right * referenceBoundary.OpeningWidth * 0.5f);
-                var openingRightWorld = receiver.TransformPoint(
-                    referenceBoundary.OpeningPosition + Vector2.right * referenceBoundary.OpeningWidth * 0.5f);
-                FunnelGeometry.PositionSides(
+                funnelScale = FunnelGeometry.PositionSides(
                     leftFunnelSide,
                     rightFunnelSide,
                     new Vector2(59f, 88f),
                     root.InverseTransformPoint(openingCenterWorld),
-                    Vector2.Distance(
-                        root.InverseTransformPoint(openingLeftWorld),
-                        root.InverseTransformPoint(openingRightWorld)));
-                if (leftFunnelSide.localScale != new Vector3(-1f, 1f, 1f)
-                    || rightFunnelSide.localScale != Vector3.one)
+                    Mathf.Max(
+                        coffeeSpriteSize.x * receiverScale,
+                        bottleSpriteSize.x * bottleScale));
+                if (leftFunnelSide.localScale != new Vector3(-funnelScale, funnelScale, 1f)
+                    || rightFunnelSide.localScale != new Vector3(funnelScale, funnelScale, 1f)
+                    || funnelScale <= 1f)
                 {
-                    throw new InvalidOperationException("Funnel fixture scaled its sprite instead of widening the gap.");
+                    throw new InvalidOperationException("Funnel fixture did not scale proportionally to the container.");
                 }
 
                 funnelWallPoints = new Vector2[FunnelGeometry.WallPointCount];
@@ -181,6 +179,32 @@ public static class LiquidSimulationDiagnosticsRunner
                     rightFunnelSide,
                     new Vector2(59f, 88f),
                     funnelWallPoints);
+                var funnelCollisionRadius = FunnelGeometry.WallCollisionHalfWidth * funnelScale;
+                var funnelAgainstReceiverWall = new Vector2[funnelWallPoints.Length];
+                for (var index = 0; index < funnelWallPoints.Length; index++)
+                {
+                    funnelAgainstReceiverWall[index] = funnelWallPoints[index] + Vector2.right * 100f;
+                }
+
+                if (ContainerShapeCollision.OverlapsPolylineSegments(
+                        referenceBoundary.WallCenterlinePoints,
+                        receiver.anchoredPosition,
+                        receiverScale,
+                        receiver.localEulerAngles.z,
+                        funnelWallPoints,
+                        funnelCollisionRadius)
+                    || !ContainerShapeCollision.OverlapsPolylineSegments(
+                        referenceBoundary.WallCenterlinePoints,
+                        receiver.anchoredPosition,
+                        receiverScale,
+                        receiver.localEulerAngles.z,
+                        funnelAgainstReceiverWall,
+                        funnelCollisionRadius))
+                {
+                    throw new InvalidOperationException(
+                        "Funnel collision fixture did not allow opening insertion while touching the container wall.");
+                }
+
                 var testOutline = new[]
                 {
                     new Vector2(-5f, -5f),
@@ -205,6 +229,44 @@ public static class LiquidSimulationDiagnosticsRunner
                         2f))
                 {
                     throw new InvalidOperationException("Funnel-to-container collision fixture failed.");
+                }
+
+                var openingOutline = new[]
+                {
+                    new Vector2(-10f, 10f),
+                    new Vector2(-10f, -10f),
+                    new Vector2(10f, -10f),
+                    new Vector2(10f, 10f)
+                };
+                var funnelInOpening = new[]
+                {
+                    new Vector2(-1f, 12f),
+                    new Vector2(-1f, 8f),
+                    new Vector2(1f, 12f),
+                    new Vector2(1f, 8f)
+                };
+                var funnelAgainstInnerWall = new[]
+                {
+                    new Vector2(9f, 5f),
+                    new Vector2(9f, 0f)
+                };
+                if (ContainerShapeCollision.OverlapsPolylineSegments(
+                        openingOutline,
+                        Vector2.zero,
+                        1f,
+                        0f,
+                        funnelInOpening,
+                        1f)
+                    || !ContainerShapeCollision.OverlapsPolylineSegments(
+                        openingOutline,
+                        Vector2.zero,
+                        1f,
+                        0f,
+                        funnelAgainstInnerWall,
+                        1f))
+                {
+                    throw new InvalidOperationException(
+                        "Funnel collision fixture did not allow rim insertion while blocking the inner wall.");
                 }
             }
 
@@ -257,8 +319,9 @@ public static class LiquidSimulationDiagnosticsRunner
             if (funnelWallScenario)
             {
                 WriteLine(
-                    $"Funnel fixture: outlet gap={FunnelGeometry.OutletGapRatio:P0} of rim width, "
-                    + $"sprite scale=1, insertion margin={FunnelGeometry.RimInsertionMargin:F2}px, "
+                    $"Funnel fixture: top width={FunnelGeometry.RimFitRatio:P0} of larger container, "
+                    + $"sprite scale={funnelScale:F3}, "
+                    + $"insertion margin={FunnelGeometry.RimInsertionMargin:F2}px, "
                     + $"wall endpoints={string.Join("; ", Array.ConvertAll(funnelWallPoints, point => $"({point.x:F2},{point.y:F2})"))}.");
             }
             WriteLine(

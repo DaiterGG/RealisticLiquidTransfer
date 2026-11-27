@@ -41,6 +41,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly ushort sourceSyncId;
     private readonly byte sourceSyncVersion;
     private Image handImage;
+    private Image funnelDragSurface;
     private Image leftFunnelSide;
     private Image rightFunnelSide;
     private Image[] funnelDebugLines;
@@ -62,6 +63,8 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Vector2 funnelPointerOffset;
     private Vector2 funnelBaseOpeningCenter;
     private float funnelOpeningWidth;
+    private float funnelFitWidth;
+    private float funnelSpriteScale;
     private SyringeVisual receivingSyringe;
     private SyringeVisual sourceSyringe;
     private SyringeVisual activeSyringe;
@@ -415,7 +418,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             activeRotationContainer = null;
             rotatingWithRightMouse = false;
 
-            if (GetFunnelUnderPointer(uiCasts))
+            if (GetFunnelUnderPointer(uiCasts, pointerPosition))
             {
                 StartDraggingFunnel(pointerPosition);
             }
@@ -491,7 +494,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
         else if (draggingFunnel && game.handClicking)
         {
-            funnelPositionOffset = pointerPosition + funnelPointerOffset - funnelBaseOpeningCenter;
+            MoveFunnel(pointerPosition + funnelPointerOffset - funnelBaseOpeningCenter);
         }
         else if (activeSyringe != null && game.handClicking)
         {
@@ -518,6 +521,10 @@ internal sealed class LiquidTransferMinigame : Minigame
     private void CreateFunnelVisuals()
     {
         var sprite = FunnelItem.TransferSprite;
+        funnelFitWidth = Mathf.Max(
+            receivingContainer.Transform.rect.width * receivingContainer.Transform.localScale.x,
+            sourceContainer.Transform.rect.width * sourceContainer.Transform.localScale.x);
+        funnelDragSurface = CreateFunnelDragSurface();
         leftFunnelSide = CreateFunnelSide("FunnelLeftSide", sprite);
         rightFunnelSide = CreateFunnelSide("FunnelRightSide", sprite);
         funnelWallPoints = new Vector2[FunnelGeometry.WallPointCount];
@@ -541,6 +548,25 @@ internal sealed class LiquidTransferMinigame : Minigame
         image.sprite = sprite;
         image.preserveAspect = false;
         image.raycastTarget = true;
+        return image;
+    }
+
+    private Image CreateFunnelDragSurface()
+    {
+        var image = new GameObject(
+                "FunnelDragSurface",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image))
+            .GetComponent<Image>();
+        var rect = image.rectTransform;
+        rect.SetParent(screenRoot, false);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        image.color = new Color(0f, 0f, 0f, 0.01f);
+        image.raycastTarget = true;
+        rect.SetAsFirstSibling();
         return image;
     }
 
@@ -594,12 +620,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             funnelPositionInitialized = true;
         }
 
-        FunnelGeometry.PositionSides(
+        funnelSpriteScale = FunnelGeometry.PositionSides(
             leftFunnelSide.rectTransform,
             rightFunnelSide.rectTransform,
             FunnelItem.TransferSprite.rect.size,
             funnelBaseOpeningCenter + funnelPositionOffset,
-            funnelOpeningWidth);
+            funnelFitWidth);
         FunnelGeometry.WriteWallPoints(
             screenRoot,
             leftFunnelSide.rectTransform,
@@ -607,6 +633,17 @@ internal sealed class LiquidTransferMinigame : Minigame
             FunnelItem.TransferSprite.rect.size,
             funnelWallPoints);
         UpdateFunnelDebugLines();
+        UpdateFunnelDragSurface();
+    }
+
+    private void UpdateFunnelDragSurface()
+    {
+        var left = leftFunnelSide.rectTransform.anchoredPosition;
+        var right = rightFunnelSide.rectTransform.anchoredPosition;
+        funnelDragSurface.rectTransform.anchoredPosition = (left + right) * 0.5f;
+        funnelDragSurface.rectTransform.sizeDelta = new Vector2(
+            Mathf.Abs(right.x - left.x) + FunnelItem.TransferSprite.rect.width * funnelSpriteScale,
+            FunnelItem.TransferSprite.rect.height * funnelSpriteScale);
     }
 
     private void UpdateFunnelDebugLines()
@@ -618,7 +655,9 @@ internal sealed class LiquidTransferMinigame : Minigame
             var direction = end - start;
             var rect = funnelDebugLines[index].rectTransform;
             rect.anchoredPosition = (start + end) * 0.5f;
-            rect.sizeDelta = new Vector2(direction.magnitude, 2f);
+            rect.sizeDelta = new Vector2(
+                direction.magnitude,
+                FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale * 2f);
             rect.localRotation = Quaternion.Euler(
                 0f,
                 0f,
@@ -1190,7 +1229,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         return System.Math.Abs(twiceArea) * 0.5d;
     }
 
-    private bool GetFunnelUnderPointer(List<RaycastResult> uiCasts)
+    private bool GetFunnelUnderPointer(List<RaycastResult> uiCasts, Vector2 pointerPosition)
     {
         if (!hasFunnel)
         {
@@ -1200,13 +1239,16 @@ internal sealed class LiquidTransferMinigame : Minigame
         foreach (var uiCast in uiCasts)
         {
             if (uiCast.gameObject == leftFunnelSide.gameObject
-                || uiCast.gameObject == rightFunnelSide.gameObject)
+                || uiCast.gameObject == rightFunnelSide.gameObject
+                || uiCast.gameObject == funnelDragSurface.gameObject)
             {
                 return true;
             }
         }
 
-        return false;
+        var localPointer = funnelDragSurface.rectTransform.InverseTransformPoint(
+            screenRoot.TransformPoint(pointerPosition));
+        return funnelDragSurface.rectTransform.rect.Contains(localPointer);
     }
 
     private void StartDraggingFunnel(Vector2 pointerPosition)
@@ -1214,6 +1256,37 @@ internal sealed class LiquidTransferMinigame : Minigame
         draggingFunnel = true;
         var funnelAnchor = funnelBaseOpeningCenter + funnelPositionOffset;
         funnelPointerOffset = funnelAnchor - pointerPosition;
+    }
+
+    private void MoveFunnel(Vector2 targetOffset)
+    {
+        var startOffset = funnelPositionOffset;
+        var distance = Vector2.Distance(startOffset, targetOffset);
+        var steps = Mathf.Max(1, Mathf.CeilToInt(distance / CollisionStep));
+        for (var step = 1; step <= steps; step++)
+        {
+            funnelPositionOffset = Vector2.Lerp(startOffset, targetOffset, (float)step / steps);
+            UpdateFunnelGeometry();
+            if (WouldFunnelOverlapContainer(receivingContainer)
+                || WouldFunnelOverlapContainer(sourceContainer))
+            {
+                funnelPositionOffset = Vector2.Lerp(startOffset, targetOffset, (float)(step - 1) / steps);
+                UpdateFunnelGeometry();
+                break;
+            }
+        }
+    }
+
+    private bool WouldFunnelOverlapContainer(ContainerVisual container)
+    {
+        var transform = container.Transform;
+        return ContainerShapeCollision.OverlapsPolylineSegments(
+            container.OutlinePoints,
+            transform.anchoredPosition,
+            transform.localScale.x,
+            transform.localEulerAngles.z,
+            funnelWallPoints,
+            FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale);
     }
 
     private ContainerVisual GetContainerUnderPointer(List<RaycastResult> uiCasts)
@@ -2363,7 +2436,7 @@ internal sealed class LiquidTransferMinigame : Minigame
                 movingTransform.localScale.x,
                 movingTransform.localEulerAngles.z,
                 funnelWallPoints,
-                2f);
+                FunnelGeometry.WallCollisionHalfWidth * funnelSpriteScale);
     }
 
     private void StartPivotTracking(Vector2 pointer)
