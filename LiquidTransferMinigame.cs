@@ -46,6 +46,10 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Image rightFunnelSide;
     private Image[] funnelDebugLines;
     private Text controlsText;
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
+    private Slider funnelGapSlider;
+    private Text funnelGapLabel;
+#endif
     private RectTransform screenRoot;
     private RectTransform overlayRoot;
     private LiquidSimulation liquidSimulation;
@@ -65,6 +69,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float funnelOpeningWidth;
     private float funnelFitWidth;
     private float funnelSpriteScale;
+    private float funnelGapMultiplier = 1f;
     private SyringeVisual receivingSyringe;
     private SyringeVisual sourceSyringe;
     private SyringeVisual activeSyringe;
@@ -527,6 +532,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         funnelDragSurface = CreateFunnelDragSurface();
         leftFunnelSide = CreateFunnelSide("FunnelLeftSide", sprite);
         rightFunnelSide = CreateFunnelSide("FunnelRightSide", sprite);
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
+        CreateFunnelGapDebugSlider();
+#endif
         funnelWallPoints = new Vector2[FunnelGeometry.WallPointCount];
         funnelDebugLines = new Image[FunnelGeometry.WallPointCount / 2];
         for (var index = 0; index < funnelDebugLines.Length; index++)
@@ -589,6 +597,120 @@ internal sealed class LiquidTransferMinigame : Minigame
         return image;
     }
 
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
+    private void CreateFunnelGapDebugSlider()
+    {
+        var panel = new GameObject(
+                "FunnelGapDebugPanel",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image))
+            .GetComponent<Image>();
+        var panelRect = panel.rectTransform;
+        panelRect.SetParent(overlayRoot, false);
+        panelRect.anchorMin = Vector2.one;
+        panelRect.anchorMax = Vector2.one;
+        panelRect.pivot = Vector2.one;
+        panelRect.anchoredPosition = new Vector2(-24f, -24f);
+        panelRect.sizeDelta = new Vector2(320f, 68f);
+        panel.color = new Color(0f, 0f, 0f, 0.75f);
+        panel.raycastTarget = true;
+
+        var labelObject = new GameObject(
+            "FunnelGapDebugLabel",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(Text));
+        funnelGapLabel = labelObject.GetComponent<Text>();
+        var labelRect = funnelGapLabel.rectTransform;
+        labelRect.SetParent(panelRect, false);
+        labelRect.anchorMin = new Vector2(0f, 1f);
+        labelRect.anchorMax = new Vector2(1f, 1f);
+        labelRect.pivot = new Vector2(0.5f, 1f);
+        labelRect.anchoredPosition = new Vector2(0f, -4f);
+        labelRect.sizeDelta = new Vector2(-16f, 28f);
+        funnelGapLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        funnelGapLabel.fontSize = 14;
+        funnelGapLabel.alignment = TextAnchor.MiddleCenter;
+        funnelGapLabel.color = Color.white;
+        funnelGapLabel.raycastTarget = false;
+
+        var sliderObject = new GameObject(
+            "FunnelGapDebugSlider",
+            typeof(RectTransform),
+            typeof(Slider));
+        funnelGapSlider = sliderObject.GetComponent<Slider>();
+        var sliderRect = funnelGapSlider.GetComponent<RectTransform>();
+        sliderRect.SetParent(panelRect, false);
+        sliderRect.anchorMin = new Vector2(0f, 0f);
+        sliderRect.anchorMax = new Vector2(1f, 0f);
+        sliderRect.pivot = new Vector2(0.5f, 0f);
+        sliderRect.anchoredPosition = new Vector2(0f, 8f);
+        sliderRect.sizeDelta = new Vector2(-24f, 18f);
+
+        var fillArea = new GameObject("FillArea", typeof(RectTransform))
+            .GetComponent<RectTransform>();
+        fillArea.SetParent(sliderRect, false);
+        fillArea.anchorMin = Vector2.zero;
+        fillArea.anchorMax = Vector2.one;
+        fillArea.offsetMin = new Vector2(8f, 4f);
+        fillArea.offsetMax = new Vector2(-8f, -4f);
+
+        var fill = new GameObject(
+                "Fill",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image))
+            .GetComponent<Image>();
+        fill.rectTransform.SetParent(fillArea, false);
+        fill.rectTransform.anchorMin = Vector2.zero;
+        fill.rectTransform.anchorMax = Vector2.one;
+        fill.rectTransform.sizeDelta = Vector2.zero;
+        fill.color = new Color(0.25f, 0.72f, 1f);
+        fill.raycastTarget = false;
+
+        var handle = new GameObject(
+                "Handle",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image))
+            .GetComponent<Image>();
+        handle.rectTransform.SetParent(sliderRect, false);
+        handle.rectTransform.anchorMin = new Vector2(0f, 0f);
+        handle.rectTransform.anchorMax = new Vector2(0f, 1f);
+        handle.rectTransform.sizeDelta = new Vector2(16f, 0f);
+        handle.color = Color.white;
+        handle.raycastTarget = true;
+
+        funnelGapSlider.fillRect = fill.rectTransform;
+        funnelGapSlider.handleRect = handle.rectTransform;
+        funnelGapSlider.targetGraphic = handle;
+        funnelGapSlider.direction = Slider.Direction.LeftToRight;
+        funnelGapSlider.minValue = 0.1f;
+        funnelGapSlider.maxValue = 5f;
+        funnelGapSlider.value = funnelGapMultiplier;
+        funnelGapSlider.onValueChanged.AddListener(value =>
+        {
+            funnelGapMultiplier = value;
+            UpdateFunnelGapDebugLabel();
+            if (funnelPositionInitialized)
+            {
+                UpdateFunnelGeometry();
+            }
+        });
+        UpdateFunnelGapDebugLabel();
+    }
+
+    private void UpdateFunnelGapDebugLabel()
+    {
+        if (funnelGapLabel)
+        {
+            funnelGapLabel.text =
+                $"Funnel gap: {funnelGapMultiplier:0.00}x ({funnelGapMultiplier * FunnelGeometry.OutletGapRatio:P0} of opening)";
+        }
+    }
+#endif
+
     private void UpdateFunnelGeometry()
     {
         if (!receivingContainer.HasOpening && !warnedMissingFunnelOpening)
@@ -625,7 +747,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             rightFunnelSide.rectTransform,
             FunnelItem.TransferSprite.rect.size,
             funnelBaseOpeningCenter + funnelPositionOffset,
-            funnelFitWidth);
+            funnelFitWidth,
+            funnelOpeningWidth * FunnelGeometry.OutletGapRatio * funnelGapMultiplier);
         FunnelGeometry.WriteWallPoints(
             screenRoot,
             leftFunnelSide.rectTransform,
@@ -2430,8 +2553,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             otherTransform.localScale.x,
             otherTransform.localEulerAngles.z);
         return overlapsOtherContainer
-            || hasFunnel && ContainerShapeCollision.OverlapsSegments(
-                moving.CollisionOutlinePoints,
+            || hasFunnel && ContainerShapeCollision.OverlapsPolylineSegments(
+                moving.OutlinePoints,
                 movingTransform.anchoredPosition,
                 movingTransform.localScale.x,
                 movingTransform.localEulerAngles.z,

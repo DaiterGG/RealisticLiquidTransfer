@@ -26,6 +26,16 @@ internal static class DebugLaunchMenuPatch
             return;
         }
 
+        if (__instance.contentWarning)
+        {
+            __instance.contentWarning.SetActive(false);
+        }
+
+        if (__instance.tutorialWarning)
+        {
+            __instance.tutorialWarning.SetActive(false);
+        }
+
         SandboxSetupPending = true;
         SaveSystem.loadedRun = false;
         PlayerPrefs.SetInt("tutorial", 1);
@@ -60,27 +70,56 @@ internal static class DebugLaunchTutorialPatch
             return;
         }
 
-        __instance.StartCourse(typeof(SandboxCourse));
-        if (__instance.activeCourse is not SandboxCourse)
+        if (!SelectSandboxCourse(__instance))
         {
-            Plugin.LogError("Debug startup: could not start the sandbox course.");
             return;
-        }
-
-        if (__instance.courseSelectScreen)
-        {
-            __instance.courseSelectScreen.SetActive(false);
         }
 
         var body = PlayerCamera.main ? PlayerCamera.main.body : null;
         if (!body)
         {
-            Plugin.LogError("Debug startup: main player body is unavailable; containers were not spawned.");
             return;
         }
 
         DebugLaunchMenuPatch.ConsumeSandboxSetup();
         SpawnDebugLoadout(body);
+    }
+
+    internal static bool SelectSandboxCourse(TutorialHandler tutorialHandler)
+    {
+        if (!tutorialHandler)
+        {
+            return false;
+        }
+
+        var alreadySelected = tutorialHandler.activeCourse is SandboxCourse;
+        if (!alreadySelected)
+        {
+            if (tutorialHandler.activeCourse)
+            {
+                tutorialHandler.EndCourse();
+            }
+
+            tutorialHandler.StartCourse(typeof(SandboxCourse));
+        }
+
+        if (tutorialHandler.activeCourse is not SandboxCourse)
+        {
+            Plugin.LogError("Debug startup: could not start the sandbox course.");
+            return false;
+        }
+
+        if (tutorialHandler.courseSelectScreen)
+        {
+            tutorialHandler.courseSelectScreen.SetActive(false);
+        }
+
+        if (!alreadySelected)
+        {
+            Plugin.LogInfo("Debug startup: selected sandbox course.");
+        }
+
+        return true;
     }
 
     internal static void SpawnDebugLoadout(Body body)
@@ -325,7 +364,8 @@ internal static class DebugLaunchPlayerUpdatePatch
         }
 
         var body = __instance ? __instance.body : null;
-        if (!body)
+        var tutorialHandler = TutorialHandler.main;
+        if (!body || !DebugLaunchTutorialPatch.SelectSandboxCourse(tutorialHandler))
         {
             return;
         }

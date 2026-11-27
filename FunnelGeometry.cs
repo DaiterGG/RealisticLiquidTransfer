@@ -6,14 +6,14 @@ namespace RealisticLiquidTransfer;
 internal static class FunnelGeometry
 {
     internal const float RimFitRatio = 0.95f;
+    internal const float OutletGapRatio = 0.84f;
     internal const float RimInsertionMargin = LiquidSimulation.DefaultDropRadius;
-    internal const float WallCollisionHalfWidth = 3f;
+    internal const float WallCollisionHalfWidth = 0.75f;
     internal const int WallPointCount = 8;
 
     private const float ReferenceSpriteWidth = 59f;
     private const float ReferenceSpriteHeight = 88f;
     private const float FittedOutletGapPixels = 12f;
-    private const float OutletGapPixels = 20f;
 
     private static readonly Vector2 TopPoint = new Vector2(27f, 43f);
     private static readonly Vector2 BendPoint = new Vector2(-27f, -12.5f);
@@ -24,25 +24,26 @@ internal static class FunnelGeometry
         RectTransform rightSide,
         Vector2 spriteSize,
         Vector2 openingCenter,
-        float targetTopWidth)
+        float targetTopWidth,
+        float outletGap)
     {
         if (!leftSide || !rightSide)
         {
             throw new ArgumentNullException(!leftSide ? nameof(leftSide) : nameof(rightSide));
         }
 
-        if (spriteSize.x <= 0f || spriteSize.y <= 0f || targetTopWidth <= 0f)
+        if (spriteSize.x <= 0f || spriteSize.y <= 0f || targetTopWidth <= 0f || outletGap < 0f)
         {
-            throw new ArgumentOutOfRangeException(nameof(targetTopWidth));
+            throw new ArgumentOutOfRangeException(
+                outletGap < 0f ? nameof(outletGap) : nameof(targetTopWidth));
         }
 
         var topPoint = ToSpriteLocalPoint(TopPoint, spriteSize);
         var outletPoint = ToSpriteLocalPoint(OutletPoint, spriteSize);
         var fittedOutletGap = FittedOutletGapPixels * spriteSize.x / ReferenceSpriteWidth;
-        var outletGap = OutletGapPixels * spriteSize.x / ReferenceSpriteWidth;
         var scale = targetTopWidth * RimFitRatio
             / (2f * (topPoint.x - outletPoint.x) + fittedOutletGap);
-        var sideOffset = (-outletPoint.x + outletGap * 0.5f) * scale;
+        var sideOffset = -outletPoint.x * scale + outletGap * 0.5f;
         var verticalOffset = openingCenter.y - RimInsertionMargin - outletPoint.y * scale;
 
         leftSide.sizeDelta = spriteSize;
