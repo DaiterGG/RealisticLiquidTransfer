@@ -19,9 +19,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float MaximumFillAudioSpeed = 1000f;
     private const float DefaultMaximumFillAudioSpeed = 100f;
     private const float FillAudioWindowDuration = 1f;
-    private const float FillAudioFullVolumePitch = 0.65f;
-    private const float FillAudioPitchDropDuration = 12f;
     private const float FillAudioFadeStartFillPercent = 0.7f;
+    private const float FillAudioPitchDropStartFillPercent = 0.2f;
+    private const float DefaultFullContainerFillAudioPitch = 0.3f;
     private const string FillAudioAddress = "Liquid.DrippingLoop";
     private const string ContainerImpactThresholdPref =
         "realliquidtransfer.containerimpactthreshold";
@@ -43,6 +43,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         "realliquidtransfer.maximumfillaudiospeed";
     private const string FillAudioVolumeMultiplierPref =
         "realliquidtransfer.fillaudiovolumemultiplier";
+    private const string FullContainerFillAudioPitchPref =
+        "realliquidtransfer.fullcontainerfillaudiopitch";
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
@@ -120,7 +122,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly float[] fillRateWindowAmounts = new float[2];
     private readonly float[] lastContainerLiquidAmounts = new float[2];
     private readonly float[] currentContainerLiquidAmounts = new float[2];
-    private float fillAudioPlaybackDuration;
+    private readonly float[] inflowPoseContainerLiquidAmounts = new float[2];
     private ContainerMaterial receivingContainerMaterial;
     private ContainerMaterial sourceContainerMaterial;
     private float containerImpactThreshold = DefaultContainerImpactThreshold;
@@ -138,6 +140,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float minimumFillAudioSpeed = MinimumFillAudioSpeed;
     private float maximumFillAudioSpeed = DefaultMaximumFillAudioSpeed;
     private float fillAudioVolumeMultiplier = 1f;
+    private float fullContainerFillAudioPitch = DefaultFullContainerFillAudioPitch;
     private bool containerImpactContact;
     private bool funnelImpactContact;
     private RectTransform heldContainer;
@@ -396,6 +399,12 @@ internal sealed class LiquidTransferMinigame : Minigame
             PlayerPrefs.GetFloat(FillAudioVolumeMultiplierPref, 1f),
             0f,
             2f);
+        fullContainerFillAudioPitch = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                FullContainerFillAudioPitchPref,
+                DefaultFullContainerFillAudioPitch),
+            0.1f,
+            1f);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
         controlsText = CreateControlsText(overlayRoot);
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
@@ -702,22 +711,25 @@ internal sealed class LiquidTransferMinigame : Minigame
             UpdateFunnelGeometry();
         }
 
+        liquidSimulation.CaptureContainerPoseForInflow();
         liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
-        liquidSimulation.GetContainerLiquidAmounts(currentContainerLiquidAmounts);
-        UpdateFillAudio(Time.unscaledTime);
+        liquidSimulation.GetContainerLiquidAmounts(
+            currentContainerLiquidAmounts,
+            inflowPoseContainerLiquidAmounts);
+        UpdateFillAudio(Time.unscaledTime, inflowPoseContainerLiquidAmounts);
         System.Array.Copy(
             currentContainerLiquidAmounts,
             lastContainerLiquidAmounts,
             currentContainerLiquidAmounts.Length);
     }
 
-    private void UpdateFillAudio(float currentTime)
+    private void UpdateFillAudio(float currentTime, float[] inflowPoseAmounts)
     {
         for (var containerIndex = 0;
             containerIndex < currentContainerLiquidAmounts.Length;
             containerIndex++)
         {
-            var enteredAmount = currentContainerLiquidAmounts[containerIndex]
+            var enteredAmount = inflowPoseAmounts[containerIndex]
                 - lastContainerLiquidAmounts[containerIndex];
             if (enteredAmount > 0.001f)
             {
@@ -763,23 +775,48 @@ internal sealed class LiquidTransferMinigame : Minigame
         {
             if (!fillAudioSource.isPlaying)
             {
-                fillAudioPlaybackDuration = 0f;
-                fillAudioSource.pitch = 1f;
                 fillAudioSource.Play();
             }
 
-            fillAudioPlaybackDuration += Time.unscaledDeltaTime;
-            fillAudioSource.pitch = Mathf.Lerp(
-                1f,
-                FillAudioFullVolumePitch,
-                Mathf.Clamp01(fillAudioPlaybackDuration / FillAudioPitchDropDuration));
+            fillAudioSource.pitch = GetFillAudioPitch();
         }
         else if (fillAudioSource.isPlaying)
         {
             fillAudioSource.Stop();
             fillAudioSource.pitch = 1f;
-            fillAudioPlaybackDuration = 0f;
         }
+    }
+
+    private float GetFillAudioPitch()
+    {
+        var loudestContainer = -1;
+        var loudestVolume = 0f;
+        for (var containerIndex = 0; containerIndex < fillRateWindowAmounts.Length; containerIndex++)
+        {
+            var containerVolume = GetFillAudioVolume(containerIndex);
+            if (containerVolume > loudestVolume)
+            {
+                loudestContainer = containerIndex;
+                loudestVolume = containerVolume;
+            }
+        }
+
+        if (loudestContainer < 0)
+        {
+            return 1f;
+        }
+
+        var capacity = loudestContainer == 0
+            ? firstOriginalContainerCapacity
+            : secondOriginalContainerCapacity;
+        var fullness = capacity > 0f
+            ? currentContainerLiquidAmounts[loudestContainer] / capacity
+            : 0f;
+        var pitchDrop = Mathf.InverseLerp(
+            FillAudioPitchDropStartFillPercent,
+            1f,
+            fullness);
+        return Mathf.Lerp(1f, fullContainerFillAudioPitch, pitchDrop);
     }
 
     private float GetFillAudioVolume(int containerIndex)
@@ -1027,7 +1064,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
         panelRect.anchoredPosition = new Vector2(24f, -24f);
-        panelRect.sizeDelta = new Vector2(360f, 420f);
+        panelRect.sizeDelta = new Vector2(360f, 460f);
         panel.color = new Color(0f, 0f, 0f, 0.75f);
         panel.raycastTarget = true;
 
@@ -1194,6 +1231,19 @@ internal sealed class LiquidTransferMinigame : Minigame
                 fillAudioVolumeMultiplier = value;
                 PlayerPrefs.SetFloat(FillAudioVolumeMultiplierPref, value);
             });
+        CreateContainerImpactDebugSlider(
+            panelRect,
+            "FullContainerFillAudioPitch",
+            9,
+            0.1f,
+            1f,
+            fullContainerFillAudioPitch,
+            value => $"Fill pitch at 100%: {value:0.00}",
+            value =>
+            {
+                fullContainerFillAudioPitch = value;
+                PlayerPrefs.SetFloat(FullContainerFillAudioPitchPref, value);
+            });
         var fillAudioRateLabel = new GameObject(
                 "FillAudioRateDebugLabel",
                 typeof(RectTransform),
@@ -1206,7 +1256,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         fillAudioRateRect.anchorMin = new Vector2(0f, 1f);
         fillAudioRateRect.anchorMax = new Vector2(1f, 1f);
         fillAudioRateRect.pivot = new Vector2(0.5f, 1f);
-        fillAudioRateRect.anchoredPosition = new Vector2(0f, -396f);
+        fillAudioRateRect.anchoredPosition = new Vector2(0f, -436f);
         fillAudioRateRect.sizeDelta = new Vector2(-20f, 18f);
         fillAudioRateLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         fillAudioRateLabel.fontSize = 12;

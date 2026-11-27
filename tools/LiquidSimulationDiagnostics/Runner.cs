@@ -22,6 +22,9 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float FunnelMaximumSourceRelativeDrift = 120f;
     private const float FunnelMaximumTrackedSpeed = 900f;
     private const float FunnelMinimumWallClearance = -0.02f;
+    private const float MovementMaximumFrameMovement = 12f;
+    private const float MovementMaximumSourceRelativeDrift = 120f;
+    private const float MovementMaximumTrackedSpeed = 400f;
     private const float CenterBottleSyringeCapacity = 100f;
     private const float CenterBottleSyringeIntakeRate = 25.2f;
     private const float CenterBottleSyringePlungerRate = CenterBottleSyringeIntakeRate * 0.8f;
@@ -29,6 +32,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float CenterBottleSyringeSourceDistanceMultiplier = 4f;
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
+    private const string ContainerMovementNoInflowScenario = "container-movement-no-inflow";
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
     private const string SyringeCenterBottleScenario = "syringe-center-bottle-intake";
     private const string WaterBottleIntoMiniBarrelScenario = "water-bottle-into-minibarrel";
@@ -58,10 +62,14 @@ public static class LiquidSimulationDiagnosticsRunner
 
             var logPath = GetArgument("-diagnosticLog");
             var repositoryRoot = GetArgument("-repositoryRoot");
+            var containerMovementScenario = scenario == ContainerMovementNoInflowScenario;
             var funnelWallScenario = scenario == FunnelWallSingleDropScenario;
-            var singleDropScenario = scenario == SingleDropScenario || funnelWallScenario;
+            var singleDropScenario = scenario == SingleDropScenario
+                || funnelWallScenario
+                || containerMovementScenario;
             if ((scenario != "water-bottle-full-idle"
                     && scenario != SingleDropScenario
+                    && !containerMovementScenario
                     && !funnelWallScenario)
                 || string.IsNullOrWhiteSpace(logPath)
                 || string.IsNullOrWhiteSpace(repositoryRoot))
@@ -1013,6 +1021,19 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedDropRemoved = false;
             var trackedDropInsideReceiver = false;
             byte trackedDropOwner = 0;
+            var previousContainerLiquidAmounts = new float[2];
+            var currentContainerLiquidAmounts = new float[2];
+            var inflowPoseContainerLiquidAmounts = new float[2];
+            var movementInitialSourcePosition = source.anchoredPosition;
+            var maximumFrameInflow = 0f;
+            var totalPositiveInflow = 0f;
+            var framesWithPositiveInflow = 0;
+            if (containerMovementScenario)
+            {
+                simulation.GetContainerLiquidAmounts(previousContainerLiquidAmounts);
+                simulation.CaptureContainerPoseForInflow();
+            }
+
             var minimumFunnelWallClearance = float.PositiveInfinity;
             var funnelWallContactFrames = 0;
             var trackedDropRadius = LiquidSimulation.DefaultDropRadiusTenths / 10f;
@@ -1025,9 +1046,64 @@ public static class LiquidSimulationDiagnosticsRunner
             var finalMaximumSpeed = 0f;
             for (var frame = 0; frame <= SimulationFrames; frame++)
             {
+                var frameInflow = 0f;
                 if (frame > 0)
                 {
+                    if (containerMovementScenario)
+                    {
+                        var previousPosition = source.anchoredPosition;
+                        var previousAngle = source.localEulerAngles.z;
+                        var elapsed = frame * UpdateDeltaTime;
+                        var currentPosition = movementInitialSourcePosition
+                            + new Vector2(
+                                Mathf.Sin(elapsed * Mathf.PI * 0.3f) * 18f,
+                                Mathf.Sin(elapsed * Mathf.PI * 0.2f) * 10f);
+                        var currentAngle = Mathf.Sin(elapsed * Mathf.PI * 0.15f) * 7f;
+                        simulation.ApplyContainerPoseChange(
+                            source,
+                            previousPosition,
+                            previousAngle,
+                            currentPosition,
+                            currentAngle,
+                            Vector2.one);
+                        source.anchoredPosition = currentPosition;
+                        source.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
+                    }
+
+                    if (containerMovementScenario)
+                    {
+                        simulation.CaptureContainerPoseForInflow();
+                    }
+
                     simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
+                }
+
+                if (containerMovementScenario)
+                {
+                    simulation.GetContainerLiquidAmounts(
+                        currentContainerLiquidAmounts,
+                        inflowPoseContainerLiquidAmounts);
+                    for (var containerIndex = 0;
+                        containerIndex < currentContainerLiquidAmounts.Length;
+                        containerIndex++)
+                    {
+                        frameInflow += Mathf.Max(
+                            0f,
+                            inflowPoseContainerLiquidAmounts[containerIndex]
+                                - previousContainerLiquidAmounts[containerIndex]);
+                    }
+
+                    maximumFrameInflow = Mathf.Max(maximumFrameInflow, frameInflow);
+                    totalPositiveInflow += frameInflow;
+                    if (frameInflow > 0.001f)
+                    {
+                        framesWithPositiveInflow++;
+                    }
+
+                    Array.Copy(
+                        currentContainerLiquidAmounts,
+                        previousContainerLiquidAmounts,
+                        currentContainerLiquidAmounts.Length);
                 }
 
                 var drops = simulation.CaptureDropSnapshots();
@@ -1084,6 +1160,7 @@ public static class LiquidSimulationDiagnosticsRunner
                             + $"{drop.Velocity.y:F3}) sourceLocal=({sourceLocalPosition.x:F3},"
                             + $"{sourceLocalPosition.y:F3}) frameMove={frameMovement:F3} "
                             + $"sourceDrift={sourceRelativeDrift:F3} "
+                            + (containerMovementScenario ? $"positiveInflow={frameInflow:F3}ml " : string.Empty)
                             + (funnelWallScenario ? $"wallClearance={wallClearance:F3} " : string.Empty)
                             + "removed=false.");
                         trackedDropPosition = drop.Position;
@@ -1182,6 +1259,28 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"minimumClearance={minimumFunnelWallClearance:F3}px, "
                         + $"contactFrames={funnelWallContactFrames}, removed={trackedDropRemoved}, "
                         + $"receiver={trackedDropInsideReceiver}, owner={trackedDropOwner}.");
+                }
+            }
+            if (containerMovementScenario)
+            {
+                WriteLine(
+                    $"Container movement inflow observations: maximumFrameMovement="
+                    + $"{maximumFrameMovement:F3}px/frame, sourceRelativeDrift="
+                    + $"{maximumSourceRelativeDrift:F3}px, maximumVelocity="
+                    + $"{maximumTrackedSpeed:F3}px/s, maximumPositiveInflow="
+                    + $"{maximumFrameInflow:F3}ml/frame, totalPositiveInflow="
+                    + $"{totalPositiveInflow:F3}ml, positiveInflowFrames={framesWithPositiveInflow}.");
+                if (maximumFrameInflow > 0.001f
+                    || maximumFrameMovement > MovementMaximumFrameMovement
+                    || maximumSourceRelativeDrift > MovementMaximumSourceRelativeDrift
+                    || maximumTrackedSpeed > MovementMaximumTrackedSpeed)
+                {
+                    throw new InvalidOperationException(
+                        "The container movement diagnostic exceeded its observed motion or inflow bounds: "
+                        + $"frameMovement={maximumFrameMovement:F3}/{MovementMaximumFrameMovement:F3}px/frame, "
+                        + $"sourceDrift={maximumSourceRelativeDrift:F3}/{MovementMaximumSourceRelativeDrift:F3}px, "
+                        + $"velocity={maximumTrackedSpeed:F3}/{MovementMaximumTrackedSpeed:F3}px/s, "
+                        + $"inflow={maximumFrameInflow:F3}ml/frame across {framesWithPositiveInflow} frames.");
                 }
             }
 

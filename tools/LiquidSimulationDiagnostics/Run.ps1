@@ -4,6 +4,7 @@ param(
     [ValidateSet(
         'water-bottle-full-idle',
         'water-bottle-single-drop',
+        'container-movement-no-inflow',
         'funnel-wall-single-drop',
         'syringe-full-capacity',
         'syringe-center-bottle-intake',

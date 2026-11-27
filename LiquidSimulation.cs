@@ -466,6 +466,19 @@ internal sealed class LiquidSimulation
 
     internal void GetContainerLiquidAmounts(float[] amounts)
     {
+        GetContainerLiquidAmounts(amounts, null);
+    }
+
+    internal void CaptureContainerPoseForInflow()
+    {
+        foreach (var container in containers)
+        {
+            container.CaptureInflowPose();
+        }
+    }
+
+    internal void GetContainerLiquidAmounts(float[] amounts, float[] amountsAtInflowPose)
+    {
         if (amounts == null || amounts.Length < containers.Length)
         {
             throw new ArgumentException(
@@ -473,34 +486,69 @@ internal sealed class LiquidSimulation
                 nameof(amounts));
         }
 
+        if (amountsAtInflowPose != null && amountsAtInflowPose.Length < containers.Length)
+        {
+            throw new ArgumentException(
+                "The inflow liquid amount buffer is too small.",
+                nameof(amountsAtInflowPose));
+        }
+
         Array.Clear(amounts, 0, containers.Length);
+        if (amountsAtInflowPose != null)
+        {
+            Array.Clear(amountsAtInflowPose, 0, containers.Length);
+        }
+
         for (var drop = 0; drop < count; drop++)
         {
             var position = positions[drop];
-            var inReceiver = containers[0].Contains(position);
-            var inSource = containers[1].Contains(position);
-            var assignedContainerIndex = inReceiver && inSource
-                ? (containerAssignments[drop] == 2 ? 1 : 0)
-                : inReceiver
-                    ? 0
-                    : inSource
-                        ? 1
-                        : -1;
-            if (assignedContainerIndex < 0)
+            var assignedContainerIndex = GetContainingContainerIndex(position, drop, false);
+            var inflowContainerIndex = amountsAtInflowPose != null
+                ? GetContainingContainerIndex(position, drop, true)
+                : -1;
+            if (assignedContainerIndex < 0 && inflowContainerIndex < 0)
             {
                 continue;
             }
 
+            var dropAmount = 0f;
             for (var unit = dropUnitHeads[drop]; unit >= 0; unit = unitNext[unit])
             {
                 for (var component = unitComponentHeads[unit];
                     component >= 0;
                     component = componentNext[component])
                 {
-                    amounts[assignedContainerIndex] += componentAmounts[component];
+                    dropAmount += componentAmounts[component];
                 }
             }
+
+            if (assignedContainerIndex >= 0)
+            {
+                amounts[assignedContainerIndex] += dropAmount;
+            }
+
+            if (inflowContainerIndex >= 0)
+            {
+                amountsAtInflowPose[inflowContainerIndex] += dropAmount;
+            }
         }
+    }
+
+    private int GetContainingContainerIndex(Vector2 position, int drop, bool atInflowPose)
+    {
+        var inReceiver = atInflowPose
+            ? containers[0].ContainsAtInflowPose(position)
+            : containers[0].Contains(position);
+        var inSource = atInflowPose
+            ? containers[1].ContainsAtInflowPose(position)
+            : containers[1].Contains(position);
+        return inReceiver && inSource
+            ? (containerAssignments[drop] == 2 ? 1 : 0)
+            : inReceiver
+                ? 0
+                : inSource
+                    ? 1
+                    : -1;
     }
 
     private void CopyLiquidAmounts(float[] source, float[] destination)
@@ -4421,6 +4469,7 @@ internal sealed class LiquidSimulation
      private readonly int outerBoundaryCount;
      private float maximumDropRadius = DefaultDropRadius * 6.3245554f;
      private Matrix4x4 rootToContainerMatrix;
+     private Matrix4x4 inflowRootToContainerMatrix;
      private Rect paddedInteriorRectangle;
      private float paddedInteriorRectanglePadding = -1f;
      private Vector2 openingStart;
@@ -5326,6 +5375,23 @@ internal sealed class LiquidSimulation
          }
 
          return ContainsLocal(ToLocalPoint(rootPoint));
+     }
+
+     internal void CaptureInflowPose()
+     {
+         inflowRootToContainerMatrix = transform.worldToLocalMatrix * root.localToWorldMatrix;
+     }
+
+     internal bool ContainsAtInflowPose(Vector2 rootPoint)
+     {
+         if (Outline.Length < 3)
+         {
+             return false;
+         }
+
+         var localPoint = inflowRootToContainerMatrix.MultiplyPoint3x4(
+             new Vector3(rootPoint.x, rootPoint.y, 0f));
+         return ContainsLocal(new Vector2(localPoint.x, localPoint.y));
      }
 
      private Vector2 ToLocalPoint(Vector2 rootPoint)
