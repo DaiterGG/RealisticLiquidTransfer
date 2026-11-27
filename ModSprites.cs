@@ -11,10 +11,12 @@ internal static class ModSprites
     private const string DefaultContainerName = "default";
     private const string ReferenceSpriteName = "coffee";
     private const byte MinimumVisibleAlpha = 32;
+    private const float FunnelWorldPixelsPerUnit = 10f;
     private static readonly Dictionary<string, Sprite> ContainerSprites =
         new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
 
     private static Sprite defaultContainer;
+    private static Sprite funnelWorldSprite;
 
     internal static void Load()
     {
@@ -71,6 +73,22 @@ internal static class ModSprites
         }
 
         throw new InvalidDataException($"Required embedded sprite '{spriteName}.png' was not found.");
+    }
+
+    internal static Sprite GetFunnelWorldSprite()
+    {
+        if (!funnelWorldSprite)
+        {
+            var inventorySprite = GetSprite("funnel-inventory");
+            funnelWorldSprite = UnityEngine.Sprite.Create(
+                inventorySprite.texture,
+                inventorySprite.rect,
+                new Vector2(0.5f, 0.5f),
+                FunnelWorldPixelsPerUnit);
+            funnelWorldSprite.name = "funnel-world";
+        }
+
+        return funnelWorldSprite;
     }
 
     internal static Sprite GetContainer(string originalSpriteName, float capacity)
@@ -170,6 +188,12 @@ internal static class ModSprites
 
     internal static void Unload()
     {
+        if (funnelWorldSprite)
+        {
+            UnityEngine.Object.Destroy(funnelWorldSprite);
+            funnelWorldSprite = null;
+        }
+
         foreach (var sprite in ContainerSprites.Values)
         {
             DestroySprite(sprite);

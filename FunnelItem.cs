@@ -9,7 +9,6 @@ namespace RealisticLiquidTransfer;
 internal static class FunnelItem
 {
     internal const string Id = "funnel";
-    private const float WorldSpriteScale = 10f;
 
     internal static Sprite Sprite => ModSprites.GetSprite("funnel-inventory");
     internal static Sprite TransferSprite => ModSprites.GetSprite(Id);
@@ -96,8 +95,7 @@ internal static class FunnelItem
             funnel.layer = itemLayer;
         }
 
-        var sprite = Sprite;
-        funnel.transform.localScale = Vector3.one * WorldSpriteScale;
+        var sprite = ModSprites.GetFunnelWorldSprite();
         funnel.AddComponent<SpriteRenderer>().sprite = sprite;
         funnel.AddComponent<Rigidbody2D>();
 
