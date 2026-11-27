@@ -58,6 +58,46 @@ internal static class FunnelGeometry
         return scale;
     }
 
+    internal static Vector2 GetInitialCenter(
+        RectTransform root,
+        RectTransform receiver,
+        Vector2 spriteSize,
+        float scale,
+        float outletGap,
+        float receiverGap)
+    {
+        if (!root || !receiver)
+        {
+            throw new ArgumentNullException(!root ? nameof(root) : nameof(receiver));
+        }
+
+        if (spriteSize.x <= 0f || spriteSize.y <= 0f || scale <= 0f
+            || outletGap < 0f || receiverGap < 0f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scale));
+        }
+
+        var receiverCorners = new Vector3[4];
+        receiver.GetWorldCorners(receiverCorners);
+        var receiverLeft = float.PositiveInfinity;
+        var receiverTop = float.NegativeInfinity;
+        foreach (var corner in receiverCorners)
+        {
+            var point = root.InverseTransformPoint(corner);
+            receiverLeft = Mathf.Min(receiverLeft, point.x);
+            receiverTop = Mathf.Max(receiverTop, point.y);
+        }
+
+        var outletPoint = ToSpriteLocalPoint(OutletPoint, spriteSize);
+        var spriteHalfWidth = spriteSize.x * 0.5f;
+        var spriteHalfHeight = spriteSize.y * 0.5f;
+        var rightExtent = (spriteHalfWidth - outletPoint.x) * scale + outletGap * 0.5f;
+        var topExtent = (spriteHalfHeight - outletPoint.y) * scale;
+        return new Vector2(
+            receiverLeft - receiverGap - rightExtent,
+            receiverTop + RimInsertionMargin - topExtent);
+    }
+
     internal static void WriteWallPoints(
         RectTransform root,
         RectTransform leftSide,

@@ -157,18 +157,36 @@ public static class LiquidSimulationDiagnosticsRunner
                     root,
                     "DiagnosticFunnelRightSide",
                     new Vector2(59f, 88f));
+                var funnelSpriteSize = new Vector2(59f, 88f);
                 var openingCenterWorld = receiver.TransformPoint(referenceBoundary.OpeningPosition);
+                var openingCenter = root.InverseTransformPoint(openingCenterWorld);
+                var targetTopWidth = Mathf.Max(
+                    coffeeSpriteSize.x * receiverScale,
+                    bottleSpriteSize.x * bottleScale);
+                var expectedOutletGap = referenceBoundary.OpeningWidth
+                    * receiverScale
+                    * FunnelGeometry.OutletGapRatio;
+                var initialScale = FunnelGeometry.PositionSides(
+                    leftFunnelSide,
+                    rightFunnelSide,
+                    funnelSpriteSize,
+                    openingCenter,
+                    targetTopWidth,
+                    expectedOutletGap);
+                var funnelCenter = FunnelGeometry.GetInitialCenter(
+                    root,
+                    receiver,
+                    funnelSpriteSize,
+                    initialScale,
+                    expectedOutletGap,
+                    LiquidContainerLayout.ContainerGap);
                 funnelScale = FunnelGeometry.PositionSides(
                     leftFunnelSide,
                     rightFunnelSide,
-                    new Vector2(59f, 88f),
-                    root.InverseTransformPoint(openingCenterWorld),
-                    Mathf.Max(
-                        coffeeSpriteSize.x * receiverScale,
-                        bottleSpriteSize.x * bottleScale),
-                    referenceBoundary.OpeningWidth
-                        * receiverScale
-                        * FunnelGeometry.OutletGapRatio);
+                    funnelSpriteSize,
+                    funnelCenter,
+                    targetTopWidth,
+                    expectedOutletGap);
                 if (leftFunnelSide.localScale != new Vector3(-funnelScale, funnelScale, 1f)
                     || rightFunnelSide.localScale != new Vector3(funnelScale, funnelScale, 1f)
                     || funnelScale <= 1f)
@@ -181,11 +199,8 @@ public static class LiquidSimulationDiagnosticsRunner
                     root,
                     leftFunnelSide,
                     rightFunnelSide,
-                    new Vector2(59f, 88f),
+                    funnelSpriteSize,
                     funnelWallPoints);
-                var expectedOutletGap = referenceBoundary.OpeningWidth
-                    * receiverScale
-                    * FunnelGeometry.OutletGapRatio;
                 actualOutletGap = Vector2.Distance(funnelWallPoints[3], funnelWallPoints[7]);
                 if (Mathf.Abs(actualOutletGap - expectedOutletGap) > 0.01f)
                 {
@@ -194,16 +209,29 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"{FunnelGeometry.OutletGapRatio:P0} of the opening "
                         + $"({expectedOutletGap:F2}px).");
                 }
-                var funnelCollisionRadius = FunnelGeometry.WallCollisionHalfWidth * funnelScale;
-                var funnelAgainstReceiverWall = new Vector2[funnelWallPoints.Length];
-                var wallContactShift = (referenceBoundary.OpeningWidth * receiverScale - expectedOutletGap) * 0.5f
-                    + funnelCollisionRadius
-                    + 1f;
-                for (var index = 0; index < funnelWallPoints.Length; index++)
+
+                var receiverLeft = root.InverseTransformPoint(
+                    receiver.TransformPoint(new Vector2(-receiver.rect.width * 0.5f, 0f))).x;
+                var receiverTop = root.InverseTransformPoint(
+                    receiver.TransformPoint(new Vector2(0f, receiver.rect.height * 0.5f))).y;
+                var funnelRight = Mathf.Max(
+                    leftFunnelSide.anchoredPosition.x
+                        + funnelSpriteSize.x * Mathf.Abs(leftFunnelSide.localScale.x) * 0.5f,
+                    rightFunnelSide.anchoredPosition.x
+                        + funnelSpriteSize.x * Mathf.Abs(rightFunnelSide.localScale.x) * 0.5f);
+                var funnelTop = Mathf.Max(
+                    leftFunnelSide.anchoredPosition.y
+                        + funnelSpriteSize.y * leftFunnelSide.localScale.y * 0.5f,
+                    rightFunnelSide.anchoredPosition.y
+                        + funnelSpriteSize.y * rightFunnelSide.localScale.y * 0.5f);
+                if (Mathf.Abs(receiverLeft - funnelRight - LiquidContainerLayout.ContainerGap) > 0.01f
+                    || Mathf.Abs(receiverTop - funnelTop) > 0.01f)
                 {
-                    funnelAgainstReceiverWall[index] = funnelWallPoints[index] + Vector2.right * wallContactShift;
+                    throw new InvalidOperationException(
+                        "Funnel fixture failed its left-side spacing or top-edge alignment check.");
                 }
 
+                var funnelCollisionRadius = FunnelGeometry.WallCollisionHalfWidth * funnelScale;
                 var blocksAtOpening = ContainerShapeCollision.OverlapsPolylineSegments(
                     referenceBoundary.WallCenterlinePoints,
                     receiver.anchoredPosition,
@@ -211,13 +239,18 @@ public static class LiquidSimulationDiagnosticsRunner
                     receiver.localEulerAngles.z,
                     funnelWallPoints,
                     funnelCollisionRadius);
-                var blocksAtWall = ContainerShapeCollision.OverlapsPolylineSegments(
-                    referenceBoundary.WallCenterlinePoints,
-                    receiver.anchoredPosition,
-                    receiverScale,
-                    receiver.localEulerAngles.z,
-                    funnelAgainstReceiverWall,
-                    funnelCollisionRadius);
+                var blocksAtWall = false;
+                for (var shift = 2f; shift <= 600f && !blocksAtWall; shift += 2f)
+                {
+                    blocksAtWall = ContainerShapeCollision.OverlapsPolylineSegments(
+                        referenceBoundary.WallCenterlinePoints,
+                        receiver.anchoredPosition + Vector2.left * shift,
+                        receiverScale,
+                        receiver.localEulerAngles.z,
+                        funnelWallPoints,
+                        funnelCollisionRadius);
+                }
+
                 if (blocksAtOpening || !blocksAtWall)
                 {
                     throw new InvalidOperationException(

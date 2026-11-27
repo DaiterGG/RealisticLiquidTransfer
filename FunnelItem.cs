@@ -95,7 +95,7 @@ internal static class FunnelItem
             funnel.layer = itemLayer;
         }
 
-        var sprite = Sprite;
+        var sprite = TransferSprite;
         funnel.AddComponent<SpriteRenderer>().sprite = sprite;
         funnel.AddComponent<Rigidbody2D>();
 
