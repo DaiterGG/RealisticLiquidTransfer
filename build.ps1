@@ -92,29 +92,41 @@ $unityArguments = @(
     '-executeMethod', 'RealisticLiquidTransfer.Editor.BuildLiquidShaderBundle.Build',
     '-logFile', "`"$unityBuildLogPath`""
 )
+$unityBuildStartedAtUtc = [DateTime]::UtcNow
 $unityProcess = Start-Process -FilePath $UnityEditorPath -ArgumentList $unityArguments -Wait -PassThru
+$shaderErrors = Select-String -LiteralPath $unityBuildLogPath `
+    -Pattern "Shader error in 'RealisticLiquidTransfer/LiquidSurface'"
+if ($shaderErrors) {
+    throw "Unity reported liquid shader compilation errors. See $unityBuildLogPath."
+}
+
+$bundleBuildValidated = Select-String -LiteralPath $unityBuildLogPath `
+    -Pattern "Built URP liquid shader and container impact audio bundle with Unity " `
+    -Quiet
+$unityBuildLogUpdated = (Test-Path -LiteralPath $unityBuildLogPath -PathType Leaf) `
+    -and ((Get-Item -LiteralPath $unityBuildLogPath).LastWriteTimeUtc -ge $unityBuildStartedAtUtc)
+$shaderBundleExists = Test-Path -LiteralPath $shaderBundlePath -PathType Leaf
+$shaderBundleUpdated = $shaderBundleExists `
+    -and ((Get-Item -LiteralPath $shaderBundlePath).LastWriteTimeUtc -ge $unityBuildStartedAtUtc)
+
 if ($unityProcess.ExitCode -ne 0) {
     $audioModuleDisabled = Select-String -LiteralPath $unityBuildLogPath `
         -Pattern "'AudioClip' is not supported because the module Audio is disabled in the build." `
         -Quiet
-    $shaderErrors = Select-String -LiteralPath $unityBuildLogPath `
-        -Pattern "Shader error in 'RealisticLiquidTransfer/LiquidSurface'"
 
-    if (-not $audioModuleDisabled -or $shaderErrors -or
-        -not (Test-Path -LiteralPath $embeddedShaderBundlePath -PathType Leaf)) {
+    if ($bundleBuildValidated -and $unityBuildLogUpdated -and $shaderBundleUpdated) {
+            Write-Warning "Unity exited with code $($unityProcess.ExitCode) after logging a validated AssetBundle build; using the newly generated bundle."
+        Copy-Item -LiteralPath $shaderBundlePath -Destination $embeddedShaderBundlePath -Force
+    }
+    elseif ($audioModuleDisabled -and (Test-Path -LiteralPath $embeddedShaderBundlePath -PathType Leaf)) {
+        Write-Warning "Unity's Audio module is disabled; keeping the existing packaged shader/audio bundle."
+    }
+    else {
         throw "Unity shader AssetBundle build failed with exit code $($unityProcess.ExitCode). See $unityBuildLogPath."
     }
-
-    Write-Warning "Unity's Audio module is disabled; keeping the existing packaged shader/audio bundle."
 }
 else {
-    $shaderErrors = Select-String -LiteralPath $unityBuildLogPath `
-        -Pattern "Shader error in 'RealisticLiquidTransfer/LiquidSurface'"
-    if ($shaderErrors) {
-        throw "Unity reported liquid shader compilation errors. See $unityBuildLogPath."
-    }
-
-    if (-not (Test-Path -LiteralPath $shaderBundlePath -PathType Leaf)) {
+    if (-not $shaderBundleExists) {
         throw "Unity exited successfully but did not produce the shader bundle: $shaderBundlePath"
     }
 
