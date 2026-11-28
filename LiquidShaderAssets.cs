@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-using System.Text;
 using UnityEngine;
 
 namespace RealisticLiquidTransfer;
@@ -55,10 +54,6 @@ internal static class LiquidShaderAssets
             {
                 stream.CopyTo(buffer);
                 var bytes = buffer.ToArray();
-                var header = Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 8));
-                Debug.Log(
-                    $"[RealisticLiquidTransfer] Loading shader bundle: Unity={Application.unityVersion}, "
-                    + $"bytes={bytes.Length}, header='{header}'.");
                 bundle = AssetBundle.LoadFromMemory(bytes);
             }
         }
@@ -69,8 +64,6 @@ internal static class LiquidShaderAssets
                 $"Unity {Application.unityVersion} rejected the embedded liquid shader bundle.");
         }
 
-        Debug.Log(
-            $"[RealisticLiquidTransfer] Shader bundle loaded; assets={string.Join(", ", bundle.GetAllAssetNames())}.");
         surfaceMaterial = bundle.LoadAsset<Material>(MaterialAssetName);
         if (!surfaceMaterial || !surfaceMaterial.shader || !surfaceMaterial.shader.isSupported)
         {
@@ -79,21 +72,7 @@ internal static class LiquidShaderAssets
                 $"The liquid surface shader material '{MaterialAssetName}' is missing or unsupported.");
         }
 
-        Debug.Log(
-            $"[RealisticLiquidTransfer] Loaded material '{surfaceMaterial.name}' with shader "
-            + $"'{surfaceMaterial.shader.name}' (supported={surfaceMaterial.shader.isSupported}).");
         densityComputeShader = bundle.LoadAsset<ComputeShader>(DensityComputeAssetName);
-        if (densityComputeShader)
-        {
-            Debug.Log(
-                $"[RealisticLiquidTransfer] Loaded compute shader '{densityComputeShader.name}'.");
-        }
-        else
-        {
-            Debug.LogWarning(
-                $"[RealisticLiquidTransfer] Compute shader '{DensityComputeAssetName}' is missing; "
-                + "the CPU liquid renderer will be used.");
-        }
     }
 
     internal static void Unload()

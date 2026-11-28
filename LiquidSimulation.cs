@@ -3895,12 +3895,6 @@ internal sealed class LiquidSimulation
         useComputeRendering = densityComputeShader
             && SystemInfo.supportsComputeShaders
             && SystemInfo.SupportsRandomWriteOnRenderTextureFormat(RenderTextureFormat.ARGB32);
-        if (densityComputeShader && !useComputeRendering)
-        {
-            Debug.LogWarning(
-                "[RealisticLiquidTransfer] This device cannot run the liquid compute renderer; "
-                + "the CPU liquid renderer will be used.");
-        }
 
         if (useComputeRendering)
         {
@@ -3920,9 +3914,6 @@ internal sealed class LiquidSimulation
             };
             if (!densityRenderTexture.Create())
             {
-                Debug.LogWarning(
-                    "[RealisticLiquidTransfer] Could not create the compute density texture; "
-                    + "falling back to the CPU liquid renderer.");
                 UnityEngine.Object.Destroy(densityRenderTexture);
                 densityRenderTexture = null;
                 useComputeRendering = false;
@@ -3945,9 +3936,6 @@ internal sealed class LiquidSimulation
                 };
                 if (!densityColorRenderTexture.Create())
                 {
-                    Debug.LogWarning(
-                        "[RealisticLiquidTransfer] Could not create the compute liquid color texture; "
-                        + "falling back to the CPU liquid renderer.");
                     UnityEngine.Object.Destroy(densityRenderTexture);
                     densityRenderTexture = null;
                     UnityEngine.Object.Destroy(densityColorRenderTexture);

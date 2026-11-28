@@ -140,7 +140,6 @@ internal sealed class LiquidTransferMinigame : Minigame
     private AudioSource fillAudioSource;
     private AudioLowPassFilter fillAudioLowPassFilter;
     private AudioClip fillAudioClip;
-    private bool warnedMissingSplashAudio;
     private readonly List<FillRateSample> fillRateSamples =
         new List<FillRateSample>();
     private readonly float[] fillRateWindowAmounts = new float[2];
@@ -373,11 +372,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         if (LiquidShaderAssets.TryGetAudioClip(FillAudioAddress, out fillAudioClip))
         {
             fillAudioSource.clip = fillAudioClip;
-        }
-        else
-        {
-            Debug.LogWarning(
-                $"[RealisticLiquidTransfer] Fill loop audio '{FillAudioAddress}' is missing from the asset bundle.");
         }
         receivingContainerMaterial = ContainerMaterialCatalog.GetMaterial(receivingGameContainer);
         sourceContainerMaterial = ContainerMaterialCatalog.GetMaterial(sourceGameContainer);
@@ -892,13 +886,6 @@ internal sealed class LiquidTransferMinigame : Minigame
         var addressName = SplashAudioAddressPrefix + clipIndex;
         if (!LiquidShaderAssets.TryGetAudioClip(addressName, out var clip))
         {
-            if (!warnedMissingSplashAudio)
-            {
-                warnedMissingSplashAudio = true;
-                Debug.LogWarning(
-                    $"[RealisticLiquidTransfer] Splash audio '{addressName}' is missing from the asset bundle.");
-            }
-
             return;
         }
 
@@ -3452,20 +3439,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
-        var isStrongImpact = !forceWeak && velocity >= containerImpactThreshold;
-        var volumePercent = ContainerImpactAudioCatalog.GetVolume(
-            velocity,
-            containerImpactThreshold,
-            containerImpactWeakVolumeMultiplier,
-            containerImpactStrongVolumeMultiplier,
-            containerImpactStrongMinimumVolume,
-            containerImpactFullVolumeVelocity,
-            containerImpactMasterVolumeMultiplier) * 100f;
-        Debug.Log(
-            $"[RealisticLiquidTransfer] Container impact detected: material={material}, "
-            + $"otherMaterial={otherMaterial}, impact force proxy={velocity:F1}px/s, "
-            + $"strong threshold={containerImpactThreshold:F0}px/s, "
-            + $"sound={(isStrongImpact ? "strong" : "weak")}, volume={volumePercent:F0}%.");
         ContainerImpactAudioCatalog.TryPlay(
             material,
             velocity,

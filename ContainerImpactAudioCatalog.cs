@@ -96,9 +96,6 @@ internal static class ContainerImpactAudioCatalog
             $"Container impact: material={material}, velocity={velocity:F1}px/s, "
             + $"volume={volume * 100f:F0}%, pitch={pitch:F2}, "
             + $"clip={addressName}, duration={clip.length:F3}s.");
-        Debug.Log(
-            $"[RealisticLiquidTransfer] Impact audio: volume={volume * 100f:F0}%, "
-            + $"pitch={pitch:F2} (variation=±{pitchOffset * 100f:F0}%).");
         return true;
     }
 
