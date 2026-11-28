@@ -1,16 +1,22 @@
 local Simulation = require("liquid_simulation")
 
 local shaderPath = "shader.glsl"
+local fieldShaderPath = "liquid_field.glsl"
 local shader
+local fieldShader
 local lastSource
 local simulation
+local densityCanvas
+local colorCanvas
+local densityCanvasWidth
+local densityCanvasHeight
 local selectedKind = 1
-local elapsed = 0
 local reloadTimer = 0
 local reloadInterval = 0.25
 local paused = false
 local status = "Loading shader..."
 local draggingControl
+local fieldPixelsPerUnit = 0.5
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -26,6 +32,79 @@ local function tankBounds()
     }
 end
 
+local function ensureLiquidCanvases(bounds)
+    local width = math.max(1, math.ceil((bounds.right - bounds.left) * fieldPixelsPerUnit))
+    local height = math.max(1, math.ceil((bounds.bottom - bounds.top) * fieldPixelsPerUnit))
+    if width == densityCanvasWidth and height == densityCanvasHeight then
+        return
+    end
+
+    local newDensityCanvas = love.graphics.newCanvas(width, height, { format = "rgba16f" })
+    local newColorCanvas = love.graphics.newCanvas(width, height, { format = "rgba16f" })
+    newDensityCanvas:setFilter("linear", "linear")
+    newColorCanvas:setFilter("linear", "linear")
+    newDensityCanvas:setWrap("clamp", "clamp")
+    newColorCanvas:setWrap("clamp", "clamp")
+
+    if densityCanvas then
+        densityCanvas:release()
+        colorCanvas:release()
+    end
+
+    densityCanvas = newDensityCanvas
+    colorCanvas = newColorCanvas
+    densityCanvasWidth = width
+    densityCanvasHeight = height
+end
+
+local function renderLiquidFields(bounds)
+    ensureLiquidCanvases(bounds)
+    local boundsWidth = bounds.right - bounds.left
+    local boundsHeight = bounds.bottom - bounds.top
+    local scaleX = (densityCanvasWidth - 1) / boundsWidth
+    local scaleY = (densityCanvasHeight - 1) / boundsHeight
+
+    love.graphics.push("all")
+    love.graphics.setBlendMode("add", "premultiplied")
+    love.graphics.setShader(fieldShader)
+    love.graphics.setColor(1, 1, 1, 1)
+
+    for mode = 0, 1 do
+        local target = mode == 0 and densityCanvas or colorCanvas
+        love.graphics.setCanvas(target)
+        love.graphics.clear(0, 0, 0, 0)
+        fieldShader:send("fieldMode", mode)
+
+        for _, drop in ipairs(simulation.drops) do
+            local centerX = (drop.x - bounds.left) * scaleX
+            local centerY = (drop.y - bounds.top) * scaleY
+            local supportRadius = drop.radius * 2.2
+            local speed = math.sqrt(drop.vx * drop.vx + drop.vy * drop.vy)
+            local tailLength = drop.radius * 2.5 * clamp(speed / 600, 0, 1)
+            local extent = supportRadius + tailLength
+
+            fieldShader:send("center", { centerX, centerY })
+            fieldShader:send("pixelScale", { scaleX, scaleY })
+            fieldShader:send("velocity", { drop.vx, drop.vy })
+            fieldShader:send(
+                "dropletColor",
+                { drop.color[1], drop.color[2], drop.color[3], 1 }
+            )
+            fieldShader:send("dropRadius", drop.radius)
+            love.graphics.rectangle(
+                "fill",
+                centerX - extent * scaleX,
+                centerY - extent * scaleY,
+                extent * 2 * scaleX,
+                extent * 2 * scaleY
+            )
+        end
+    end
+
+    love.graphics.setCanvas()
+    love.graphics.pop()
+end
+
 local function controlLayout()
     local height = love.graphics.getHeight()
     return {
@@ -38,6 +117,19 @@ local function controlLayout()
     }
 end
 
+local function loadFieldShader()
+    local source, readError = love.filesystem.read(fieldShaderPath)
+    if not source then
+        error("Could not read liquid field shader: " .. tostring(readError))
+    end
+
+    local ok, result = pcall(love.graphics.newShader, source)
+    if not ok then
+        error("Could not compile liquid field shader: " .. tostring(result))
+    end
+    fieldShader = result
+end
+
 local function sliderValue(slider, x)
     return clamp((x - slider.x) / slider.width, 0, 1)
 end
@@ -45,7 +137,7 @@ end
 local function setControlValue(control, x)
     local value = sliderValue(control.slider, x)
     if control.kind == "size" then
-        simulation:setDropRadius(4 + value * 10)
+        simulation:setDropRadius(4 + value * 38)
     elseif control.kind == "hue" then
         simulation:setTypeHue(control.group, value)
     elseif control.kind == "density" then
@@ -149,6 +241,7 @@ function love.load()
     love.graphics.setBackgroundColor(0.025, 0.04, 0.08)
     love.math.setRandomSeed(os.time())
     simulation = Simulation.new(tankBounds())
+    loadFieldShader()
     reloadShader()
     if not shader then
         error(status)
@@ -156,7 +249,6 @@ function love.load()
 end
 
 function love.update(dt)
-    elapsed = elapsed + dt
     reloadTimer = reloadTimer + dt
 
     if reloadTimer >= reloadInterval then
@@ -171,22 +263,9 @@ function love.update(dt)
     if not paused then
         simulation:update(dt)
     end
-
-    if shader then
-        local width, height = love.graphics.getDimensions()
-        shader:send("elapsed", elapsed)
-        shader:send("resolution", { width, height })
-    end
 end
 
 function love.draw()
-    if shader then
-        love.graphics.setShader(shader)
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.rectangle("fill", 0, 0, love.graphics.getDimensions())
-        love.graphics.setShader()
-    end
-
     local bounds = tankBounds()
     local counts = simulation:countByType()
     local types = Simulation.types
@@ -208,6 +287,33 @@ function love.draw()
         bounds.right - bounds.left,
         bounds.bottom - bounds.top
     )
+
+    renderLiquidFields(bounds)
+    if shader then
+        shader:send("densityField", densityCanvas)
+        shader:send("colorField", colorCanvas)
+        shader:send(
+            "fieldTexelSize",
+            { 1 / densityCanvasWidth, 1 / densityCanvasHeight }
+        )
+        shader:send(
+            "transitionOffset",
+            { 3 / densityCanvasWidth, 3 / densityCanvasHeight }
+        )
+        shader:send("colorTransitionSharpness", 2)
+
+        love.graphics.setBlendMode("alpha", "alphamultiply")
+        love.graphics.setShader(shader)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.rectangle(
+            "fill",
+            bounds.left,
+            bounds.top,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top
+        )
+        love.graphics.setShader()
+    end
 
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.print("LIQUID SANDBOX  |  " .. #simulation.drops .. " drops", 34, 12)
@@ -235,15 +341,6 @@ function love.draw()
         64
     )
 
-    for _, drop in ipairs(simulation.drops) do
-        love.graphics.setColor(drop.color[1], drop.color[2], drop.color[3])
-        love.graphics.circle("fill", drop.x, drop.y, drop.radius)
-        love.graphics.setColor(0.02, 0.06, 0.09, 0.8)
-        love.graphics.circle("line", drop.x, drop.y, drop.radius)
-        love.graphics.setColor(1, 1, 1, 0.42)
-        love.graphics.circle("fill", drop.x - 2.5, drop.y - 2.5, 2.2)
-    end
-
     local layout = controlLayout()
     love.graphics.setColor(0.015, 0.035, 0.055, 0.98)
     love.graphics.rectangle(
@@ -268,7 +365,7 @@ function love.draw()
 
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.print("Drop radius", 43, layout.size.y - 7)
-    local radiusValue = (simulation.dropRadius - 4) / 10
+    local radiusValue = (simulation.dropRadius - 4) / 38
     drawSlider(layout.size, radiusValue, { 0.82, 0.91, 0.95 })
     love.graphics.print(string.format("%.1f px", simulation.dropRadius), 323, layout.size.y - 7)
 

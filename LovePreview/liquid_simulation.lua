@@ -7,7 +7,7 @@ Simulation.types = {
     { name = "Heavy", density = 1.45, hue = 0.05, color = { 1.0, 0.42, 0.2 } },
 }
 
-local DROP_COUNT = 100
+local DROP_COUNT = 198
 local GRAVITY = 430
 local SORT_STRENGTH = 1900
 local FIXED_STEP = 1 / 60
@@ -50,7 +50,7 @@ end
 Simulation.colorForHue = hueToColor
 
 function Simulation:setDropRadius(radius)
-    self.dropRadius = clamp(radius, 4, 14)
+    self.dropRadius = clamp(radius, 4, 42)
     for _, drop in ipairs(self.drops) do
         drop.radius = self.dropRadius
         drop.x = clamp(drop.x, self.bounds.left + drop.radius, self.bounds.right - drop.radius)
