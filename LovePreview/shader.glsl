@@ -99,11 +99,18 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     number downDensity = getDensity(uv - vec2(0.0, fieldTexelSize.y));
     number upDensity = getDensity(uv + vec2(0.0, fieldTexelSize.y));
     vec2 gradient = vec2(rightDensity - leftDensity, upDensity - downDensity);
-    number screenDensityDerivative = max(
-        (abs(gradient.x) + abs(gradient.y)) * 0.25,
-        0.002);
-    number edgeHalfWidth = max(screenDensityDerivative * 0.5, 0.001);
     vec3 normal = normalize(vec3(-gradient * 5.0, 0.8));
+    number pixelLeftDensity = getDensity(uv - vec2(1.0 / tankSize.x, 0.0));
+    number pixelRightDensity = getDensity(uv + vec2(1.0 / tankSize.x, 0.0));
+    number pixelDownDensity = getDensity(uv - vec2(0.0, 1.0 / tankSize.y));
+    number pixelUpDensity = getDensity(uv + vec2(0.0, 1.0 / tankSize.y));
+    number screenDensityDerivative = max(
+        max(
+            abs(pixelRightDensity - pixelLeftDensity),
+            abs(pixelUpDensity - pixelDownDensity))
+            * 0.5,
+        0.0005);
+    number edgeHalfWidth = max(screenDensityDerivative * 0.5, 0.00025);
 
     vec4 accumulatedDensity = Texel(densityField, uv);
     vec2 encodedVelocity = clamp(
