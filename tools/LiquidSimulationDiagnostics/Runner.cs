@@ -1510,7 +1510,7 @@ public static class LiquidSimulationDiagnosticsRunner
             WriteLine(
                 $"Motion: circular path center=({orbitCenter.x:F1},{orbitCenter.y:F1}), "
                 + $"radius={CircularBottleMotionRadius:F1}px, period={CircularBottleMotionPeriodSeconds:F1}s, "
-                + $"bottle rotates with the path; duration={CircularBottleMotionDurationSeconds}s "
+                + $"bottle stays upright; duration={CircularBottleMotionDurationSeconds}s "
                 + $"at {GameUpdatesPerSecond} updates/s.");
             WriteLine(
                 $"Seed: particles={initialDrops.Length}, liquidUnits={simulation.Count}, "
@@ -1527,7 +1527,7 @@ public static class LiquidSimulationDiagnosticsRunner
                     var currentPosition = orbitCenter + new Vector2(
                         Mathf.Cos(phase),
                         Mathf.Sin(phase)) * CircularBottleMotionRadius;
-                    var currentAngle = phase * Mathf.Rad2Deg;
+                    const float currentAngle = 0f;
                     simulation.ApplyContainerPoseChange(
                         movingBottle,
                         previousPosition,
@@ -1536,7 +1536,7 @@ public static class LiquidSimulationDiagnosticsRunner
                         currentAngle,
                         Vector2.one);
                     movingBottle.anchoredPosition = currentPosition;
-                    movingBottle.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
+                    movingBottle.localRotation = Quaternion.identity;
                     simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
                 }
 
