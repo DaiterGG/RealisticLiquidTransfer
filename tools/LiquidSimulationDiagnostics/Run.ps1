@@ -5,6 +5,7 @@ param(
         'water-bottle-full-idle',
         'water-bottle-single-drop',
         'fast-drop-collision',
+        'water-bottle-circular-motion-trace',
         'container-movement-no-inflow',
         'funnel-wall-single-drop',
         'syringe-center-bottle-intake',

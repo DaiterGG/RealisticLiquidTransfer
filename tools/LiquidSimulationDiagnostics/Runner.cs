@@ -29,6 +29,9 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float FastDropMaximumSourceRelativeDrift = 220f;
     private const float FastDropMaximumSpeed = 1800f;
     private const float FastDropMaximumCollisionSpeed = 1000f;
+    private const int CircularBottleMotionDurationSeconds = 20;
+    private const float CircularBottleMotionRadius = 80f;
+    private const float CircularBottleMotionPeriodSeconds = 5f;
     private const float CenterBottleSyringeCapacity = 100f;
     private const float CenterBottleSyringeIntakeRate = 25.2f;
     private const float CenterBottleSyringePlungerRate = CenterBottleSyringeIntakeRate * 0.8f;
@@ -37,6 +40,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
     private const string FastDropCollisionScenario = "fast-drop-collision";
+    private const string CircularBottleMotionScenario = "water-bottle-circular-motion-trace";
     private const string ContainerMovementNoInflowScenario = "container-movement-no-inflow";
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
     private const string SyringeCenterBottleScenario = "syringe-center-bottle-intake";
@@ -59,6 +63,12 @@ public static class LiquidSimulationDiagnosticsRunner
             if (scenario == FastDropCollisionScenario)
             {
                 RunFastDropCollisionScenario();
+                return;
+            }
+
+            if (scenario == CircularBottleMotionScenario)
+            {
+                RunCircularBottleMotionScenario();
                 return;
             }
 
@@ -1323,6 +1333,347 @@ public static class LiquidSimulationDiagnosticsRunner
         catch (Exception exception)
         {
             WriteLine($"FAIL: {exception}");
+            exitCode = 1;
+        }
+        finally
+        {
+            DebugLog.Sink = null;
+            Plugin.LogSink = null;
+            if (screenObject)
+            {
+                UnityEngine.Object.DestroyImmediate(screenObject);
+            }
+
+            if (log != null)
+            {
+                log.Flush();
+                log.Dispose();
+                log = null;
+            }
+        }
+
+        EditorApplication.Exit(exitCode);
+    }
+
+    private static void RunCircularBottleMotionScenario()
+    {
+        GameObject screenObject = null;
+        var exitCode = 0;
+        try
+        {
+            var logPath = GetArgument("-diagnosticLog");
+            var repositoryRoot = GetArgument("-repositoryRoot");
+            if (string.IsNullOrWhiteSpace(logPath) || string.IsNullOrWhiteSpace(repositoryRoot))
+            {
+                throw new ArgumentException("Expected diagnostic-log and repository-root arguments.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath));
+            log = new StreamWriter(logPath, false, new System.Text.UTF8Encoding(false))
+            {
+                AutoFlush = true
+            };
+            DebugLog.Sink = WriteLine;
+            Plugin.LogSink = WriteLine;
+            WriteLine($"Scenario '{CircularBottleMotionScenario}' started at {DateTime.Now:O}.");
+
+            if (!GeneratedContainerBoundaryCatalog.TryGet("coffee", out var referenceBoundary)
+                || !GeneratedContainerBoundaryCatalog.TryGet("waterbottle", out var bottleBoundary)
+                || !referenceBoundary.HasOpening
+                || !bottleBoundary.HasOpening)
+            {
+                throw new InvalidOperationException("Generated coffee or water-bottle boundaries are missing.");
+            }
+
+            var referenceArea = EstimateArea(
+                referenceBoundary.WallCenterlinePoints,
+                referenceBoundary.InteriorWalls);
+            var bottleArea = EstimateArea(
+                bottleBoundary.WallCenterlinePoints,
+                bottleBoundary.InteriorWalls);
+            if (referenceArea <= 0d || bottleArea <= 0d)
+            {
+                throw new InvalidOperationException("Could not calculate gameplay container areas.");
+            }
+
+            var screenPixelSize = new Vector2(Screen.width, Screen.height);
+            var uiScale = screenPixelSize.y / 1080f;
+            if (screenPixelSize.x <= 0f || screenPixelSize.y <= 0f || uiScale <= 0f)
+            {
+                throw new InvalidOperationException($"Invalid Unity screen dimensions: {screenPixelSize}.");
+            }
+
+            var viewportSize = screenPixelSize / uiScale;
+            screenObject = new GameObject("CircularBottleMotionDiagnosticsCanvas", typeof(RectTransform));
+            var canvasRoot = screenObject.GetComponent<RectTransform>();
+            ConfigureRect(canvasRoot, null, viewportSize, Vector2.zero);
+            canvasRoot.localScale = Vector3.one * uiScale;
+            var screenObjectRoot = new GameObject(
+                "CircularBottleMotionDiagnosticsScreen",
+                typeof(RectTransform));
+            var screen = screenObjectRoot.GetComponent<RectTransform>();
+            ConfigureRect(screen, canvasRoot, viewportSize, Vector2.zero);
+            var rootObject = new GameObject(
+                "CircularBottleMotionDiagnosticsRoot",
+                typeof(RectTransform));
+            var root = rootObject.GetComponent<RectTransform>();
+            ConfigureRect(root, screen, viewportSize, Vector2.zero);
+
+            var bottleSpritePath = Path.Combine(
+                repositoryRoot,
+                "resources",
+                "sprites",
+                "containers",
+                "waterbottle.png");
+            var bottleSpriteSize = LoadVisibleSpriteSize(bottleSpritePath);
+            var sideBottle = CreateContainer(root, "SideWaterBottle", bottleSpriteSize);
+            var movingBottle = CreateContainer(root, "MovingFullWaterBottle", bottleSpriteSize);
+            var bottleScale = LiquidContainerLayout.TryGetAreaScaledScale(
+                WaterBottleCapacity,
+                ReferenceCapacity,
+                referenceArea,
+                bottleArea,
+                out var calculatedBottleScale)
+                ? calculatedBottleScale
+                : throw new InvalidOperationException("Could not calculate the water-bottle scale.");
+            sideBottle.localScale = Vector3.one * bottleScale;
+            movingBottle.localScale = Vector3.one * bottleScale;
+            LiquidContainerLayout.PositionContainersSideBySide(
+                sideBottle,
+                bottleBoundary.OpeningPosition,
+                movingBottle,
+                bottleBoundary.OpeningPosition);
+            sideBottle.anchoredPosition -= movingBottle.anchoredPosition;
+            sideBottle.anchoredPosition += Vector2.left * CircularBottleMotionRadius;
+            movingBottle.anchoredPosition = Vector2.right * CircularBottleMotionRadius;
+
+            var fitScale = LiquidContainerLayout.GetFitScale(screen, root, sideBottle, movingBottle);
+            root.localScale = Vector3.one * fitScale;
+            var water = new[]
+            {
+                new LiquidProfileEntry(
+                    "water",
+                    WaterBottleCapacity,
+                    new Color(0.16f, 0.5f, 0.95f))
+            };
+            var simulation = new LiquidSimulation(
+                root,
+                sideBottle,
+                bottleBoundary.WallCenterlinePoints,
+                bottleBoundary.InteriorWalls,
+                WaterBottleCapacity,
+                movingBottle,
+                bottleBoundary.WallCenterlinePoints,
+                bottleBoundary.InteriorWalls,
+                WaterBottleCapacity,
+                0f,
+                WaterBottleCapacity,
+                Array.Empty<LiquidProfileEntry>(),
+                water,
+                LiquidSimulation.DefaultPackingTenths / 100f,
+                headless: true);
+            simulation.ConfigureForMinigame(false);
+
+            var initialDrops = simulation.CaptureDropSnapshots();
+            var initialSourceLocalPositions = new Dictionary<int, Vector2>();
+            var previousDrops = new Dictionary<int, LiquidDropSnapshot>();
+            var tracedDropIds = new HashSet<int>();
+            var dropsThatLeftBottle = new HashSet<int>();
+            var removedTrackedDropIds = new HashSet<int>();
+            var removedAfterLeavingIds = new HashSet<int>();
+            foreach (var drop in initialDrops)
+            {
+                initialSourceLocalPositions[drop.Id] = GetSourceLocalPosition(root, movingBottle, drop.Position);
+                previousDrops[drop.Id] = drop;
+            }
+
+            var primaryTraceDropId = initialDrops.Length > 0 ? initialDrops[0].Id : -1;
+            if (primaryTraceDropId >= 0)
+            {
+                tracedDropIds.Add(primaryTraceDropId);
+            }
+
+            var orbitCenter = Vector2.zero;
+            var maximumFrameMovement = 0f;
+            var maximumSourceRelativeDrift = 0f;
+            var maximumTrackedSpeed = 0f;
+            var finalSourceDrops = 0;
+            var finalEscapedDrops = 0;
+            var finalReceiverDrops = 0;
+            var frameCount = CircularBottleMotionDurationSeconds * GameUpdatesPerSecond;
+            WriteLine(
+                $"Fixture: side bottle at ({sideBottle.anchoredPosition.x:F1},"
+                + $"{sideBottle.anchoredPosition.y:F1}) is empty; moving bottle starts at "
+                + $"({movingBottle.anchoredPosition.x:F1},{movingBottle.anchoredPosition.y:F1}) "
+                + $"with {simulation.GetContainerLiquidAmount(1):F1}ml water "
+                + $"({bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0}, scale={bottleScale:F3}).");
+            WriteLine(
+                $"Motion: circular path center=({orbitCenter.x:F1},{orbitCenter.y:F1}), "
+                + $"radius={CircularBottleMotionRadius:F1}px, period={CircularBottleMotionPeriodSeconds:F1}s, "
+                + $"bottle rotates with the path; duration={CircularBottleMotionDurationSeconds}s "
+                + $"at {GameUpdatesPerSecond} updates/s.");
+            WriteLine(
+                $"Seed: particles={initialDrops.Length}, liquidUnits={simulation.Count}, "
+                + $"primaryTraceDrop={primaryTraceDropId}.");
+
+            for (var frame = 0; frame <= frameCount; frame++)
+            {
+                if (frame > 0)
+                {
+                    var elapsed = frame * UpdateDeltaTime;
+                    var phase = elapsed * 2f * Mathf.PI / CircularBottleMotionPeriodSeconds;
+                    var previousPosition = movingBottle.anchoredPosition;
+                    var previousAngle = movingBottle.localEulerAngles.z;
+                    var currentPosition = orbitCenter + new Vector2(
+                        Mathf.Cos(phase),
+                        Mathf.Sin(phase)) * CircularBottleMotionRadius;
+                    var currentAngle = phase * Mathf.Rad2Deg;
+                    simulation.ApplyContainerPoseChange(
+                        movingBottle,
+                        previousPosition,
+                        previousAngle,
+                        currentPosition,
+                        currentAngle,
+                        Vector2.one);
+                    movingBottle.anchoredPosition = currentPosition;
+                    movingBottle.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
+                    simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
+                }
+
+                var drops = simulation.CaptureDropSnapshots();
+                var currentDrops = new Dictionary<int, LiquidDropSnapshot>();
+                var insideMovingBottle = 0;
+                var outsideMovingBottle = 0;
+                var insideSideBottle = 0;
+                var outsideLiquidUnits = 0;
+                var sourceUnits = 0;
+                var receiverUnits = 0;
+                foreach (var drop in drops)
+                {
+                    currentDrops[drop.Id] = drop;
+                    var inMovingBottle = simulation.ContainsContainer(1, drop.Position);
+                    var inSideBottle = simulation.ContainsContainer(0, drop.Position);
+                    var sourceLocal = GetSourceLocalPosition(root, movingBottle, drop.Position);
+                    if (inMovingBottle)
+                    {
+                        insideMovingBottle++;
+                        sourceUnits += drop.Volume;
+                    }
+                    else
+                    {
+                        outsideMovingBottle++;
+                        outsideLiquidUnits += drop.Volume;
+                        dropsThatLeftBottle.Add(drop.Id);
+                        tracedDropIds.Add(drop.Id);
+                    }
+
+                    if (inSideBottle)
+                    {
+                        insideSideBottle++;
+                        receiverUnits += drop.Volume;
+                    }
+
+                    if (!tracedDropIds.Contains(drop.Id))
+                    {
+                        continue;
+                    }
+
+                    initialSourceLocalPositions.TryGetValue(drop.Id, out var initialSourceLocal);
+                    if (!initialSourceLocalPositions.ContainsKey(drop.Id))
+                    {
+                        initialSourceLocalPositions[drop.Id] = sourceLocal;
+                        initialSourceLocal = sourceLocal;
+                    }
+
+                    var frameMovement = previousDrops.TryGetValue(drop.Id, out var previousDrop)
+                        ? Vector2.Distance(previousDrop.Position, drop.Position)
+                        : 0f;
+                    var sourceRelativeDrift = Vector2.Distance(initialSourceLocal, sourceLocal);
+                    maximumFrameMovement = Mathf.Max(maximumFrameMovement, frameMovement);
+                    maximumSourceRelativeDrift = Mathf.Max(
+                        maximumSourceRelativeDrift,
+                        sourceRelativeDrift);
+                    maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
+                    WriteLine(
+                        $"trace frame={frame:D4} t={frame * UpdateDeltaTime:F3}s "
+                        + $"id={drop.Id} membership(side={inSideBottle},moving={inMovingBottle}) "
+                        + $"owner={drop.ContainerAssignment} volume={drop.Volume} "
+                        + $"position=({drop.Position.x:F3},{drop.Position.y:F3}) "
+                        + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}) "
+                        + $"sourceLocal=({sourceLocal.x:F3},{sourceLocal.y:F3}) "
+                        + $"frameMove={frameMovement:F3} sourceDrift={sourceRelativeDrift:F3} "
+                        + "removed=false.");
+                }
+
+                foreach (var previousEntry in previousDrops)
+                {
+                    if (currentDrops.ContainsKey(previousEntry.Key))
+                    {
+                        continue;
+                    }
+
+                    var previousDrop = previousEntry.Value;
+                    var insideMovingAtRemoval = simulation.ContainsContainer(1, previousDrop.Position);
+                    if (!insideMovingAtRemoval)
+                    {
+                        dropsThatLeftBottle.Add(previousEntry.Key);
+                        tracedDropIds.Add(previousEntry.Key);
+                    }
+
+                    if (!tracedDropIds.Contains(previousEntry.Key)
+                        || !removedTrackedDropIds.Add(previousEntry.Key))
+                    {
+                        continue;
+                    }
+
+                    if (dropsThatLeftBottle.Contains(previousEntry.Key))
+                    {
+                        removedAfterLeavingIds.Add(previousEntry.Key);
+                    }
+
+                    var insideSideAtRemoval = simulation.ContainsContainer(0, previousDrop.Position);
+                    var sourceLocalAtRemoval = GetSourceLocalPosition(
+                        root,
+                        movingBottle,
+                        previousDrop.Position);
+                    WriteLine(
+                        $"trace frame={frame:D4} t={frame * UpdateDeltaTime:F3}s "
+                        + $"id={previousEntry.Key} membership(side={insideSideAtRemoval},"
+                        + $"moving={insideMovingAtRemoval}) owner=removed "
+                        + $"lastOwner={previousDrop.ContainerAssignment} volume={previousDrop.Volume} "
+                        + $"position=({previousDrop.Position.x:F3},{previousDrop.Position.y:F3}) "
+                        + $"velocity=({previousDrop.Velocity.x:F3},{previousDrop.Velocity.y:F3}) "
+                        + $"sourceLocal=({sourceLocalAtRemoval.x:F3},{sourceLocalAtRemoval.y:F3}) "
+                        + "frameMove=removed sourceDrift=removed removed=true.");
+                }
+
+                finalSourceDrops = insideMovingBottle;
+                finalEscapedDrops = outsideMovingBottle;
+                finalReceiverDrops = insideSideBottle;
+                WriteLine(
+                    $"frame={frame:D4} t={frame * UpdateDeltaTime:F3}s "
+                    + $"liveDrops={drops.Length} movingBottleDrops={insideMovingBottle} "
+                    + $"outsideMovingBottle={outsideMovingBottle} sideBottleDrops={insideSideBottle} "
+                    + $"movingBottleUnits={sourceUnits} outsideUnits={outsideLiquidUnits} "
+                    + $"sideBottleUnits={receiverUnits} simulationUnits={simulation.Count}.");
+                previousDrops = currentDrops;
+            }
+
+            WriteLine(
+                $"Observation summary: uniqueDropsThatLeft={dropsThatLeftBottle.Count}, "
+                + $"removedAfterLeaving={removedAfterLeavingIds.Count}, "
+                + $"removedTrackedDrops={removedTrackedDropIds.Count}, "
+                + $"initialUnits={WaterBottleCapacity:F0}, finalUnits={simulation.Count}, "
+                + $"finalLiveDrops={simulation.CaptureDropSnapshots().Length}, "
+                + $"finalMovingBottleDrops={finalSourceDrops}, "
+                + $"finalOutsideDrops={finalEscapedDrops}, finalSideBottleDrops={finalReceiverDrops}, "
+                + $"maximumFrameMovement={maximumFrameMovement:F3}px, "
+                + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
+                + $"maximumTrackedVelocity={maximumTrackedSpeed:F3}px/s.");
+        }
+        catch (Exception exception)
+        {
+            WriteLine($"ERROR: {exception}");
             exitCode = 1;
         }
         finally
