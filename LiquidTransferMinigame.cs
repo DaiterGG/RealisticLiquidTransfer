@@ -179,6 +179,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private int rotationVerticalSector;
     private bool rotationTrackingStarted;
     private bool transferCommitted;
+    private bool warnedMissingSimulation;
     private readonly bool hasFunnel;
     private Vector2[] funnelWallPoints;
     private bool warnedMissingFunnelOpening;
@@ -624,6 +625,12 @@ internal sealed class LiquidTransferMinigame : Minigame
 
     public override void Update(List<RaycastResult> uiCasts)
     {
+        if (liquidSimulation == null)
+        {
+            LogMissingSimulation();
+            return;
+        }
+
         var game = Minigame.game;
         var pointerPosition = game.handPos / fitScale;
         if (game.handStartedClicking)
@@ -2201,6 +2208,13 @@ internal sealed class LiquidTransferMinigame : Minigame
             return;
         }
 
+        if (liquidSimulation == null)
+        {
+            LogMissingSimulation();
+            throw new System.InvalidOperationException(
+                "The liquid simulation did not initialize; the transfer was not applied.");
+        }
+
         var route = MultiplayerTransferBridge.GetRoute();
         if (route == TransferCommitRoute.Unavailable)
         {
@@ -2346,6 +2360,20 @@ internal sealed class LiquidTransferMinigame : Minigame
             : $"Committed liquid transfer: amounts receiver={receivingGameContainer.CurrentTotal:F2}, "
                 + $"source={sourceGameContainer.CurrentTotal:F2}, "
                 + $"liquid not retained={discardedOverflow:F2} ml.");
+    }
+
+    private void LogMissingSimulation()
+    {
+        if (warnedMissingSimulation)
+        {
+            return;
+        }
+
+        warnedMissingSimulation = true;
+        DebugLog.Write(
+            "Aborted liquid-transfer minigame: the liquid simulation did not initialize; "
+            + $"no transfer will be applied. receiverSyncId={receivingSyncId}, "
+            + $"sourceSyncId={sourceSyncId}.");
     }
 
     private List<LiquidAmount> CreateTargetComposition(

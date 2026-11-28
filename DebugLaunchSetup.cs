@@ -310,23 +310,15 @@ internal static class DebugLaunchTutorialPatch
                 continue;
             }
 
-            var originalSpriteName =
-                StartLiquidTransferPatch.GetContainerSpriteName(container, $"debug item '{itemId}'");
-            float capacity;
-            try
+            if (!(item.Stats is LiquidItemInfo liquidItemInfo))
             {
-                capacity = container.Capacity;
-            }
-            catch (NullReferenceException exception)
-            {
-                Plugin.LogError(
-                    $"Debug startup: failed to read capacity for container prefab '{itemId}' "
-                    + $"(prefab name='{prefab.name}'): {exception}");
                 continue;
             }
 
+            var originalSpriteName =
+                StartLiquidTransferPatch.GetContainerSpriteName(container, $"debug item '{itemId}'");
             var minigameSpriteName =
-                ModSprites.ResolveContainerSprite(originalSpriteName, capacity).name;
+                ModSprites.ResolveContainerSprite(originalSpriteName, liquidItemInfo.capacity).name;
             if (!expectedSpriteNames.Contains(minigameSpriteName))
             {
                 continue;
