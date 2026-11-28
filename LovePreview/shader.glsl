@@ -70,14 +70,7 @@ vec4 sharpenLiquidColorTransition(vec2 uv, vec4 centerColor)
         dot(centerPremultiplied - beforePremultiplied, colorSpan) / strongestContrast,
         0.0,
         1.0);
-    number configuredSharpness = clamp(colorTransitionSharpness / 3.0, 0.0, 1.0);
-    number opacityContrast = abs(colorBefore.a - colorAfter.a);
-    number sharpness = max(configuredSharpness, opacityContrast);
-    if (sharpness < 0.0001)
-    {
-        return centerColor;
-    }
-
+    number sharpness = clamp(colorTransitionSharpness / 3.0, 0.0, 1.0);
     number transitionWidth = mix(1.0, 0.08, sharpness);
     number splineBlend = smoothstep(
         0.5 - transitionWidth * 0.5,
@@ -96,7 +89,10 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     vec2 uv = clamp((screen_coords - tankOrigin) / tankSize, 0.0, 1.0);
     number density = getDensity(uv);
     vec4 sampledLiquidColor = getLiquidColor(uv);
-    sampledLiquidColor = sharpenLiquidColorTransition(uv, sampledLiquidColor);
+    if (colorTransitionSharpness > 0.0)
+    {
+        sampledLiquidColor = sharpenLiquidColorTransition(uv, sampledLiquidColor);
+    }
 
     number leftDensity = getDensity(uv - vec2(fieldTexelSize.x, 0.0));
     number rightDensity = getDensity(uv + vec2(fieldTexelSize.x, 0.0));
@@ -119,7 +115,7 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     number diffuse = 0.58 + 0.42 * clamp(dot(normal, lightDirection), 0.0, 1.0);
     vec3 halfDirection = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
     number specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 28.0);
-    number alpha = smoothstep(0.44, 0.56, density);
+    number alpha = smoothstep(0.48, 0.52, density);
     number edge = 1.0 - smoothstep(0.55, 0.8, density);
 
     vec4 result = vec4(sampledLiquidColor.rgb, vertexColor.a * sampledLiquidColor.a);
