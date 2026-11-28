@@ -1,10 +1,13 @@
 # LÖVE shader hot-reload demo
 
-Run this folder with LÖVE, for example:
+Run the PowerShell launcher from the repository root:
 
 ```powershell
-love .\LovePreview
+.\LovePreview\Run.ps1
 ```
+
+It uses `..\love-11.5-win64\love.exe` when present, or an installed `love.exe`.
+To select another executable, pass `-LoveExecutable "C:\path\to\love.exe"`.
 
 The window renders a moving ripple shader. Save changes to `shader.glsl` to
 reload it automatically, or press **R** to reload manually. If an edited

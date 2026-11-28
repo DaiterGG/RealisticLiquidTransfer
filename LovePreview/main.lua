@@ -50,8 +50,9 @@ function love.update(dt)
     end
 
     if shader then
+        local width, height = love.graphics.getDimensions()
         shader:send("elapsed", elapsed)
-        shader:send("resolution", love.graphics.getDimensions())
+        shader:send("resolution", { width, height })
     end
 end
 
