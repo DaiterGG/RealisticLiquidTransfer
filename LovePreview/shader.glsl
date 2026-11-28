@@ -4,8 +4,9 @@ extern Image opacityField;
 extern vec2 tankOrigin;
 extern vec2 tankSize;
 extern vec2 fieldTexelSize;
-extern vec2 transitionOffset;
-extern number colorTransitionSharpness;
+extern vec3 lightColor;
+extern vec3 mediumColor;
+extern vec3 heavyColor;
 
 number getDensity(vec2 uv)
 {
@@ -14,74 +15,20 @@ number getDensity(vec2 uv)
 
 vec4 getLiquidColor(vec2 uv)
 {
-    vec4 accumulatedColor = Texel(colorField, uv);
+    vec3 groupWeights = Texel(colorField, uv).rgb;
     number opacityWeight = max(Texel(opacityField, uv).r, 0.0001);
     number densityWeight = max(Texel(densityField, uv).r, 0.0001);
-    return vec4(
-        accumulatedColor.rgb / opacityWeight,
-        clamp(opacityWeight / densityWeight, 0.0, 1.0));
-}
-
-void considerLiquidColorBoundary(
-    vec2 uv,
-    vec2 offset,
-    inout number strongestContrast,
-    inout vec4 colorBefore,
-    inout vec4 colorAfter)
-{
-    vec4 before = getLiquidColor(uv - offset);
-    vec4 after = getLiquidColor(uv + offset);
-    vec3 colorDifference = after.rgb * after.a - before.rgb * before.a;
-    number contrast = dot(colorDifference, colorDifference);
-    if (contrast > strongestContrast)
+    vec3 selectedColor = lightColor;
+    if (groupWeights.g > groupWeights.r && groupWeights.g >= groupWeights.b)
     {
-        strongestContrast = contrast;
-        colorBefore = before;
-        colorAfter = after;
+        selectedColor = mediumColor;
     }
-}
-
-vec4 sharpenLiquidColorTransition(vec2 uv, vec4 centerColor)
-{
-    const number inverseSqrtTwo = 0.70710678;
-    vec2 horizontalOffset = vec2(transitionOffset.x, 0.0);
-    vec2 verticalOffset = vec2(0.0, transitionOffset.y);
-    vec2 diagonalOffset = (horizontalOffset + verticalOffset) * inverseSqrtTwo;
-    vec2 oppositeDiagonalOffset = (horizontalOffset - verticalOffset) * inverseSqrtTwo;
-    number strongestContrast = 0.0;
-    vec4 colorBefore = centerColor;
-    vec4 colorAfter = centerColor;
-
-    considerLiquidColorBoundary(uv, horizontalOffset, strongestContrast, colorBefore, colorAfter);
-    considerLiquidColorBoundary(uv, verticalOffset, strongestContrast, colorBefore, colorAfter);
-    considerLiquidColorBoundary(uv, diagonalOffset, strongestContrast, colorBefore, colorAfter);
-    considerLiquidColorBoundary(uv, oppositeDiagonalOffset, strongestContrast, colorBefore, colorAfter);
-
-    if (strongestContrast < 0.0001)
+    else if (groupWeights.b > groupWeights.r && groupWeights.b > groupWeights.g)
     {
-        return centerColor;
+        selectedColor = heavyColor;
     }
 
-    vec3 beforePremultiplied = colorBefore.rgb * colorBefore.a;
-    vec3 afterPremultiplied = colorAfter.rgb * colorAfter.a;
-    vec3 colorSpan = afterPremultiplied - beforePremultiplied;
-    vec3 centerPremultiplied = centerColor.rgb * centerColor.a;
-    number blend = clamp(
-        dot(centerPremultiplied - beforePremultiplied, colorSpan) / strongestContrast,
-        0.0,
-        1.0);
-    number sharpness = clamp(colorTransitionSharpness / 3.0, 0.0, 1.0);
-    number transitionWidth = mix(1.0, 0.08, sharpness);
-    number splineBlend = smoothstep(
-        0.5 - transitionWidth * 0.5,
-        0.5 + transitionWidth * 0.5,
-        blend);
-    number opacity = mix(colorBefore.a, colorAfter.a, splineBlend);
-    vec3 premultipliedColor = mix(beforePremultiplied, afterPremultiplied, splineBlend);
-    vec3 color = opacity > 0.0001
-        ? premultipliedColor / opacity
-        : vec3(0.0);
-    return vec4(color, opacity);
+    return vec4(selectedColor, clamp(opacityWeight / densityWeight, 0.0, 1.0));
 }
 
 vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_coords)
@@ -89,10 +36,6 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     vec2 uv = clamp((screen_coords - tankOrigin) / tankSize, 0.0, 1.0);
     number density = getDensity(uv);
     vec4 sampledLiquidColor = getLiquidColor(uv);
-    if (colorTransitionSharpness > 0.0)
-    {
-        sampledLiquidColor = sharpenLiquidColorTransition(uv, sampledLiquidColor);
-    }
 
     number leftDensity = getDensity(uv - vec2(fieldTexelSize.x, 0.0));
     number rightDensity = getDensity(uv + vec2(fieldTexelSize.x, 0.0));
@@ -110,8 +53,6 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
             abs(pixelUpDensity - pixelDownDensity))
             * 0.5,
         0.0005);
-    number edgeHalfWidth = max(screenDensityDerivative * 0.5, 0.00025);
-
     vec4 accumulatedDensity = Texel(densityField, uv);
     vec2 encodedVelocity = clamp(
         accumulatedDensity.gb / max(accumulatedDensity.r, 0.0001),
@@ -126,7 +67,7 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     number diffuse = 0.58 + 0.42 * clamp(dot(normal, lightDirection), 0.0, 1.0);
     vec3 halfDirection = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
     number specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 28.0);
-    number alpha = smoothstep(0.5 - edgeHalfWidth, 0.5 + edgeHalfWidth, density);
+    number alpha = step(0.5, density);
     number pixelsFromEdge = (density - 0.5) / screenDensityDerivative;
     number edge = 1.0 - smoothstep(0.0, 2.0, pixelsFromEdge);
 

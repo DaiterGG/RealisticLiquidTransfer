@@ -1,15 +1,15 @@
 extern vec2 center;
 extern vec2 pixelScale;
 extern vec2 velocity;
-extern vec4 dropletColor;
+extern number dropOpacity;
+extern number dropGroup;
 extern number dropRadius;
-extern number supportScale;
 extern number fieldMode;
 
 vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords)
 {
     vec2 offset = (screen_coords - center) / pixelScale;
-    number supportRadius = dropRadius * supportScale;
+    number supportRadius = dropRadius * 2.2;
     number speed = length(velocity);
     bool hasDirection = speed > 0.001;
     vec2 direction = hasDirection ? velocity / speed : vec2(0.0);
@@ -46,13 +46,26 @@ vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords)
             contribution,
             encodedVelocity.x * contribution,
             encodedVelocity.y * contribution,
-            contribution);
+            0.0);
     }
 
     if (fieldMode < 1.5)
     {
-        return vec4(dropletColor.rgb * dropletColor.a * contribution, 0.0);
+        vec3 groupWeights = vec3(0.0);
+        if (dropGroup < 0.5)
+        {
+            groupWeights.r = dropOpacity * contribution;
+        }
+        else if (dropGroup < 1.5)
+        {
+            groupWeights.g = dropOpacity * contribution;
+        }
+        else
+        {
+            groupWeights.b = dropOpacity * contribution;
+        }
+        return vec4(groupWeights, 0.0);
     }
 
-    return vec4(dropletColor.a * contribution, 0.0, 0.0, 0.0);
+    return vec4(dropOpacity * contribution, 0.0, 0.0, 0.0);
 }

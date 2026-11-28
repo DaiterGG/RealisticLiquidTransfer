@@ -19,7 +19,6 @@ local shaderEnabled = true
 local status = "Loading shader..."
 local draggingControl
 local fieldPixelsPerUnit = 0.5
-local influenceScale = 2.2
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -88,7 +87,7 @@ local function renderLiquidFields(bounds)
         for _, drop in ipairs(simulation.drops) do
             local centerX = (drop.x - bounds.left) * scaleX
             local centerY = (drop.y - bounds.top) * scaleY
-            local supportRadius = drop.radius * influenceScale
+            local supportRadius = drop.radius * 2.2
             local speed = math.sqrt(drop.vx * drop.vx + drop.vy * drop.vy)
             local tailLength = drop.radius * 2.5 * clamp(speed / 600, 0, 1)
             local extent = supportRadius + tailLength
@@ -96,12 +95,9 @@ local function renderLiquidFields(bounds)
             fieldShader:send("center", { centerX, centerY })
             fieldShader:send("pixelScale", { scaleX, scaleY })
             fieldShader:send("velocity", { drop.vx, drop.vy })
-            fieldShader:send(
-                "dropletColor",
-                { drop.color[1], drop.color[2], drop.color[3], drop.opacity }
-            )
+            fieldShader:send("dropOpacity", drop.opacity)
+            fieldShader:send("dropGroup", drop.kind - 1)
             fieldShader:send("dropRadius", drop.radius)
-            fieldShader:send("supportScale", influenceScale)
             love.graphics.rectangle(
                 "fill",
                 centerX - extent * scaleX,
@@ -121,7 +117,6 @@ local function controlLayout()
     return {
         panelTop = height - 146,
         size = { x = 150, y = height - 124, width = 240 },
-        influence = { labelX = 520, x = 650, y = height - 124, width = 180 },
         groupStartY = height - 92,
         groupStep = 30,
         hue = { labelX = 110, x = 150, width = 140 },
@@ -153,8 +148,6 @@ local function setControlValue(control, x)
     local value = sliderValue(control.slider, x)
     if control.kind == "size" then
         simulation:setDropRadius(4 + value * 38)
-    elseif control.kind == "influence" then
-        influenceScale = 1 + value * 3
     elseif control.kind == "hue" then
         simulation:setTypeHue(control.group, value)
     elseif control.kind == "saturation" then
@@ -221,18 +214,6 @@ local function controlAt(x, y)
     }
     if math.abs(y - sizeSlider.y) <= 11 and x >= sizeSlider.x - 6 and x <= sizeSlider.x + sizeSlider.width + 6 then
         return { kind = "size", slider = sizeSlider }
-    end
-
-    local influenceSlider = {
-        x = layout.influence.x,
-        y = layout.influence.y,
-        width = layout.influence.width,
-    }
-    if math.abs(y - influenceSlider.y) <= 11
-        and x >= influenceSlider.x - 6
-        and x <= influenceSlider.x + influenceSlider.width + 6
-    then
-        return { kind = "influence", slider = influenceSlider }
     end
 
     for group = 1, #Simulation.types do
@@ -367,11 +348,9 @@ function love.draw()
             "fieldTexelSize",
             { 1 / densityCanvasWidth, 1 / densityCanvasHeight }
         )
-        shader:send(
-            "transitionOffset",
-            { 3 / densityCanvasWidth, 3 / densityCanvasHeight }
-        )
-        shader:send("colorTransitionSharpness", 3)
+        shader:send("lightColor", Simulation.types[1].color)
+        shader:send("mediumColor", Simulation.types[2].color)
+        shader:send("heavyColor", Simulation.types[3].color)
 
         love.graphics.setBlendMode("alpha", "alphamultiply")
         love.graphics.setShader(shader)
@@ -456,17 +435,6 @@ function love.draw()
     local radiusValue = (simulation.dropRadius - 4) / 38
     drawSlider(layout.size, radiusValue, { 0.82, 0.91, 0.95 })
     love.graphics.print(string.format("%.1f px", simulation.dropRadius), 400, layout.size.y - 7)
-    love.graphics.print("Influence radius", layout.influence.labelX, layout.influence.y - 7)
-    drawSlider(
-        layout.influence,
-        (influenceScale - 1) / 3,
-        { 0.35, 0.74, 0.95 }
-    )
-    love.graphics.print(
-        string.format("%.1fx", influenceScale),
-        layout.influence.x + layout.influence.width + 10,
-        layout.influence.y - 7
-    )
 
     for kind, liquid in ipairs(types) do
         local rowY = layout.groupStartY + (kind - 1) * layout.groupStep

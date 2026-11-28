@@ -155,26 +155,25 @@ function Simulation:reset(bounds)
     end
 
     local radius = self.dropRadius
-    local spacing = radius * 2 + 1
     local availableWidth = math.max(0, bounds.right - bounds.left - radius * 2)
     local availableHeight = math.max(0, bounds.bottom - bounds.top - radius * 2)
-    local columns = math.max(1, math.min(34, math.floor(availableWidth / spacing) + 1))
-    local rows = math.ceil(#kinds / columns)
-    local spacingX = columns > 1 and math.min(spacing, availableWidth / (columns - 1)) or 0
-    local spacingY = rows > 1 and math.min(spacing, availableHeight / (rows - 1)) or 0
-    local startX = bounds.left + radius
-        + (availableWidth - (columns - 1) * spacingX) * 0.5
+    local spacingX = radius * 2
+    local spacingY = radius * math.sqrt(3)
+    local columns = math.max(1, math.min(34, math.floor(availableWidth / spacingX) + 1))
+    local rowCount = math.ceil(#kinds / columns)
+    local gridWidth = (columns - 1) * spacingX + spacingX * 0.5
+    local startX = bounds.left + radius + (availableWidth - gridWidth) * 0.5
     local startY = bounds.top + radius
-        + (availableHeight - (rows - 1) * spacingY) * 0.5
+    if rowCount > 1 then
+        spacingY = math.min(spacingY, availableHeight / (rowCount - 1))
+    end
 
     for index, kind in ipairs(kinds) do
         local column = (index - 1) % columns
         local row = math.floor((index - 1) / columns)
-        local rowCount = math.min(columns, #kinds - row * columns)
-        local rowStartX = startX + (columns - rowCount) * spacingX * 0.5
         self:addDrop(
             kind,
-            rowStartX + column * spacingX + love.math.random() * 0.4 - 0.2,
+            startX + column * spacingX + row % 2 * spacingX * 0.5 + love.math.random() * 0.4 - 0.2,
             startY + row * spacingY + love.math.random() * 0.4 - 0.2
         )
     end
