@@ -13,7 +13,7 @@ local SORT_STRENGTH = 1900
 local FIXED_STEP = 1 / 60
 local RESTITUTION = 0.08
 
-Simulation.defaultDropRadius = 8
+Simulation.defaultDropRadius = 30
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -81,18 +81,18 @@ function Simulation:setTypeSaturation(kind, saturation)
         return false
     end
 
-    function Simulation:setTypeValue(kind, value)
-        local liquid = Simulation.types[kind]
-        if not liquid then
-            return false
-        end
+    liquid.saturation = clamp(saturation, 0, 1)
+    updateLiquidColor(liquid)
+    return true
+end
 
-        liquid.value = clamp(value, 0, 1)
-        updateLiquidColor(liquid)
-        return true
+function Simulation:setTypeValue(kind, value)
+    local liquid = Simulation.types[kind]
+    if not liquid then
+        return false
     end
 
-    liquid.saturation = clamp(saturation, 0, 1)
+    liquid.value = clamp(value, 0, 1)
     updateLiquidColor(liquid)
     return true
 end
@@ -154,19 +154,28 @@ function Simulation:reset(bounds)
         kinds[index], kinds[swapIndex] = kinds[swapIndex], kinds[index]
     end
 
-    local width = bounds.right - bounds.left
-    local spacing = self.dropRadius * 2 + 1
-    local columns = math.max(1, math.min(34, math.floor(width / spacing)))
-    local startX = (bounds.left + bounds.right - (columns - 1) * spacing) / 2
-    local startY = bounds.top + self.dropRadius + 26
+    local radius = self.dropRadius
+    local spacing = radius * 2 + 1
+    local availableWidth = math.max(0, bounds.right - bounds.left - radius * 2)
+    local availableHeight = math.max(0, bounds.bottom - bounds.top - radius * 2)
+    local columns = math.max(1, math.min(34, math.floor(availableWidth / spacing) + 1))
+    local rows = math.ceil(#kinds / columns)
+    local spacingX = columns > 1 and math.min(spacing, availableWidth / (columns - 1)) or 0
+    local spacingY = rows > 1 and math.min(spacing, availableHeight / (rows - 1)) or 0
+    local startX = bounds.left + radius
+        + (availableWidth - (columns - 1) * spacingX) * 0.5
+    local startY = bounds.top + radius
+        + (availableHeight - (rows - 1) * spacingY) * 0.5
 
     for index, kind in ipairs(kinds) do
         local column = (index - 1) % columns
         local row = math.floor((index - 1) / columns)
+        local rowCount = math.min(columns, #kinds - row * columns)
+        local rowStartX = startX + (columns - rowCount) * spacingX * 0.5
         self:addDrop(
             kind,
-            startX + column * spacing + love.math.random() * 0.4 - 0.2,
-            startY + row * spacing + love.math.random() * 0.4 - 0.2
+            rowStartX + column * spacingX + love.math.random() * 0.4 - 0.2,
+            startY + row * spacingY + love.math.random() * 0.4 - 0.2
         )
     end
 end

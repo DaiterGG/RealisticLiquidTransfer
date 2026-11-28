@@ -3,12 +3,13 @@ extern vec2 pixelScale;
 extern vec2 velocity;
 extern vec4 dropletColor;
 extern number dropRadius;
+extern number supportScale;
 extern number fieldMode;
 
 vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords)
 {
     vec2 offset = (screen_coords - center) / pixelScale;
-    number supportRadius = dropRadius * 2.2;
+    number supportRadius = dropRadius * supportScale;
     number speed = length(velocity);
     bool hasDirection = speed > 0.001;
     vec2 direction = hasDirection ? velocity / speed : vec2(0.0);
