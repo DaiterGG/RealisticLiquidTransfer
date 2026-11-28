@@ -31,7 +31,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float FastDropMaximumCollisionSpeed = 1000f;
     private const int CircularBottleMotionDurationSeconds = 20;
     private const float CircularBottleMotionRadius = 80f;
-    private const float CircularBottleMotionPeriodSeconds = 5f;
+    private const float CircularBottleMotionPeriodSeconds = 1f;
     private const float CenterBottleSyringeCapacity = 100f;
     private const float CenterBottleSyringeIntakeRate = 25.2f;
     private const float CenterBottleSyringePlungerRate = CenterBottleSyringeIntakeRate * 0.8f;
