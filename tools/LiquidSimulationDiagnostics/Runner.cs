@@ -1021,17 +1021,15 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedDropRemoved = false;
             var trackedDropInsideReceiver = false;
             byte trackedDropOwner = 0;
-            var previousContainerLiquidAmounts = new float[2];
-            var currentContainerLiquidAmounts = new float[2];
-            var inflowPoseContainerLiquidAmounts = new float[2];
+            var previousContainerInflowTotals = new float[2];
+            var currentContainerInflowTotals = new float[2];
             var movementInitialSourcePosition = source.anchoredPosition;
             var maximumFrameInflow = 0f;
             var totalPositiveInflow = 0f;
             var framesWithPositiveInflow = 0;
             if (containerMovementScenario)
             {
-                simulation.GetContainerLiquidAmounts(previousContainerLiquidAmounts);
-                simulation.CaptureContainerPoseForInflow();
+                simulation.GetContainerInflowTotals(previousContainerInflowTotals);
             }
 
             var minimumFunnelWallClearance = float.PositiveInfinity;
@@ -1070,27 +1068,20 @@ public static class LiquidSimulationDiagnosticsRunner
                         source.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
                     }
 
-                    if (containerMovementScenario)
-                    {
-                        simulation.CaptureContainerPoseForInflow();
-                    }
-
                     simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
                 }
 
                 if (containerMovementScenario)
                 {
-                    simulation.GetContainerLiquidAmounts(
-                        currentContainerLiquidAmounts,
-                        inflowPoseContainerLiquidAmounts);
+                    simulation.GetContainerInflowTotals(currentContainerInflowTotals);
                     for (var containerIndex = 0;
-                        containerIndex < currentContainerLiquidAmounts.Length;
+                        containerIndex < currentContainerInflowTotals.Length;
                         containerIndex++)
                     {
                         frameInflow += Mathf.Max(
                             0f,
-                            inflowPoseContainerLiquidAmounts[containerIndex]
-                                - previousContainerLiquidAmounts[containerIndex]);
+                            currentContainerInflowTotals[containerIndex]
+                                - previousContainerInflowTotals[containerIndex]);
                     }
 
                     maximumFrameInflow = Mathf.Max(maximumFrameInflow, frameInflow);
@@ -1101,9 +1092,9 @@ public static class LiquidSimulationDiagnosticsRunner
                     }
 
                     Array.Copy(
-                        currentContainerLiquidAmounts,
-                        previousContainerLiquidAmounts,
-                        currentContainerLiquidAmounts.Length);
+                        currentContainerInflowTotals,
+                        previousContainerInflowTotals,
+                        currentContainerInflowTotals.Length);
                 }
 
                 var drops = simulation.CaptureDropSnapshots();

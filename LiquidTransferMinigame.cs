@@ -129,9 +129,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private readonly List<FillRateSample> fillRateSamples =
         new List<FillRateSample>();
     private readonly float[] fillRateWindowAmounts = new float[2];
-    private readonly float[] lastContainerLiquidAmounts = new float[2];
+    private readonly float[] lastContainerInflowTotals = new float[2];
+    private readonly float[] currentContainerInflowTotals = new float[2];
     private readonly float[] currentContainerLiquidAmounts = new float[2];
-    private readonly float[] inflowPoseContainerLiquidAmounts = new float[2];
     private ContainerMaterial receivingContainerMaterial;
     private ContainerMaterial sourceContainerMaterial;
     private float containerImpactThreshold = DefaultContainerImpactThreshold;
@@ -574,7 +574,7 @@ internal sealed class LiquidTransferMinigame : Minigame
 
         InitializeSyringeHandlePositions();
         liquidSimulation.ConfigureForMinigame(SimulationFrozen);
-        liquidSimulation.GetContainerLiquidAmounts(lastContainerLiquidAmounts);
+        liquidSimulation.GetContainerInflowTotals(lastContainerInflowTotals);
         DebugLog.Write(
             $"Minigame started: receiver outline points={receivingContainer.OutlinePoints.Length}, "
             + $"source outline points={sourceContainer.OutlinePoints.Length}, fitScale={fitScale:F3}, "
@@ -731,26 +731,24 @@ internal sealed class LiquidTransferMinigame : Minigame
             UpdateFunnelGeometry();
         }
 
-        liquidSimulation.CaptureContainerPoseForInflow();
         liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
-        liquidSimulation.GetContainerLiquidAmounts(
-            currentContainerLiquidAmounts,
-            inflowPoseContainerLiquidAmounts);
-        UpdateFillAudio(Time.unscaledTime, inflowPoseContainerLiquidAmounts);
+        liquidSimulation.GetContainerLiquidAmounts(currentContainerLiquidAmounts);
+        liquidSimulation.GetContainerInflowTotals(currentContainerInflowTotals);
+        UpdateFillAudio(Time.unscaledTime, currentContainerInflowTotals);
         System.Array.Copy(
-            currentContainerLiquidAmounts,
-            lastContainerLiquidAmounts,
-            currentContainerLiquidAmounts.Length);
+            currentContainerInflowTotals,
+            lastContainerInflowTotals,
+            currentContainerInflowTotals.Length);
     }
 
-    private void UpdateFillAudio(float currentTime, float[] inflowPoseAmounts)
+    private void UpdateFillAudio(float currentTime, float[] inflowTotals)
     {
         for (var containerIndex = 0;
             containerIndex < currentContainerLiquidAmounts.Length;
             containerIndex++)
         {
-            var enteredAmount = inflowPoseAmounts[containerIndex]
-                - lastContainerLiquidAmounts[containerIndex];
+            var enteredAmount = inflowTotals[containerIndex]
+                - lastContainerInflowTotals[containerIndex];
             if (enteredAmount > 0.001f)
             {
                 fillRateSamples.Add(
