@@ -43,8 +43,8 @@ public static class LiquidSimulationDiagnosticsRunner
     private const string WaterBottleIntoMiniBarrelScenario = "water-bottle-into-minibarrel";
     private const string WaterBottleSourceIntoEmptyMiniBarrelScenario =
         "water-bottle-source-into-empty-minibarrel";
-    private const string UprightWaterBottleReceiverIntoFilledMiniBarrelScenario =
-        "upright-water-bottle-receiver-into-filled-minibarrel";
+    private const string WaterBottleReceiverWithLiquidIntoEmptyMiniBarrelScenario =
+        "water-bottle-receiver-full-into-empty-minibarrel";
     private const string EmptyWaterBottleIntoFilledMiniBarrelScenario =
         "empty-water-bottle-into-filled-minibarrel";
     private static StreamWriter log;
@@ -64,7 +64,7 @@ public static class LiquidSimulationDiagnosticsRunner
 
             if (scenario == WaterBottleIntoMiniBarrelScenario
                 || scenario == WaterBottleSourceIntoEmptyMiniBarrelScenario
-                || scenario == UprightWaterBottleReceiverIntoFilledMiniBarrelScenario
+                || scenario == WaterBottleReceiverWithLiquidIntoEmptyMiniBarrelScenario
                 || scenario == EmptyWaterBottleIntoFilledMiniBarrelScenario)
             {
                 RunWaterBottleIntoMiniBarrelScenario(scenario);
@@ -1689,15 +1689,17 @@ public static class LiquidSimulationDiagnosticsRunner
             var barrelSpriteSize = LoadVisibleSpriteSize(
                 Path.Combine(repositoryRoot, "resources", "sprites", "containers", "minibarreltop.png"));
             var bottleIsSource = scenarioName == WaterBottleSourceIntoEmptyMiniBarrelScenario;
-            var bottlePassesUpright = bottleIsSource
-                || scenarioName == UprightWaterBottleReceiverIntoFilledMiniBarrelScenario;
+            var bottleIsReceiverWithLiquid =
+                scenarioName == WaterBottleReceiverWithLiquidIntoEmptyMiniBarrelScenario;
+            var bottleHasLiquid = bottleIsSource || bottleIsReceiverWithLiquid;
+            var bottlePassesUpright = bottleHasLiquid;
             var bottle = CreateContainer(
                 root,
-                bottleIsSource ? "FullWaterBottle" : "EmptyWaterBottle",
+                bottleHasLiquid ? "FullWaterBottle" : "EmptyWaterBottle",
                 bottleSpriteSize);
             var barrel = CreateContainer(
                 root,
-                bottleIsSource ? "EmptyMiniBarrel" : "FullMiniBarrel",
+                bottleHasLiquid ? "EmptyMiniBarrel" : "FullMiniBarrel",
                 barrelSpriteSize);
             var bottleScale = LiquidContainerLayout.TryGetAreaScaledScale(
                 WaterBottleCapacity,
@@ -1764,17 +1766,21 @@ public static class LiquidSimulationDiagnosticsRunner
             var sourceContainer = bottleIsSource ? bottle : barrel;
             var sourceBoundary = bottleIsSource ? bottleBoundary : barrelBoundary;
             var sourceCapacity = bottleIsSource ? WaterBottleCapacity : MiniBarrelCapacity;
-            var sourceAmount = sourceCapacity;
-            var water = new[]
-            {
-                new LiquidProfileEntry(
-                    "water",
-                    sourceAmount,
-                    new Color(0.16f, 0.5f, 0.95f))
-            };
-            const float receiverAmount = 0f;
-            var initialBottleAmount = bottleIsSource ? sourceAmount : receiverAmount;
-            var initialBarrelAmount = bottleIsSource ? receiverAmount : sourceAmount;
+            var initialBottleAmount = bottleHasLiquid ? WaterBottleCapacity : 0f;
+            var initialBarrelAmount = bottleHasLiquid ? 0f : MiniBarrelCapacity;
+            var receiverAmount = bottleIsSource
+                ? initialBarrelAmount
+                : initialBottleAmount;
+            var sourceAmount = bottleIsSource
+                ? initialBottleAmount
+                : initialBarrelAmount;
+            var waterColor = new Color(0.16f, 0.5f, 0.95f);
+            var receiverLiquids = receiverAmount > 0f
+                ? new[] { new LiquidProfileEntry("water", receiverAmount, waterColor) }
+                : Array.Empty<LiquidProfileEntry>();
+            var sourceLiquids = sourceAmount > 0f
+                ? new[] { new LiquidProfileEntry("water", sourceAmount, waterColor) }
+                : Array.Empty<LiquidProfileEntry>();
             var simulation = new LiquidSimulation(
                 root,
                 receiverContainer,
@@ -1787,8 +1793,8 @@ public static class LiquidSimulationDiagnosticsRunner
                 sourceCapacity,
                 receiverAmount,
                 sourceAmount,
-                Array.Empty<LiquidProfileEntry>(),
-                water,
+                receiverLiquids,
+                sourceLiquids,
                 LiquidSimulation.DefaultPackingTenths / 100f,
                 headless: true);
             simulation.ConfigureForMinigame(false);
@@ -1801,6 +1807,10 @@ public static class LiquidSimulationDiagnosticsRunner
             var barrelContainerIndex = bottleIsSource
                 ? receiverContainerIndex
                 : sourceContainerIndex;
+            var liquidOwnerContainer = bottleHasLiquid ? bottle : barrel;
+            var liquidOwnerContainerIndex = bottleHasLiquid
+                ? bottleContainerIndex
+                : barrelContainerIndex;
             var initialDrops = simulation.CaptureDropSnapshots();
             if (simulation.GetInitialContainerDropCount(bottleContainerIndex)
                     != initialBottleAmount
@@ -1809,7 +1819,7 @@ public static class LiquidSimulationDiagnosticsRunner
                 || initialDrops.Length == 0)
             {
                 throw new InvalidOperationException(
-                    $"Fixture did not seed the requested source: bottle="
+                    $"Fixture did not seed the requested liquid amounts: bottle="
                     + $"{simulation.GetInitialContainerDropCount(bottleContainerIndex)}"
                     + $"/{initialBottleAmount:F0}ml, barrel="
                     + $"{simulation.GetInitialContainerDropCount(barrelContainerIndex)}"
@@ -1819,7 +1829,7 @@ public static class LiquidSimulationDiagnosticsRunner
 
             const int destinationContainerIndex = receiverContainerIndex;
             var trackedDrop = initialDrops[0];
-            var trackedInitialOffset = sourceContainer.InverseTransformPoint(
+            var trackedInitialOwnerOffset = liquidOwnerContainer.InverseTransformPoint(
                 root.TransformPoint(trackedDrop.Position));
             var trackedStartDistance = float.PositiveInfinity;
             foreach (var drop in initialDrops)
@@ -1832,15 +1842,15 @@ public static class LiquidSimulationDiagnosticsRunner
                 }
             }
 
-            trackedInitialOffset = sourceContainer.InverseTransformPoint(
+            trackedInitialOwnerOffset = liquidOwnerContainer.InverseTransformPoint(
                 root.TransformPoint(trackedDrop.Position));
             var trackedDropId = trackedDrop.Id;
             var trackedPosition = trackedDrop.Position;
             var trackedVelocity = trackedDrop.Velocity;
             var previousTrackedPosition = trackedPosition;
-            var trackedSourceLocal = (Vector2)trackedInitialOffset;
+            var trackedOwnerLocal = (Vector2)trackedInitialOwnerOffset;
             var maximumFrameMovement = 0f;
-            var maximumSourceRelativeDrift = 0f;
+            var maximumOwnerRelativeDrift = 0f;
             var maximumTrackedSpeed = 0f;
             var framesWithUnassignedLiquid = 0;
             var maximumUnassignedUnits = 0;
@@ -1848,7 +1858,7 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedDropRemoved = false;
             var firstTrackedDropMissingFrame = -1;
             var trackedDropEnteredDestination = false;
-            var trackedOwner = (byte)(sourceContainerIndex + 1);
+            var trackedOwner = (byte)(liquidOwnerContainerIndex + 1);
             var expectedUnits = simulation.Count;
             var movementFrames = Mathf.CeilToInt(
                 BottleMovementDurationSeconds * GameUpdatesPerSecond);
@@ -1870,8 +1880,8 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"initialBarrelAmount={initialBarrelAmount:F1}ml, "
                 + $"particles={initialDrops.Length}, trackedDrop={trackedDropId}, "
                 + $"trackedDropVolume={trackedDrop.Volume}ml, "
-                + $"trackedInitialSourceLocal=({trackedInitialOffset.x:F3},"
-                + $"{trackedInitialOffset.y:F3}), trackedStartDistance={trackedStartDistance:F3}px, "
+                + $"trackedInitialOwnerLocal=({trackedInitialOwnerOffset.x:F3},"
+                + $"{trackedInitialOwnerOffset.y:F3}), trackedStartDistance={trackedStartDistance:F3}px, "
                 + $"source={(bottleIsSource ? "waterbottle" : "minibarrel")}.");
 
             for (var frame = 0; frame <= SimulationFrames; frame++)
@@ -1928,20 +1938,20 @@ public static class LiquidSimulationDiagnosticsRunner
                     trackedDropFound = true;
                     var insideBottle = simulation.ContainsContainer(bottleContainerIndex, drop.Position);
                     var insideBarrel = simulation.ContainsContainer(barrelContainerIndex, drop.Position);
-                    var sourceLocal = (Vector2)sourceContainer.InverseTransformPoint(
+                    var ownerLocal = (Vector2)liquidOwnerContainer.InverseTransformPoint(
                         root.TransformPoint(drop.Position));
 
                     var frameMovement = Vector2.Distance(previousTrackedPosition, drop.Position);
-                    var sourceRelativeDrift = Vector2.Distance(trackedInitialOffset, sourceLocal);
+                    var ownerRelativeDrift = Vector2.Distance(trackedInitialOwnerOffset, ownerLocal);
                     var ownerName = drop.ContainerAssignment == bottleContainerIndex + 1
                         ? "waterbottle"
                         : drop.ContainerAssignment == barrelContainerIndex + 1
                             ? "minibarrel"
                             : "unassigned";
                     maximumFrameMovement = Mathf.Max(maximumFrameMovement, frameMovement);
-                    maximumSourceRelativeDrift = Mathf.Max(
-                        maximumSourceRelativeDrift,
-                        sourceRelativeDrift);
+                    maximumOwnerRelativeDrift = Mathf.Max(
+                        maximumOwnerRelativeDrift,
+                        ownerRelativeDrift);
                     maximumTrackedSpeed = Mathf.Max(maximumTrackedSpeed, drop.Velocity.magnitude);
                     trackedDropEnteredDestination |=
                         simulation.ContainsContainer(destinationContainerIndex, drop.Position);
@@ -1952,12 +1962,12 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"insideBarrel={insideBarrel} owner={ownerName}({drop.ContainerAssignment}) "
                         + $"position=({drop.Position.x:F3},{drop.Position.y:F3}) "
                         + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}) "
-                        + $"sourceLocal=({sourceLocal.x:F3},{sourceLocal.y:F3}) "
-                        + $"frameMove={frameMovement:F3} sourceDrift={sourceRelativeDrift:F3} "
+                        + $"ownerLocal=({ownerLocal.x:F3},{ownerLocal.y:F3}) "
+                        + $"frameMove={frameMovement:F3} ownerDrift={ownerRelativeDrift:F3} "
                         + "removed=false.");
                     trackedPosition = drop.Position;
                     trackedVelocity = drop.Velocity;
-                    trackedSourceLocal = sourceLocal;
+                    trackedOwnerLocal = ownerLocal;
                     previousTrackedPosition = drop.Position;
                 }
 
@@ -1974,8 +1984,8 @@ public static class LiquidSimulationDiagnosticsRunner
                         + $"id={trackedDropId} insideBottle=false insideBarrel=false "
                         + $"owner=removed position=({trackedPosition.x:F3},{trackedPosition.y:F3}) "
                         + $"velocity=({trackedVelocity.x:F3},{trackedVelocity.y:F3}) "
-                        + $"sourceLocal=({trackedSourceLocal.x:F3},{trackedSourceLocal.y:F3}) "
-                        + "frameMove=0.000 sourceDrift=0.000 removed=true.");
+                        + $"ownerLocal=({trackedOwnerLocal.x:F3},{trackedOwnerLocal.y:F3}) "
+                        + "frameMove=0.000 ownerDrift=0.000 removed=true.");
                 }
 
                 framesWithUnassignedLiquid += unassignedUnits > 0 ? 1 : 0;
@@ -2003,22 +2013,23 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"maximumUnassigned={maximumUnassignedUnits}ml, "
                 + $"maximumUnaccounted={maximumUnaccountedUnits}ml, "
                 + $"maximumFrameMovement={maximumFrameMovement:F3}px/frame, "
-                + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
+                + $"maximumOwnerRelativeDrift={maximumOwnerRelativeDrift:F3}px, "
                 + $"maximumTrackedSpeed={maximumTrackedSpeed:F3}px/s.");
             if (finalBottleAmount <= 0f)
             {
-                throw new InvalidOperationException(bottleIsSource
-                    ? $"The upright source bottle was emptied during passage; "
-                        + $"barrel received {finalBarrelAmount:F1}ml."
-                    : bottlePassesUpright
-                        ? "No liquid entered the upright receiver bottle."
-                        : "No liquid entered the lowered water bottle.");
+                throw new InvalidOperationException(
+                    bottleIsSource || bottleIsReceiverWithLiquid
+                        ? $"The upright bottle lost all liquid during passage; "
+                            + $"barrel contains {finalBarrelAmount:F1}ml."
+                        : bottlePassesUpright
+                            ? "No liquid entered the upright receiver bottle."
+                            : "No liquid entered the lowered water bottle.");
             }
 
             WriteLine(
                 $"PASS: {scenarioName} diagnostic completed; "
-                + (bottleIsSource
-                    ? "upright passage retained the source liquid."
+                + (bottleHasLiquid
+                    ? $"upright passage retained {finalBottleAmount:F1}ml in the bottle."
                     : bottlePassesUpright
                         ? "upright receiver passage completed."
                         : "liquid loss is logged for observation."));
