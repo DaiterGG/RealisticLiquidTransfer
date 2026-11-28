@@ -7,6 +7,7 @@ extern vec2 fieldTexelSize;
 extern vec3 lightColor;
 extern vec3 mediumColor;
 extern vec3 heavyColor;
+extern number edgeBlur;
 
 number getDensity(vec2 uv)
 {
@@ -68,6 +69,11 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     vec3 halfDirection = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
     number specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 28.0);
     number alpha = step(0.5, density);
+    if (edgeBlur > 0.0)
+    {
+        number edgeHalfWidth = screenDensityDerivative * edgeBlur;
+        alpha = smoothstep(0.5 - edgeHalfWidth, 0.5 + edgeHalfWidth, density);
+    }
     number pixelsFromEdge = (density - 0.5) / screenDensityDerivative;
     number edge = 1.0 - smoothstep(0.0, 2.0, pixelsFromEdge);
 

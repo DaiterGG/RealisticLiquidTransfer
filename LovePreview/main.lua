@@ -19,6 +19,7 @@ local shaderEnabled = true
 local status = "Loading shader..."
 local draggingControl
 local fieldPixelsPerUnit = 0.5
+local edgeBlur = 1.5
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -117,6 +118,7 @@ local function controlLayout()
     return {
         panelTop = height - 146,
         size = { x = 150, y = height - 124, width = 240 },
+        edgeBlur = { labelX = 480, x = 555, y = height - 124, width = 180 },
         groupStartY = height - 92,
         groupStep = 30,
         hue = { labelX = 110, x = 150, width = 140 },
@@ -148,6 +150,8 @@ local function setControlValue(control, x)
     local value = sliderValue(control.slider, x)
     if control.kind == "size" then
         simulation:setDropRadius(4 + value * 38)
+    elseif control.kind == "edgeBlur" then
+        edgeBlur = value * 6
     elseif control.kind == "hue" then
         simulation:setTypeHue(control.group, value)
     elseif control.kind == "saturation" then
@@ -214,6 +218,14 @@ local function controlAt(x, y)
     }
     if math.abs(y - sizeSlider.y) <= 11 and x >= sizeSlider.x - 6 and x <= sizeSlider.x + sizeSlider.width + 6 then
         return { kind = "size", slider = sizeSlider }
+    end
+
+    local edgeBlurSlider = layout.edgeBlur
+    if math.abs(y - edgeBlurSlider.y) <= 11
+        and x >= edgeBlurSlider.x - 6
+        and x <= edgeBlurSlider.x + edgeBlurSlider.width + 6
+    then
+        return { kind = "edgeBlur", slider = edgeBlurSlider }
     end
 
     for group = 1, #Simulation.types do
@@ -351,6 +363,7 @@ function love.draw()
         shader:send("lightColor", Simulation.types[1].color)
         shader:send("mediumColor", Simulation.types[2].color)
         shader:send("heavyColor", Simulation.types[3].color)
+        shader:send("edgeBlur", edgeBlur)
 
         love.graphics.setBlendMode("alpha", "alphamultiply")
         love.graphics.setShader(shader)
@@ -435,6 +448,15 @@ function love.draw()
     local radiusValue = (simulation.dropRadius - 4) / 38
     drawSlider(layout.size, radiusValue, { 0.82, 0.91, 0.95 })
     love.graphics.print(string.format("%.1f px", simulation.dropRadius), 400, layout.size.y - 7)
+
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Edge blur", layout.edgeBlur.labelX, layout.edgeBlur.y - 7)
+    drawSlider(layout.edgeBlur, edgeBlur / 6, { 0.55, 0.78, 0.9 })
+    love.graphics.print(
+        string.format("%.1f px", edgeBlur),
+        layout.edgeBlur.x + layout.edgeBlur.width + 10,
+        layout.edgeBlur.y - 7
+    )
 
     for kind, liquid in ipairs(types) do
         local rowY = layout.groupStartY + (kind - 1) * layout.groupStep
