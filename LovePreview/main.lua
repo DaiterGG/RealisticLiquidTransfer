@@ -88,7 +88,7 @@ local function renderLiquidFields(bounds)
             fieldShader:send("velocity", { drop.vx, drop.vy })
             fieldShader:send(
                 "dropletColor",
-                { drop.color[1], drop.color[2], drop.color[3], 1 }
+                { drop.color[1], drop.color[2], drop.color[3], drop.opacity }
             )
             fieldShader:send("dropRadius", drop.radius)
             love.graphics.rectangle(
@@ -112,8 +112,10 @@ local function controlLayout()
         size = { x = 128, y = height - 99, width = 185 },
         groupStartY = height - 78,
         groupStep = 23,
-        hue = { x = 128, width = 140 },
-        density = { x = 338, width = 145 },
+        hue = { labelX = 98, x = 128, width = 118 },
+        saturation = { labelX = 252, x = 278, width = 76 },
+        opacity = { labelX = 362, x = 418, width = 76 },
+        density = { labelX = 502, x = 555, width = 165 },
     }
 end
 
@@ -140,6 +142,10 @@ local function setControlValue(control, x)
         simulation:setDropRadius(4 + value * 38)
     elseif control.kind == "hue" then
         simulation:setTypeHue(control.group, value)
+    elseif control.kind == "saturation" then
+        simulation:setTypeSaturation(control.group, value)
+    elseif control.kind == "opacity" then
+        simulation:setTypeOpacity(control.group, 1 - value)
     elseif control.kind == "density" then
         simulation:setTypeDensity(control.group, 0.4 + value * 1.4)
     end
@@ -167,11 +173,11 @@ local function drawSlider(slider, value, color)
     love.graphics.circle("line", thumbX, slider.y, 5)
 end
 
-local function drawHueSlider(slider, hue)
+local function drawHueSlider(slider, hue, saturation)
     local segmentCount = 35
     local segmentWidth = slider.width / segmentCount
     for segment = 0, segmentCount - 1 do
-        local color = Simulation.colorForHue(segment / segmentCount)
+        local color = Simulation.colorForHue(segment / segmentCount, saturation)
         love.graphics.setColor(color[1], color[2], color[3], 1)
         love.graphics.rectangle(
             "fill",
@@ -205,6 +211,16 @@ local function controlAt(x, y)
         local hueSlider = { x = layout.hue.x, y = rowY, width = layout.hue.width }
         if math.abs(y - rowY) <= 11 and x >= hueSlider.x - 6 and x <= hueSlider.x + hueSlider.width + 6 then
             return { kind = "hue", group = group, slider = hueSlider }
+        end
+
+        local saturationSlider = { x = layout.saturation.x, y = rowY, width = layout.saturation.width }
+        if math.abs(y - rowY) <= 11 and x >= saturationSlider.x - 6 and x <= saturationSlider.x + saturationSlider.width + 6 then
+            return { kind = "saturation", group = group, slider = saturationSlider }
+        end
+
+        local opacitySlider = { x = layout.opacity.x, y = rowY, width = layout.opacity.width }
+        if math.abs(y - rowY) <= 11 and x >= opacitySlider.x - 6 and x <= opacitySlider.x + opacitySlider.width + 6 then
+            return { kind = "opacity", group = group, slider = opacitySlider }
         end
 
         local densitySlider = { x = layout.density.x, y = rowY, width = layout.density.width }
@@ -324,8 +340,15 @@ function love.draw()
             love.graphics.setColor(1, 1, 1, 0.18)
             love.graphics.rectangle("fill", x - 5, 37, 174, 27, 4, 4)
         end
-        love.graphics.setColor(liquid.color[1], liquid.color[2], liquid.color[3])
+        love.graphics.setColor(0.34, 0.4, 0.44, 1)
         love.graphics.circle("fill", x + 5, 50, 6)
+        love.graphics.setColor(
+            liquid.color[1],
+            liquid.color[2],
+            liquid.color[3],
+            liquid.opacity
+        )
+        love.graphics.circle("fill", x + 5, 50, 5)
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.print(
             string.format("%s  %.2fx  (%d)", liquid.name, liquid.density, counts[kind]),
@@ -373,14 +396,37 @@ function love.draw()
         local rowY = layout.groupStartY + (kind - 1) * layout.groupStep
         love.graphics.setColor(liquid.color[1], liquid.color[2], liquid.color[3])
         love.graphics.print(liquid.name, 43, rowY - 7)
-        love.graphics.setColor(1, 1, 1, 0.85)
-        love.graphics.print("Color", 85, rowY - 7)
+        love.graphics.setColor(0.34, 0.4, 0.44, 1)
+        love.graphics.circle("fill", 83, rowY, 7)
+        love.graphics.setColor(
+            liquid.color[1],
+            liquid.color[2],
+            liquid.color[3],
+            liquid.opacity
+        )
+        love.graphics.circle("fill", 83, rowY, 6)
 
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print("Hue", layout.hue.labelX, rowY - 7)
         local hueSlider = { x = layout.hue.x, y = rowY, width = layout.hue.width }
-        drawHueSlider(hueSlider, liquid.hue)
+        drawHueSlider(hueSlider, liquid.hue, liquid.saturation)
 
         love.graphics.setColor(1, 1, 1, 0.85)
-        love.graphics.print("Density", 280, rowY - 7)
+        love.graphics.print("Sat.", layout.saturation.labelX, rowY - 7)
+        local saturationSlider = {
+            x = layout.saturation.x,
+            y = rowY,
+            width = layout.saturation.width,
+        }
+        drawSlider(saturationSlider, liquid.saturation, liquid.color)
+
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print("Transp.", layout.opacity.labelX, rowY - 7)
+        local opacitySlider = { x = layout.opacity.x, y = rowY, width = layout.opacity.width }
+        drawSlider(opacitySlider, 1 - liquid.opacity, liquid.color)
+
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print("Density", layout.density.labelX, rowY - 7)
         local densitySlider = { x = layout.density.x, y = rowY, width = layout.density.width }
         local densityValue = (liquid.density - 0.4) / 1.4
         drawSlider(densitySlider, densityValue, liquid.color)

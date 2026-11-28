@@ -2,9 +2,9 @@ local Simulation = {}
 Simulation.__index = Simulation
 
 Simulation.types = {
-    { name = "Light", density = 0.65, hue = 0.54, color = { 0.28, 0.78, 1.0 } },
-    { name = "Medium", density = 1.0, hue = 0.36, color = { 0.35, 0.9, 0.46 } },
-    { name = "Heavy", density = 1.45, hue = 0.05, color = { 1.0, 0.42, 0.2 } },
+    { name = "Light", density = 0.65, hue = 0.54, saturation = 0.72, opacity = 1.0, color = { 0.28, 0.78, 1.0 } },
+    { name = "Medium", density = 1.0, hue = 0.36, saturation = 0.61, opacity = 1.0, color = { 0.35, 0.9, 0.46 } },
+    { name = "Heavy", density = 1.45, hue = 0.05, saturation = 0.8, opacity = 1.0, color = { 1.0, 0.42, 0.2 } },
 }
 
 local DROP_COUNT = 198
@@ -30,13 +30,22 @@ function Simulation.new(bounds)
     return self
 end
 
-local function hueToColor(hue)
+function Simulation:setDropRadius(radius)
+    self.dropRadius = clamp(radius, 4, 42)
+    for _, drop in ipairs(self.drops) do
+        drop.radius = self.dropRadius
+        drop.x = clamp(drop.x, self.bounds.left + drop.radius, self.bounds.right - drop.radius)
+        drop.y = clamp(drop.y, self.bounds.top + drop.radius, self.bounds.bottom - drop.radius)
+    end
+end
+
+local function hueToColor(hue, saturation)
     local sector = hue * 6
     local index = math.floor(sector)
     local fraction = sector - index
-    local p = 1 - 0.78
-    local q = 1 - 0.78 * fraction
-    local t = 1 - 0.78 * (1 - fraction)
+    local p = 1 - saturation
+    local q = 1 - saturation * fraction
+    local t = 1 - saturation * (1 - fraction)
     local colors = {
         { 1, t, p },
         { q, 1, p },
@@ -49,13 +58,9 @@ local function hueToColor(hue)
 end
 Simulation.colorForHue = hueToColor
 
-function Simulation:setDropRadius(radius)
-    self.dropRadius = clamp(radius, 4, 42)
-    for _, drop in ipairs(self.drops) do
-        drop.radius = self.dropRadius
-        drop.x = clamp(drop.x, self.bounds.left + drop.radius, self.bounds.right - drop.radius)
-        drop.y = clamp(drop.y, self.bounds.top + drop.radius, self.bounds.bottom - drop.radius)
-    end
+local function updateLiquidColor(liquid)
+    local color = hueToColor(liquid.hue, liquid.saturation)
+    liquid.color[1], liquid.color[2], liquid.color[3] = color[1], color[2], color[3]
 end
 
 function Simulation:setTypeHue(kind, hue)
@@ -65,8 +70,33 @@ function Simulation:setTypeHue(kind, hue)
     end
 
     liquid.hue = clamp(hue, 0, 1)
-    local color = hueToColor(liquid.hue)
-    liquid.color[1], liquid.color[2], liquid.color[3] = color[1], color[2], color[3]
+    updateLiquidColor(liquid)
+    return true
+end
+
+function Simulation:setTypeSaturation(kind, saturation)
+    local liquid = Simulation.types[kind]
+    if not liquid then
+        return false
+    end
+
+    liquid.saturation = clamp(saturation, 0, 1)
+    updateLiquidColor(liquid)
+    return true
+end
+
+function Simulation:setTypeOpacity(kind, opacity)
+    local liquid = Simulation.types[kind]
+    if not liquid then
+        return false
+    end
+
+    liquid.opacity = clamp(opacity, 0, 1)
+    for _, drop in ipairs(self.drops) do
+        if drop.kind == kind then
+            drop.opacity = liquid.opacity
+        end
+    end
     return true
 end
 
@@ -139,6 +169,7 @@ function Simulation:addDrop(kind, x, y)
     self.drops[#self.drops + 1] = {
         kind = kind,
         density = liquid.density,
+        opacity = liquid.opacity,
         color = liquid.color,
         radius = self.dropRadius,
         x = clamp(x, bounds.left + self.dropRadius, bounds.right - self.dropRadius),
