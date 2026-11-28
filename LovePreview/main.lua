@@ -1,10 +1,126 @@
+local Simulation = require("liquid_simulation")
+
 local shaderPath = "shader.glsl"
 local shader
 local lastSource
+local simulation
+local selectedKind = 1
 local elapsed = 0
 local reloadTimer = 0
 local reloadInterval = 0.25
+local paused = false
 local status = "Loading shader..."
+local draggingControl
+
+local function clamp(value, minimum, maximum)
+    return math.max(minimum, math.min(maximum, value))
+end
+
+local function tankBounds()
+    local width, height = love.graphics.getDimensions()
+    return {
+        left = 32,
+        top = 84,
+        right = width - 32,
+        bottom = height - 130,
+    }
+end
+
+local function controlLayout()
+    local height = love.graphics.getHeight()
+    return {
+        panelTop = height - 118,
+        size = { x = 128, y = height - 99, width = 185 },
+        groupStartY = height - 78,
+        groupStep = 23,
+        hue = { x = 128, width = 140 },
+        density = { x = 338, width = 145 },
+    }
+end
+
+local function sliderValue(slider, x)
+    return clamp((x - slider.x) / slider.width, 0, 1)
+end
+
+local function setControlValue(control, x)
+    local value = sliderValue(control.slider, x)
+    if control.kind == "size" then
+        simulation:setDropRadius(4 + value * 10)
+    elseif control.kind == "hue" then
+        simulation:setTypeHue(control.group, value)
+    elseif control.kind == "density" then
+        simulation:setTypeDensity(control.group, 0.4 + value * 1.4)
+    end
+end
+
+local function drawSlider(slider, value, color)
+    love.graphics.setColor(0.24, 0.31, 0.36, 1)
+    love.graphics.rectangle("fill", slider.x, slider.y - 3, slider.width, 6, 3, 3)
+
+    love.graphics.setColor(color[1], color[2], color[3], 0.95)
+    love.graphics.rectangle(
+        "fill",
+        slider.x,
+        slider.y - 3,
+        slider.width * value,
+        6,
+        3,
+        3
+    )
+
+    local thumbX = slider.x + value * slider.width
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.circle("fill", thumbX, slider.y, 5)
+    love.graphics.setColor(0.04, 0.08, 0.11, 1)
+    love.graphics.circle("line", thumbX, slider.y, 5)
+end
+
+local function drawHueSlider(slider, hue)
+    local segmentCount = 35
+    local segmentWidth = slider.width / segmentCount
+    for segment = 0, segmentCount - 1 do
+        local color = Simulation.colorForHue(segment / segmentCount)
+        love.graphics.setColor(color[1], color[2], color[3], 1)
+        love.graphics.rectangle(
+            "fill",
+            slider.x + segment * segmentWidth,
+            slider.y - 4,
+            segmentWidth + 1,
+            8
+        )
+    end
+
+    local thumbX = slider.x + hue * slider.width
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.circle("fill", thumbX, slider.y, 5)
+    love.graphics.setColor(0.04, 0.08, 0.11, 1)
+    love.graphics.circle("line", thumbX, slider.y, 5)
+end
+
+local function controlAt(x, y)
+    local layout = controlLayout()
+    local sizeSlider = {
+        x = layout.size.x,
+        y = layout.size.y,
+        width = layout.size.width,
+    }
+    if math.abs(y - sizeSlider.y) <= 11 and x >= sizeSlider.x - 6 and x <= sizeSlider.x + sizeSlider.width + 6 then
+        return { kind = "size", slider = sizeSlider }
+    end
+
+    for group = 1, #Simulation.types do
+        local rowY = layout.groupStartY + (group - 1) * layout.groupStep
+        local hueSlider = { x = layout.hue.x, y = rowY, width = layout.hue.width }
+        if math.abs(y - rowY) <= 11 and x >= hueSlider.x - 6 and x <= hueSlider.x + hueSlider.width + 6 then
+            return { kind = "hue", group = group, slider = hueSlider }
+        end
+
+        local densitySlider = { x = layout.density.x, y = rowY, width = layout.density.width }
+        if math.abs(y - rowY) <= 11 and x >= densitySlider.x - 6 and x <= densitySlider.x + densitySlider.width + 6 then
+            return { kind = "density", group = group, slider = densitySlider }
+        end
+    end
+end
 
 local function reloadShader()
     local source, readError = love.filesystem.read(shaderPath)
@@ -31,6 +147,8 @@ end
 
 function love.load()
     love.graphics.setBackgroundColor(0.025, 0.04, 0.08)
+    love.math.setRandomSeed(os.time())
+    simulation = Simulation.new(tankBounds())
     reloadShader()
     if not shader then
         error(status)
@@ -49,6 +167,11 @@ function love.update(dt)
         end
     end
 
+    simulation:setBounds(tankBounds())
+    if not paused then
+        simulation:update(dt)
+    end
+
     if shader then
         local width, height = love.graphics.getDimensions()
         shader:send("elapsed", elapsed)
@@ -64,17 +187,160 @@ function love.draw()
         love.graphics.setShader()
     end
 
-    love.graphics.setColor(0.02, 0.04, 0.08, 0.72)
-    love.graphics.rectangle("fill", 16, 16, 390, 58, 8, 8)
+    local bounds = tankBounds()
+    local counts = simulation:countByType()
+    local types = Simulation.types
+
+    love.graphics.setColor(0.015, 0.035, 0.055, 0.96)
+    love.graphics.rectangle(
+        "fill",
+        bounds.left,
+        bounds.top,
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top
+    )
+    love.graphics.setLineWidth(2)
+    love.graphics.setColor(0.56, 0.76, 0.84, 0.95)
+    love.graphics.rectangle(
+        "line",
+        bounds.left,
+        bounds.top,
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top
+    )
+
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.print("Edit shader.glsl to hot reload", 28, 25)
-    love.graphics.print("R: reload now    Esc: quit    " .. status, 28, 47)
+    love.graphics.print("LIQUID SANDBOX  |  " .. #simulation.drops .. " drops", 34, 12)
+
+    for kind, liquid in ipairs(types) do
+        local x = 36 + (kind - 1) * 185
+        if selectedKind == kind then
+            love.graphics.setColor(1, 1, 1, 0.18)
+            love.graphics.rectangle("fill", x - 5, 37, 174, 27, 4, 4)
+        end
+        love.graphics.setColor(liquid.color[1], liquid.color[2], liquid.color[3])
+        love.graphics.circle("fill", x + 5, 50, 6)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print(
+            string.format("%s  %.2fx  (%d)", liquid.name, liquid.density, counts[kind]),
+            x + 16,
+            42
+        )
+    end
+
+    love.graphics.setColor(1, 1, 1, 0.9)
+    love.graphics.print(
+        "1-3 select  |  click tank adds a drop  |  Space pause  |  Backspace reset  |  R reload shader",
+        34,
+        64
+    )
+
+    for _, drop in ipairs(simulation.drops) do
+        love.graphics.setColor(drop.color[1], drop.color[2], drop.color[3])
+        love.graphics.circle("fill", drop.x, drop.y, drop.radius)
+        love.graphics.setColor(0.02, 0.06, 0.09, 0.8)
+        love.graphics.circle("line", drop.x, drop.y, drop.radius)
+        love.graphics.setColor(1, 1, 1, 0.42)
+        love.graphics.circle("fill", drop.x - 2.5, drop.y - 2.5, 2.2)
+    end
+
+    local layout = controlLayout()
+    love.graphics.setColor(0.015, 0.035, 0.055, 0.98)
+    love.graphics.rectangle(
+        "fill",
+        32,
+        layout.panelTop,
+        love.graphics.getWidth() - 64,
+        108,
+        7,
+        7
+    )
+    love.graphics.setColor(0.38, 0.56, 0.64, 0.9)
+    love.graphics.rectangle(
+        "line",
+        32,
+        layout.panelTop,
+        love.graphics.getWidth() - 64,
+        108,
+        7,
+        7
+    )
+
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Drop radius", 43, layout.size.y - 7)
+    local radiusValue = (simulation.dropRadius - 4) / 10
+    drawSlider(layout.size, radiusValue, { 0.82, 0.91, 0.95 })
+    love.graphics.print(string.format("%.1f px", simulation.dropRadius), 323, layout.size.y - 7)
+
+    for kind, liquid in ipairs(types) do
+        local rowY = layout.groupStartY + (kind - 1) * layout.groupStep
+        love.graphics.setColor(liquid.color[1], liquid.color[2], liquid.color[3])
+        love.graphics.print(liquid.name, 43, rowY - 7)
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print("Color", 85, rowY - 7)
+
+        local hueSlider = { x = layout.hue.x, y = rowY, width = layout.hue.width }
+        drawHueSlider(hueSlider, liquid.hue)
+
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print("Density", 280, rowY - 7)
+        local densitySlider = { x = layout.density.x, y = rowY, width = layout.density.width }
+        local densityValue = (liquid.density - 0.4) / 1.4
+        drawSlider(densitySlider, densityValue, liquid.color)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print(string.format("%.2fx", liquid.density), 492, rowY - 7)
+    end
+
+    love.graphics.setColor(1, 1, 1, 1)
+    local pauseText = paused and "PAUSED" or "RUNNING"
+    love.graphics.printf(
+        pauseText .. "  |  " .. status,
+        420,
+        12,
+        love.graphics.getWidth() - 454,
+        "right"
+    )
 end
 
 function love.keypressed(key)
     if key == "r" then
         reloadShader()
+    elseif key == "1" or key == "2" or key == "3" then
+        selectedKind = tonumber(key)
+    elseif key == "space" then
+        paused = not paused
+    elseif key == "backspace" then
+        simulation:reset(tankBounds())
     elseif key == "escape" then
         love.event.quit()
     end
+end
+
+function love.mousepressed(x, y, button)
+    if button == 1 then
+        local control = controlAt(x, y)
+        if control then
+            draggingControl = control
+            if control.group then
+                selectedKind = control.group
+            end
+            setControlValue(control, x)
+            return
+        end
+    end
+
+    local bounds = tankBounds()
+    if button == 1 and x >= bounds.left and x <= bounds.right and y >= bounds.top and y <= bounds.bottom then
+        simulation:addDrop(selectedKind, x, y)
+    end
+end
+
+function love.mousemoved(x)
+    if draggingControl then
+        setControlValue(draggingControl, x)
+    end
+end
+
+function love.mousereleased()
+    draggingControl = nil
 end
