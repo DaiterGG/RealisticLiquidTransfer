@@ -208,18 +208,15 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float trailingEdge = saturate(dot(normal.xy, -velocityDirection)) * velocityMagnitude;
                 float3 lightDirection = normalize(float3(-0.45, 0.65, 0.8));
                 float diffuse = 0.58 + 0.42 * saturate(dot(normal, lightDirection));
-                float3 halfDirection = normalize(lightDirection + float3(0.0, 0.0, 1.0));
-                float specular = pow(saturate(dot(normal, halfDirection)), 28.0);
                 float alpha = smoothstep(0.44, 0.56, density);
-                float edge = 1.0 - smoothstep(0.55, 0.68, density);
+                float edge = 1.0 - smoothstep(0.44, 0.78, density);
 
                 fixed4 color = fixed4(
                     sampledLiquidColor.rgb,
                     input.color.a * sampledLiquidColor.a);
                 color.rgb *= diffuse;
-                color.rgb *= lerp(1.0, 0.52, edge);
+                color.rgb *= lerp(1.0, 0.22, edge);
                 color.rgb = lerp(color.rgb, color.rgb * float3(0.62, 0.78, 0.96), trailingEdge * 0.35);
-                color.rgb += specular * 0.28 * (1.0 - edge);
                 color.a *= alpha;
 
                 #ifdef UNITY_UI_CLIP_RECT
