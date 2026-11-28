@@ -63,9 +63,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const int MaximumConcurrentSplashSounds = 16;
     private const float MinimumFastDropCollisionSpeed = 0f;
     private const float MaximumFastDropCollisionSpeed = 3000f;
-    private const float DefaultFastDropCollisionSpeed = 400f;
-    private const float DefaultFastDropCollisionChance = 0.35f;
-    private const int DefaultConcurrentSplashSounds = 3;
+    private const float DefaultFastDropCollisionSpeed = 700f;
+    private const float DefaultFastDropCollisionChance = 0.01f;
+    private const int DefaultConcurrentSplashSounds = 1;
     private const int SplashAudioClipCount = 8;
     private const string SplashAudioAddressPrefix = "Liquid.Splash";
     private const int MaximumSplashAudioSources = MaximumConcurrentSplashSounds;
