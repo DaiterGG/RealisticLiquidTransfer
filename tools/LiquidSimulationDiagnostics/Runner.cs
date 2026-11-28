@@ -1090,6 +1090,8 @@ public static class LiquidSimulationDiagnosticsRunner
                                 Mathf.Sin(elapsed * Mathf.PI * 0.3f) * 18f,
                                 Mathf.Sin(elapsed * Mathf.PI * 0.2f) * 10f);
                         var currentAngle = Mathf.Sin(elapsed * Mathf.PI * 0.15f) * 7f;
+                        source.anchoredPosition = currentPosition;
+                        source.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
                         simulation.ApplyContainerPoseChange(
                             source,
                             previousPosition,
@@ -1097,8 +1099,6 @@ public static class LiquidSimulationDiagnosticsRunner
                             currentPosition,
                             currentAngle,
                             Vector2.one);
-                        source.anchoredPosition = currentPosition;
-                        source.localRotation = Quaternion.Euler(0f, 0f, currentAngle);
                     }
 
                     simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
@@ -1523,20 +1523,15 @@ public static class LiquidSimulationDiagnosticsRunner
                     var elapsed = frame * UpdateDeltaTime;
                     var phase = elapsed * 2f * Mathf.PI / CircularBottleMotionPeriodSeconds;
                     var previousPosition = movingBottle.anchoredPosition;
-                    var previousAngle = movingBottle.localEulerAngles.z;
                     var currentPosition = orbitCenter + new Vector2(
                         Mathf.Cos(phase),
                         Mathf.Sin(phase)) * CircularBottleMotionRadius;
-                    const float currentAngle = 0f;
-                    simulation.ApplyContainerPoseChange(
-                        movingBottle,
-                        previousPosition,
-                        previousAngle,
-                        currentPosition,
-                        currentAngle,
-                        Vector2.one);
+                    var translation = currentPosition - previousPosition;
                     movingBottle.anchoredPosition = currentPosition;
-                    movingBottle.localRotation = Quaternion.identity;
+                    simulation.TranslateContainerDrops(
+                        movingBottle,
+                        translation,
+                        Vector2.one);
                     simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
                 }
 

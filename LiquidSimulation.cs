@@ -1533,6 +1533,7 @@ internal sealed class LiquidSimulation
     {
         if (simulationFrozen)
         {
+            RefreshContainerGeometry(transform);
             return;
         }
         translation = Vector2.Scale(
@@ -1542,6 +1543,7 @@ internal sealed class LiquidSimulation
                 Mathf.Clamp01(movementInfluence.y)));
         if (translation.sqrMagnitude <= Mathf.Epsilon)
         {
+            RefreshContainerGeometry(transform);
             return;
         }
 
@@ -1575,6 +1577,7 @@ internal sealed class LiquidSimulation
             }
 
             graphicsDirty = true;
+            containers[containerIndex].RefreshBoundaries();
             return;
         }
     }
@@ -1589,6 +1592,7 @@ internal sealed class LiquidSimulation
     {
         if (simulationFrozen)
         {
+            RefreshContainerGeometry(transform);
             return;
         }
         var oldRadians = previousAngle * Mathf.Deg2Rad;
@@ -1656,6 +1660,7 @@ internal sealed class LiquidSimulation
             }
 
             graphicsDirty = true;
+            containers[containerIndex].RefreshBoundaries();
             return;
         }
     }
@@ -2273,6 +2278,18 @@ internal sealed class LiquidSimulation
         foreach (var container in containers)
         {
             container.RefreshBoundaries();
+        }
+    }
+
+    private void RefreshContainerGeometry(RectTransform transform)
+    {
+        foreach (var container in containers)
+        {
+            if (container.Transform == transform)
+            {
+                container.RefreshBoundaries();
+                return;
+            }
         }
     }
 
