@@ -16,7 +16,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float WaterBottleCapacity = 500f;
     private const float MiniBarrelCapacity = 5000f;
     private const float ReferenceCapacity = 250f;
-    private const float BottleLoweringDurationSeconds = 8f;
+    private const float BottleMovementDurationSeconds = 8f;
     private const float MaximumSettledSpeed = 8f;
     private const float FunnelMaximumFrameMovement = 30f;
     private const float FunnelMaximumSourceRelativeDrift = 120f;
@@ -1711,17 +1711,28 @@ public static class LiquidSimulationDiagnosticsRunner
                 ? calculatedBarrelScale
                 : throw new InvalidOperationException("Could not calculate the minibarrel scale.");
             bottle.localScale = Vector3.one * bottleScale;
-            bottle.localRotation = Quaternion.Euler(0f, 0f, 180f);
+            var bottleRotation = bottleIsSource ? 0f : 180f;
+            bottle.localRotation = Quaternion.Euler(0f, 0f, bottleRotation);
             barrel.localScale = Vector3.one * barrelScale;
             barrel.anchoredPosition = Vector2.zero;
 
             var barrelOpening = (Vector2)root.InverseTransformPoint(
                 barrel.TransformPoint(barrelBoundary.OpeningPosition));
-            var bottleOpening = (Vector2)root.InverseTransformPoint(
-                bottle.TransformPoint(bottleBoundary.OpeningPosition));
-            var startOpening = barrelOpening
+            var bottleMinimumY = float.PositiveInfinity;
+            foreach (var point in bottleBoundary.WallCenterlinePoints)
+            {
+                bottleMinimumY = Mathf.Min(bottleMinimumY, point.y);
+            }
+
+            var bottleEntryLocalPosition = bottleIsSource
+                ? new Vector2(0f, bottleMinimumY)
+                : bottleBoundary.OpeningPosition;
+            var bottleEntryPosition = (Vector2)root.InverseTransformPoint(
+                bottle.TransformPoint(bottleEntryLocalPosition));
+            var bottleEntryOffsetY = bottleEntryPosition.y - bottle.anchoredPosition.y;
+            var startEntry = barrelOpening
                 + Vector2.up * LiquidSimulation.DefaultDropRadius * 2f;
-            bottle.anchoredPosition += startOpening - bottleOpening;
+            bottle.anchoredPosition += startEntry - bottleEntryPosition;
             var fitScale = LiquidContainerLayout.GetFitScale(screen, root, bottle, barrel);
             root.localScale = Vector3.one * fitScale;
 
@@ -1733,11 +1744,13 @@ public static class LiquidSimulationDiagnosticsRunner
 
             var barrelBottom = (Vector2)root.InverseTransformPoint(
                 barrel.TransformPoint(new Vector2(0f, barrelMinimumY)));
-            var endOpeningY = barrelBottom.y + LiquidSimulation.DefaultDropRadius * 2f;
-            if (endOpeningY >= startOpening.y)
+            var endEntryY = bottleIsSource
+                ? barrel.anchoredPosition.y + bottleEntryOffsetY
+                : barrelBottom.y + LiquidSimulation.DefaultDropRadius * 2f;
+            if (endEntryY >= startEntry.y)
             {
                 throw new InvalidOperationException(
-                    $"Bottle lowering path is invalid: start={startOpening.y:F2}, end={endOpeningY:F2}.");
+                    $"Bottle entry path is invalid: start={startEntry.y:F2}, end={endEntryY:F2}.");
             }
 
             var receiverContainer = bottleIsSource ? barrel : bottle;
@@ -1806,7 +1819,7 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedStartDistance = float.PositiveInfinity;
             foreach (var drop in initialDrops)
             {
-                var distance = Vector2.Distance(drop.Position, startOpening);
+                var distance = Vector2.Distance(drop.Position, startEntry);
                 if (distance < trackedStartDistance)
                 {
                     trackedDrop = drop;
@@ -1832,9 +1845,9 @@ public static class LiquidSimulationDiagnosticsRunner
             var trackedDropEnteredDestination = false;
             var trackedOwner = (byte)(sourceContainerIndex + 1);
             var expectedUnits = simulation.Count;
-            var loweringFrames = Mathf.CeilToInt(
-                BottleLoweringDurationSeconds * GameUpdatesPerSecond);
-            var movementDistance = startOpening.y - endOpeningY;
+            var movementFrames = Mathf.CeilToInt(
+                BottleMovementDurationSeconds * GameUpdatesPerSecond);
+            var movementDistance = startEntry.y - endEntryY;
             WriteLine(
                 $"Fixture: water bottle={bottleSpriteSize.x:F0}x{bottleSpriteSize.y:F0}, "
                 + $"initial={initialBottleAmount:F0}ml, "
@@ -1845,8 +1858,8 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"source={(bottleIsSource ? "waterbottle" : "minibarrel")}.");
             WriteLine(
                 $"Motion: updates={GameUpdatesPerSecond}Hz, duration={SimulationDurationSeconds}s, "
-                + $"loweringDuration={BottleLoweringDurationSeconds:F1}s, "
-                + $"openingY={startOpening.y:F2}->{endOpeningY:F2}, "
+                + $"movementDuration={BottleMovementDurationSeconds:F1}s, "
+                + $"entryY={startEntry.y:F2}->{endEntryY:F2}, "
                 + $"distance={movementDistance:F2}px, "
                 + $"initialBottleAmount={initialBottleAmount:F1}ml, "
                 + $"initialBarrelAmount={initialBarrelAmount:F1}ml, "
@@ -1858,20 +1871,20 @@ public static class LiquidSimulationDiagnosticsRunner
 
             for (var frame = 0; frame <= SimulationFrames; frame++)
             {
-                var loweringProgress = Mathf.Clamp01((float)frame / loweringFrames);
-                if (frame > 0 && frame <= loweringFrames)
+                var movementProgress = Mathf.Clamp01((float)frame / movementFrames);
+                if (frame > 0 && frame <= movementFrames)
                 {
                     var previousPosition = bottle.anchoredPosition;
-                    var targetOpeningY = Mathf.Lerp(startOpening.y, endOpeningY, loweringProgress);
-                    var currentOpeningY = root.InverseTransformPoint(
-                        bottle.TransformPoint(bottleBoundary.OpeningPosition)).y;
-                    bottle.anchoredPosition += Vector2.up * (targetOpeningY - currentOpeningY);
+                    var targetEntryY = Mathf.Lerp(startEntry.y, endEntryY, movementProgress);
+                    var currentEntryY = root.InverseTransformPoint(
+                        bottle.TransformPoint(bottleEntryLocalPosition)).y;
+                    bottle.anchoredPosition += Vector2.up * (targetEntryY - currentEntryY);
                     simulation.ApplyContainerPoseChange(
                         bottle,
                         previousPosition,
-                        180f,
+                        bottleRotation,
                         bottle.anchoredPosition,
-                        180f,
+                        bottleRotation,
                         Vector2.one);
                 }
 
@@ -1987,16 +2000,21 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"maximumFrameMovement={maximumFrameMovement:F3}px/frame, "
                 + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
                 + $"maximumTrackedSpeed={maximumTrackedSpeed:F3}px/s.");
-            var destinationAmount = bottleIsSource ? finalBarrelAmount : finalBottleAmount;
-            if (destinationAmount <= 0f)
+            if (bottleIsSource
+                ? finalBottleAmount != initialBottleAmount || finalBarrelAmount != 0f
+                : finalBottleAmount <= 0f)
             {
-                throw new InvalidOperationException(
-                    $"No liquid entered the destination container for '{scenarioName}'.");
+                throw new InvalidOperationException(bottleIsSource
+                    ? $"Upright bottle passage changed liquid amounts: "
+                        + $"bottle={finalBottleAmount:F1}ml, barrel={finalBarrelAmount:F1}ml."
+                    : "No liquid entered the lowered water bottle.");
             }
 
             WriteLine(
                 $"PASS: {scenarioName} diagnostic completed; "
-                + "liquid loss is logged for observation.");
+                + (bottleIsSource
+                    ? "upright passage retained the source liquid."
+                    : "liquid loss is logged for observation."));
         }
         catch (Exception exception)
         {
