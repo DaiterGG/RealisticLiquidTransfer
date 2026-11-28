@@ -99,6 +99,10 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     number downDensity = getDensity(uv - vec2(0.0, fieldTexelSize.y));
     number upDensity = getDensity(uv + vec2(0.0, fieldTexelSize.y));
     vec2 gradient = vec2(rightDensity - leftDensity, upDensity - downDensity);
+    number screenDensityDerivative = max(
+        (abs(gradient.x) + abs(gradient.y)) * 0.25,
+        0.002);
+    number edgeHalfWidth = max(screenDensityDerivative * 0.5, 0.001);
     vec3 normal = normalize(vec3(-gradient * 5.0, 0.8));
 
     vec4 accumulatedDensity = Texel(densityField, uv);
@@ -115,8 +119,9 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     number diffuse = 0.58 + 0.42 * clamp(dot(normal, lightDirection), 0.0, 1.0);
     vec3 halfDirection = normalize(lightDirection + vec3(0.0, 0.0, 1.0));
     number specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 28.0);
-    number alpha = smoothstep(0.48, 0.52, density);
-    number edge = 1.0 - smoothstep(0.55, 0.8, density);
+    number alpha = smoothstep(0.5 - edgeHalfWidth, 0.5 + edgeHalfWidth, density);
+    number pixelsFromEdge = (density - 0.5) / screenDensityDerivative;
+    number edge = 1.0 - smoothstep(0.0, 2.0, pixelsFromEdge);
 
     vec4 result = vec4(sampledLiquidColor.rgb, vertexColor.a * sampledLiquidColor.a);
     result.rgb *= diffuse;
