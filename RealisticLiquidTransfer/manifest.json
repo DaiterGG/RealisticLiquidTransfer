@@ -1,0 +1,9 @@
+{
+  "name": "Realistic_Liquid_Transfer",
+  "version_number": "0.2.0",
+  "website_url": "https://www.nexusmods.com/scavprototype/mods/1062",
+  "description": "Add a minigames for all liquid interactions",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.2305"
+  ]
+}

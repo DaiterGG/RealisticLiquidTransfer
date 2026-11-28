@@ -2,6 +2,12 @@
 bin/
 obj/
 reference/
+.vs/
+*.tmp
+*.temp
+*.bak
+*.user
+*.suo
 unity-shader-project/AssetBundles/
 unity-shader-project/Library/
 unity-shader-project/Logs/

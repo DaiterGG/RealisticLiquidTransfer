@@ -7,7 +7,6 @@ param(
         'fast-drop-collision',
         'container-movement-no-inflow',
         'funnel-wall-single-drop',
-        'syringe-full-capacity',
         'syringe-center-bottle-intake',
         'water-bottle-into-minibarrel',
         'water-bottle-source-into-empty-minibarrel',

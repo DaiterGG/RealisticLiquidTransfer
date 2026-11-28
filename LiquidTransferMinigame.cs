@@ -582,7 +582,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             secondOriginalLiquidComposition,
             LiquidSimulation.DefaultPackingTenths / 100f,
             funnelWallPoints: funnelWallPoints);
-
         liquidSimulation.SetHighSpeedCollisionThreshold(fastDropCollisionSpeedThreshold);
         liquidSimulation.HighSpeedDropCollisionDetected += OnHighSpeedDropCollision;
         if (leftFunnelSide)
@@ -1531,11 +1530,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         handle.SetParent(container.Transform, false);
         handle.anchorMin = new Vector2(0.5f, 0.5f);
         handle.anchorMax = new Vector2(0.5f, 0.5f);
-        handle.pivot = new Vector2(0.5f, 1f);
+        handle.pivot = new Vector2(0.5f, 0f);
         handle.anchoredPosition = new Vector2(0f, container.Geometry.FluidBottom.y);
-        handle.sizeDelta = new Vector2(
-            sprite.rect.width,
-            container.Geometry.FluidTop.y - container.Geometry.FluidBottom.y);
+        handle.sizeDelta = sprite.rect.size;
         image.sprite = sprite;
         image.preserveAspect = false;
         image.raycastTarget = false;
