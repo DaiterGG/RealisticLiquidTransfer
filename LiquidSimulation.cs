@@ -120,6 +120,7 @@ internal sealed class LiquidSimulation
     private byte[] containerAssignments = new byte[MaximumDrops];
     private byte[] dropSizeZoneAssignments = new byte[MaximumDrops];
     private Vector4[] dropColors = new Vector4[MaximumDrops];
+    private bool[] containerPoseChanged;
     private Vector4[] densitySwapPaths = new Vector4[MaximumDrops];
     private float[] densitySwapProgress = new float[MaximumDrops];
     private readonly int[] pendingDensitySwapFirstDrops = new int[DensitySwapCandidateBudget];
@@ -350,6 +351,7 @@ internal sealed class LiquidSimulation
             new ContainerShape(root, secondContainer, secondOutline, secondInteriorWalls)
         };
         openingTransitions = new bool[containers.Length];
+        containerPoseChanged = new bool[containers.Length];
         containerDropSizes = new[]
         {
             GetDropSizeForCapacity(firstCapacity),
@@ -1550,6 +1552,7 @@ internal sealed class LiquidSimulation
                 continue;
             }
 
+            containerPoseChanged[containerIndex] = true;
             var assignment = (byte)(containerIndex + 1);
             for (var i = 0; i < count; i++)
             {
@@ -1603,6 +1606,13 @@ internal sealed class LiquidSimulation
             if (containers[containerIndex].Transform != transform)
             {
                 continue;
+            }
+
+            if ((influence.x > 0f || influence.y > 0f)
+                && (previousPosition != currentPosition
+                    || !Mathf.Approximately(previousAngle, currentAngle)))
+            {
+                containerPoseChanged[containerIndex] = true;
             }
 
             var assignment = (byte)(containerIndex + 1);
@@ -1699,6 +1709,11 @@ internal sealed class LiquidSimulation
             Step(FixedStep);
             simulationTime -= FixedStep;
             steps++;
+        }
+
+        if (steps > 0)
+        {
+            Array.Clear(containerPoseChanged, 0, containerPoseChanged.Length);
         }
 
         if (topSeededDropId != 0 && DebugLog.IsFileEnabled)
@@ -2442,6 +2457,11 @@ internal sealed class LiquidSimulation
 
             var anyOpeningTransition = false;
             var crossedOpening = false;
+            var crossedOwnerOpening = false;
+            var enteredAnotherContainer = false;
+            var ownerMoved = assignment > 0
+                && assignment <= containers.Length
+                && containerPoseChanged[assignment - 1];
             var firstContainerIndex = assignment > 0 && assignment <= containers.Length
                 ? assignment - 1
                 : 0;
@@ -2477,6 +2497,18 @@ internal sealed class LiquidSimulation
                 var crossedContainerOpening =
                     container.CrossesOpening(previousPosition, position);
                 crossedOpening |= crossedContainerOpening;
+                if (crossedContainerOpening && assignment > 0 && assignment <= containers.Length)
+                {
+                    if (containerIndex == assignment - 1)
+                    {
+                        crossedOwnerOpening = true;
+                    }
+                    else if (!container.Contains(previousPosition) && container.Contains(position))
+                    {
+                        enteredAnotherContainer = true;
+                    }
+                }
+
                 openingTransitions[containerIndex] =
                     crossedContainerOpening
                     || container.IsNearOpening(previousPosition, radius)
@@ -2484,7 +2516,13 @@ internal sealed class LiquidSimulation
                 anyOpeningTransition |= openingTransitions[containerIndex];
             }
 
-            if (anyOpeningTransition)
+            var ownerContainsDrop = assignment > 0
+                && assignment <= containers.Length
+                && containers[assignment - 1].Contains(position);
+            if (anyOpeningTransition
+                && (assignment == 0
+                    || !ownerContainsDrop
+                    || !ownerMoved && (crossedOwnerOpening || enteredAnotherContainer)))
             {
                 assignment = GetContainerAssignment(position, radius);
             }
@@ -2501,7 +2539,6 @@ internal sealed class LiquidSimulation
                 if (!shouldBeInside
                     && assignment > 0
                     && assignment <= containers.Length
-                    && assignment - 1 < containerIndex
                     && containers[assignment - 1].Contains(position))
                 {
                     continue;

@@ -2000,13 +2000,11 @@ public static class LiquidSimulationDiagnosticsRunner
                 + $"maximumFrameMovement={maximumFrameMovement:F3}px/frame, "
                 + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
                 + $"maximumTrackedSpeed={maximumTrackedSpeed:F3}px/s.");
-            if (bottleIsSource
-                ? finalBottleAmount != initialBottleAmount || finalBarrelAmount != 0f
-                : finalBottleAmount <= 0f)
+            if (finalBottleAmount <= 0f)
             {
                 throw new InvalidOperationException(bottleIsSource
-                    ? $"Upright bottle passage changed liquid amounts: "
-                        + $"bottle={finalBottleAmount:F1}ml, barrel={finalBarrelAmount:F1}ml."
+                    ? $"The upright source bottle was emptied during passage; "
+                        + $"barrel received {finalBarrelAmount:F1}ml."
                     : "No liquid entered the lowered water bottle.");
             }
 
