@@ -77,6 +77,7 @@ internal sealed class LiquidSimulation
     private const int MaximumDensitySwapPairsPerFrame = 2;
     private const float VelocityRampDuration = 2f;
     private const float OutsideDropExtraBoundsPadding = 1f;
+    private const int HighSpeedCollisionWindowSteps = 30;
     private readonly bool headless;
     internal const int MinimumDropCollisionPasses = 2;
     internal const int MaximumDropCollisionPasses = 6;
@@ -104,6 +105,8 @@ internal sealed class LiquidSimulation
     private readonly float[] liquidTypeDensities;
     private readonly float[] initialSimulatedLiquidAmounts;
     private readonly float[] containerInflowTotals = new float[2];
+    private readonly int[] highSpeedCollisionCountsByStep =
+        new int[HighSpeedCollisionWindowSteps];
     private readonly float[] remainingProfileAmounts;
     private readonly int[] liquidProfileCursors = new int[2];
     private int liquidTypeCount;
@@ -201,6 +204,8 @@ internal sealed class LiquidSimulation
     private int activeCellCount;
     private int activeDropCount;
     private bool hasUnassignedAggregate;
+    private int highSpeedCollisionStepIndex = -1;
+    private float highSpeedCollisionSpeedThresholdSquared = float.PositiveInfinity;
     private float cellSize;
     private float dropRadius = DefaultDropRadius;
     private float initialPacking = DefaultPackingTenths / 100f;
@@ -372,6 +377,26 @@ internal sealed class LiquidSimulation
     internal int Count => totalLiquidUnits;
     internal int LiquidTypeCount => liquidTypeCount;
     internal int LiquidTypeBufferLength => liquidTypeCapacity;
+    internal System.Action<float> HighSpeedDropCollisionDetected;
+    internal int HighSpeedDropCollisionsLastSecond
+    {
+        get
+        {
+            var collisions = 0;
+            for (var index = 0; index < highSpeedCollisionCountsByStep.Length; index++)
+            {
+                collisions += highSpeedCollisionCountsByStep[index];
+            }
+
+            return collisions;
+        }
+    }
+
+    internal void SetHighSpeedCollisionThreshold(float speed)
+    {
+        speed = Mathf.Max(0f, speed);
+        highSpeedCollisionSpeedThresholdSquared = speed * speed;
+    }
 
     internal string GetLiquidId(int typeIndex)
     {
@@ -1192,6 +1217,28 @@ internal sealed class LiquidSimulation
         }
 
         return snapshots;
+    }
+
+    internal bool SetDropKinematicsForDiagnostics(
+        int id,
+        Vector2 position,
+        Vector2 velocity)
+    {
+        for (var drop = 0; drop < count; drop++)
+        {
+            if (dropIds[drop] != id)
+            {
+                continue;
+            }
+
+            positions[drop] = position;
+            previousPositions[drop] = position;
+            velocities[drop] = velocity;
+            graphicsDirty = true;
+            return true;
+        }
+
+        return false;
     }
 
     internal bool IsInsideContainer(Vector2 point)
@@ -2018,6 +2065,10 @@ internal sealed class LiquidSimulation
 
     private void Step(float deltaTime)
     {
+        highSpeedCollisionStepIndex =
+            (highSpeedCollisionStepIndex + 1) % HighSpeedCollisionWindowSteps;
+        highSpeedCollisionCountsByStep[highSpeedCollisionStepIndex] = 0;
+
         var profilingStart = SimulationProfiler.Begin();
         RefreshContainerGeometry();
         var velocityRampRatio = Mathf.Lerp(
@@ -3144,7 +3195,7 @@ internal sealed class LiquidSimulation
     private void ResolveDropVelocities()
     {
         BuildSpatialGrid();
-        ResolveSpatialGridPairs(true);
+        ResolveSpatialGridPairs(true, false);
         TryStartDensitySwaps();
     }
 
@@ -3414,7 +3465,7 @@ internal sealed class LiquidSimulation
             SimulationProfiler.End(SimulationProfileStage.SpatialGrid, profilingStart);
 
             profilingStart = SimulationProfiler.Begin();
-            ResolveDropCollisionPass();
+            ResolveDropCollisionPass(iteration == 0);
             SimulationProfiler.End(SimulationProfileStage.DropCollisions, profilingStart);
 
             if (iteration == 0 || iteration == dropCollisionPasses - 1)
@@ -3430,12 +3481,12 @@ internal sealed class LiquidSimulation
         }
     }
 
-    private void ResolveDropCollisionPass()
+    private void ResolveDropCollisionPass(bool detectHighSpeedCollisions)
     {
-        ResolveSpatialGridPairs(false);
+        ResolveSpatialGridPairs(false, detectHighSpeedCollisions);
     }
 
-    private void ResolveSpatialGridPairs(bool velocityOnly)
+    private void ResolveSpatialGridPairs(bool velocityOnly, bool detectHighSpeedCollisions)
     {
         for (var activeCellIndex = 0; activeCellIndex < activeCellCount; activeCellIndex++)
         {
@@ -3444,7 +3495,7 @@ internal sealed class LiquidSimulation
             var cellY = cell / gridColumns;
             if (cellActiveDropCounts[cell] > 0 && cellCounts[cell] > 1)
             {
-                ResolveCellPair(cell, cell, velocityOnly);
+                ResolveCellPair(cell, cell, velocityOnly, detectHighSpeedCollisions);
             }
 
             if (cellX + 1 < gridColumns
@@ -3452,7 +3503,7 @@ internal sealed class LiquidSimulation
                 && cellActiveDropCounts[cell] > 0
                 && cellActiveDropCounts[cell + 1] > 0)
             {
-                ResolveCellPair(cell, cell + 1, velocityOnly);
+                ResolveCellPair(cell, cell + 1, velocityOnly, detectHighSpeedCollisions);
             }
 
             if (cellY + 1 >= gridRows)
@@ -3469,7 +3520,8 @@ internal sealed class LiquidSimulation
                 ResolveCellPair(
                     cell,
                     downLeftCell,
-                    velocityOnly);
+                    velocityOnly,
+                    detectHighSpeedCollisions);
             }
 
             var belowCell = cell + gridColumns;
@@ -3477,7 +3529,7 @@ internal sealed class LiquidSimulation
                 && cellActiveDropCounts[cell] > 0
                 && cellActiveDropCounts[belowCell] > 0)
             {
-                ResolveCellPair(cell, belowCell, velocityOnly);
+                ResolveCellPair(cell, belowCell, velocityOnly, detectHighSpeedCollisions);
             }
 
             var downRightCell = cell + gridColumns + 1;
@@ -3489,14 +3541,15 @@ internal sealed class LiquidSimulation
                 ResolveCellPair(
                     cell,
                     downRightCell,
-                    velocityOnly);
+                    velocityOnly,
+                    detectHighSpeedCollisions);
             }
         }
 
-        ResolveLargeDropPairs(velocityOnly);
+        ResolveLargeDropPairs(velocityOnly, detectHighSpeedCollisions);
     }
 
-    private void ResolveLargeDropPairs(bool velocityOnly)
+    private void ResolveLargeDropPairs(bool velocityOnly, bool detectHighSpeedCollisions)
     {
         var maximumDropRadius = dropRadius;
         for (var i = 0; i < count; i++)
@@ -3553,7 +3606,7 @@ internal sealed class LiquidSimulation
                         }
                         else
                         {
-                            ResolveVariableSizePair(first, second);
+                            ResolveVariableSizePair(first, second, detectHighSpeedCollisions);
                         }
                     }
                 }
@@ -3564,7 +3617,8 @@ internal sealed class LiquidSimulation
     private void ResolveCellPair(
         int firstCell,
         int secondCell,
-        bool velocityOnly)
+        bool velocityOnly,
+        bool detectHighSpeedCollisions)
     {
         if (firstCell == secondCell)
         {
@@ -3580,7 +3634,8 @@ internal sealed class LiquidSimulation
                     ResolvePairForPass(
                         first,
                         secondIndex,
-                        velocityOnly);
+                        velocityOnly,
+                        detectHighSpeedCollisions);
                 }
             }
 
@@ -3599,7 +3654,8 @@ internal sealed class LiquidSimulation
                 ResolvePairForPass(
                     first,
                     secondIndex,
-                    velocityOnly);
+                    velocityOnly,
+                    detectHighSpeedCollisions);
             }
         }
     }
@@ -3607,7 +3663,8 @@ internal sealed class LiquidSimulation
     private void ResolvePairForPass(
         int first,
         int second,
-        bool velocityOnly)
+        bool velocityOnly,
+        bool detectHighSpeedCollisions)
     {
         if (fastOutsideDrops[first]
             || fastOutsideDrops[second]
@@ -3623,11 +3680,11 @@ internal sealed class LiquidSimulation
         }
         else
         {
-            ResolvePair(first, second);
+            ResolvePair(first, second, detectHighSpeedCollisions);
         }
     }
 
-    private void ResolvePair(int first, int second)
+    private void ResolvePair(int first, int second, bool detectHighSpeedCollision)
     {
         var firstPosition = positions[first];
         var secondPosition = positions[second];
@@ -3645,6 +3702,11 @@ internal sealed class LiquidSimulation
             return;
         }
 
+        if (detectHighSpeedCollision)
+        {
+            ReportHighSpeedCollision(first, second);
+        }
+
         var distance = Mathf.Sqrt(distanceSquared);
         var difference = new Vector2(differenceX, differenceY);
         var normal = distance > 0.0001f
@@ -3655,6 +3717,25 @@ internal sealed class LiquidSimulation
             * 0.5f;
         positions[first] = firstPosition - normal * correction;
         positions[second] = secondPosition + normal * correction;
+    }
+
+    private void ReportHighSpeedCollision(int first, int second)
+    {
+        if (float.IsPositiveInfinity(highSpeedCollisionSpeedThresholdSquared))
+        {
+            return;
+        }
+
+        var maximumSpeedSquared = Mathf.Max(
+            velocities[first].sqrMagnitude,
+            velocities[second].sqrMagnitude);
+        if (maximumSpeedSquared < highSpeedCollisionSpeedThresholdSquared)
+        {
+            return;
+        }
+
+        highSpeedCollisionCountsByStep[highSpeedCollisionStepIndex]++;
+        HighSpeedDropCollisionDetected?.Invoke(Mathf.Sqrt(maximumSpeedSquared));
     }
 
     private void ResolvePairVelocity(int first, int second)
@@ -3686,7 +3767,10 @@ internal sealed class LiquidSimulation
         velocities[second] += normal * impulse;
     }
 
-    private void ResolveVariableSizePair(int first, int second)
+    private void ResolveVariableSizePair(
+        int first,
+        int second,
+        bool detectHighSpeedCollision)
     {
         var difference = positions[second] - positions[first];
         var distanceSquared = difference.sqrMagnitude;
@@ -3695,6 +3779,11 @@ internal sealed class LiquidSimulation
         if (distanceSquared >= minimumDistanceSquared)
         {
             return;
+        }
+
+        if (detectHighSpeedCollision)
+        {
+            ReportHighSpeedCollision(first, second);
         }
 
         var distance = Mathf.Sqrt(distanceSquared);

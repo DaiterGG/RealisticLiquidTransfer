@@ -24,6 +24,8 @@ namespace RealisticLiquidTransfer.Editor
         private const string ComputeShaderAddress = "LiquidDensityCompute";
         private const string FillLoopAudioAssetPath = "Assets/Audio/Liquid/DrippingLoop.mp3";
         private const string FillLoopAudioAddress = "Liquid.DrippingLoop";
+        private const string SplashAudioDirectory = "Assets/Audio/Liquid";
+        private const int SplashAudioClipCount = 8;
 
         public static void Build()
         {
@@ -126,6 +128,38 @@ namespace RealisticLiquidTransfer.Editor
             EditorUtility.SetDirty(fillLoopImporter);
             audioAssetNames.Add(FillLoopAudioAssetPath);
             audioAddressNames.Add(FillLoopAudioAddress);
+
+            var splashAudioFiles = Directory.GetFiles(SplashAudioDirectory)
+                .Where(path => Path.GetExtension(path).Equals(
+                    ".mp3",
+                    StringComparison.OrdinalIgnoreCase))
+                .Where(path => Path.GetFileNameWithoutExtension(path)
+                    .StartsWith("Splash", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (splashAudioFiles.Length != SplashAudioClipCount)
+            {
+                throw new InvalidOperationException(
+                    $"Expected {SplashAudioClipCount} liquid splash sounds in {SplashAudioDirectory}; "
+                    + $"found {splashAudioFiles.Length}.");
+            }
+
+            foreach (var splashAudioFile in splashAudioFiles)
+            {
+                var assetPath = splashAudioFile.Replace('\\', '/');
+                var importer = AssetImporter.GetAtPath(assetPath) as AudioImporter;
+                if (importer == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Liquid splash audio is missing or could not be imported: {assetPath}");
+                }
+
+                importer.loadInBackground = false;
+                EditorUtility.SetDirty(importer);
+                audioAssetNames.Add(assetPath);
+                audioAddressNames.Add(
+                    $"Liquid.{Path.GetFileNameWithoutExtension(splashAudioFile)}");
+            }
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();

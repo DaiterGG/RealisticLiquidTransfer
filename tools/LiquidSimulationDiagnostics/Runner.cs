@@ -25,6 +25,10 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float MovementMaximumFrameMovement = 12f;
     private const float MovementMaximumSourceRelativeDrift = 120f;
     private const float MovementMaximumTrackedSpeed = 400f;
+    private const float FastDropMaximumFrameMovement = 25f;
+    private const float FastDropMaximumSourceRelativeDrift = 220f;
+    private const float FastDropMaximumSpeed = 1800f;
+    private const float FastDropMaximumCollisionSpeed = 1000f;
     private const float CenterBottleSyringeCapacity = 100f;
     private const float CenterBottleSyringeIntakeRate = 25.2f;
     private const float CenterBottleSyringePlungerRate = CenterBottleSyringeIntakeRate * 0.8f;
@@ -32,6 +36,7 @@ public static class LiquidSimulationDiagnosticsRunner
     private const float CenterBottleSyringeSourceDistanceMultiplier = 4f;
     private const byte MinimumVisibleAlpha = 32;
     private const string SingleDropScenario = "water-bottle-single-drop";
+    private const string FastDropCollisionScenario = "fast-drop-collision";
     private const string ContainerMovementNoInflowScenario = "container-movement-no-inflow";
     private const string FunnelWallSingleDropScenario = "funnel-wall-single-drop";
     private const string SyringeCenterBottleScenario = "syringe-center-bottle-intake";
@@ -47,6 +52,12 @@ public static class LiquidSimulationDiagnosticsRunner
         try
         {
             var scenario = GetArgument("-scenario");
+            if (scenario == FastDropCollisionScenario)
+            {
+                RunFastDropCollisionScenario();
+                return;
+            }
+
             if (scenario == WaterBottleIntoMiniBarrelScenario
                 || scenario == EmptyWaterBottleIntoFilledMiniBarrelScenario)
             {
@@ -89,6 +100,12 @@ public static class LiquidSimulationDiagnosticsRunner
                     if (string.IsNullOrWhiteSpace(logPath) || string.IsNullOrWhiteSpace(repositoryRoot))
                     {
                         throw new ArgumentException("Expected diagnostic-log and repository-root arguments.");
+                    }
+
+                    if (!Directory.Exists(repositoryRoot))
+                    {
+                        throw new DirectoryNotFoundException(
+                            $"The repository root was not found: {repositoryRoot}");
                     }
 
                     Directory.CreateDirectory(Path.GetDirectoryName(logPath));
@@ -1296,6 +1313,278 @@ public static class LiquidSimulationDiagnosticsRunner
             WriteLine(singleDropScenario
                 ? "PASS: single-drop diagnostic completed; inspect observed movement metrics above."
                 : "PASS: full water bottle retained all liquid and settled.");
+        }
+        catch (Exception exception)
+        {
+            WriteLine($"FAIL: {exception}");
+            exitCode = 1;
+        }
+        finally
+        {
+            DebugLog.Sink = null;
+            Plugin.LogSink = null;
+            if (screenObject)
+            {
+                UnityEngine.Object.DestroyImmediate(screenObject);
+            }
+
+            if (log != null)
+            {
+                log.Flush();
+                log.Dispose();
+                log = null;
+            }
+        }
+
+        EditorApplication.Exit(exitCode);
+    }
+
+    private static void RunFastDropCollisionScenario()
+    {
+        GameObject screenObject = null;
+        var exitCode = 0;
+        try
+        {
+            var logPath = GetArgument("-diagnosticLog");
+            var repositoryRoot = GetArgument("-repositoryRoot");
+            if (string.IsNullOrWhiteSpace(logPath) || string.IsNullOrWhiteSpace(repositoryRoot))
+            {
+                throw new ArgumentException("Expected diagnostic-log and repository-root arguments.");
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath));
+            log = new StreamWriter(logPath, false, new System.Text.UTF8Encoding(false))
+            {
+                AutoFlush = true
+            };
+            DebugLog.Sink = WriteLine;
+            Plugin.LogSink = WriteLine;
+            WriteLine($"Scenario '{FastDropCollisionScenario}' started at {DateTime.Now:O}.");
+
+            var screenPixelSize = new Vector2(Screen.width, Screen.height);
+            var uiScale = screenPixelSize.y / 1080f;
+            if (screenPixelSize.x <= 0f || screenPixelSize.y <= 0f || uiScale <= 0f)
+            {
+                throw new InvalidOperationException(
+                    $"Invalid Unity screen dimensions: {screenPixelSize}.");
+            }
+
+            var viewportSize = screenPixelSize / uiScale;
+            screenObject = new GameObject("FastDropCollisionDiagnosticsCanvas", typeof(RectTransform));
+            var canvasRoot = screenObject.GetComponent<RectTransform>();
+            ConfigureRect(canvasRoot, null, viewportSize, Vector2.zero);
+            canvasRoot.localScale = Vector3.one * uiScale;
+            var screenObjectRoot = new GameObject("FastDropCollisionDiagnosticsScreen", typeof(RectTransform));
+            var screen = screenObjectRoot.GetComponent<RectTransform>();
+            ConfigureRect(screen, canvasRoot, viewportSize, Vector2.zero);
+            var rootObject = new GameObject("FastDropCollisionDiagnosticsRoot", typeof(RectTransform));
+            var root = rootObject.GetComponent<RectTransform>();
+            ConfigureRect(root, screen, viewportSize, Vector2.zero);
+            var receiver = CreateContainer(root, "EmptyReceiver", new Vector2(500f, 400f));
+            receiver.anchoredPosition = new Vector2(-330f, 0f);
+            var source = CreateContainer(root, "LiquidSource", new Vector2(500f, 400f));
+            source.anchoredPosition = new Vector2(330f, 0f);
+            var outline = new[]
+            {
+                new Vector2(-250f, -200f),
+                new Vector2(250f, -200f),
+                new Vector2(250f, 200f),
+                new Vector2(-250f, 200f)
+            };
+            var water = new[]
+            {
+                new LiquidProfileEntry("water", 2f, new Color(0.16f, 0.5f, 0.95f))
+            };
+            var simulation = new LiquidSimulation(
+                root,
+                receiver,
+                outline,
+                Array.Empty<Vector2[]>(),
+                250f,
+                source,
+                outline,
+                Array.Empty<Vector2[]>(),
+                250f,
+                0f,
+                2f,
+                Array.Empty<LiquidProfileEntry>(),
+                water,
+                LiquidSimulation.DefaultPackingTenths / 100f,
+                headless: true);
+            simulation.ConfigureForMinigame(false);
+            simulation.SetHighSpeedCollisionThreshold(400f);
+            var initialDrops = simulation.CaptureDropSnapshots();
+            if (initialDrops.Length != 2)
+            {
+                throw new InvalidOperationException(
+                    $"The fixture seeded {initialDrops.Length} particles; expected exactly two.");
+            }
+
+            var collisionEvents = 0;
+            var maximumCollisionSpeed = 0f;
+            simulation.HighSpeedDropCollisionDetected += speed =>
+            {
+                collisionEvents++;
+                maximumCollisionSpeed = Mathf.Max(maximumCollisionSpeed, speed);
+                WriteLine(
+                    $"Detected high-speed collision #{collisionEvents}: speed={speed:F3}px/s.");
+            };
+            WriteLine(
+                $"Fixture: two 1ml drops in a 500x400px simple container; "
+                + $"radius={LiquidSimulation.DefaultDropRadius:F2}px; "
+                + $"high-speed threshold=400px/s; duration=20s.");
+            foreach (var drop in initialDrops)
+            {
+                WriteLine(
+                    $"Seed drop: id={drop.Id}, owner={drop.ContainerAssignment}, "
+                    + $"position=({drop.Position.x:F3},{drop.Position.y:F3}), "
+                    + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}), "
+                    + $"sourceLocal={GetSourceLocalPosition(root, source, drop.Position)}.");
+            }
+
+            var previousPositions = new Dictionary<int, Vector2>();
+            var previousDrops = new Dictionary<int, LiquidDropSnapshot>();
+            var initialSourceLocalPositions = new Dictionary<int, Vector2>();
+            var observedDrops = new HashSet<int>();
+            var removedDropIds = new List<int>();
+            var maximumFrameMovement = 0f;
+            var maximumSourceRelativeDrift = 0f;
+            var maximumDropSpeed = 0f;
+            var maximumCollisionsInOneSecond = 0;
+            var ownershipMismatchFrames = 0;
+            var liquidUnitMismatchFrames = 0;
+            const int durationSeconds = 20;
+            const int frameCount = durationSeconds * GameUpdatesPerSecond;
+
+            for (var frame = 0; frame < frameCount; frame++)
+            {
+                if (frame == GameUpdatesPerSecond)
+                {
+                    if (!simulation.SetDropKinematicsForDiagnostics(
+                            initialDrops[0].Id,
+                            source.anchoredPosition + new Vector2(-30f, 0f),
+                            new Vector2(1600f, 0f))
+                        || !simulation.SetDropKinematicsForDiagnostics(
+                            initialDrops[1].Id,
+                            source.anchoredPosition,
+                            Vector2.zero))
+                    {
+                        throw new InvalidOperationException(
+                            "A seeded drop disappeared before the fast-collision fixture was armed.");
+                    }
+
+                    previousPositions.Clear();
+                    initialSourceLocalPositions.Clear();
+                    WriteLine(
+                        $"Injected collision setup at t={frame * UpdateDeltaTime:F3}s: "
+                        + $"fast drop id={initialDrops[0].Id} at (-30,0) with velocity=(1600,0), "
+                        + $"slow drop id={initialDrops[1].Id} at (0,0).");
+                }
+
+                simulation.Tick(UpdateDeltaTime, false, Vector2.zero);
+                maximumCollisionsInOneSecond = Mathf.Max(
+                    maximumCollisionsInOneSecond,
+                    simulation.HighSpeedDropCollisionsLastSecond);
+                var drops = simulation.CaptureDropSnapshots();
+                var liveIds = new HashSet<int>();
+                var ownerUnits = 0;
+                foreach (var drop in drops)
+                {
+                    liveIds.Add(drop.Id);
+                    observedDrops.Add(drop.Id);
+                    var sourceLocal = GetSourceLocalPosition(root, source, drop.Position);
+                    if (!initialSourceLocalPositions.TryGetValue(drop.Id, out var initialSourceLocal))
+                    {
+                        initialSourceLocalPositions[drop.Id] = sourceLocal;
+                        initialSourceLocal = sourceLocal;
+                    }
+
+                    var frameMovement = previousPositions.TryGetValue(drop.Id, out var previousPosition)
+                        ? Vector2.Distance(previousPosition, drop.Position)
+                        : 0f;
+                    var sourceRelativeDrift = Vector2.Distance(initialSourceLocal, sourceLocal);
+                    maximumFrameMovement = Mathf.Max(maximumFrameMovement, frameMovement);
+                    maximumSourceRelativeDrift =
+                        Mathf.Max(maximumSourceRelativeDrift, sourceRelativeDrift);
+                    maximumDropSpeed = Mathf.Max(maximumDropSpeed, drop.Velocity.magnitude);
+                    ownerUnits += drop.Volume;
+                    if (drop.ContainerAssignment != 2
+                        || !simulation.ContainsContainer(1, drop.Position))
+                    {
+                        ownershipMismatchFrames++;
+                    }
+
+                    WriteLine(
+                        $"Frame {frame:D4} t={(frame + 1) * UpdateDeltaTime:F3}s: "
+                        + $"id={drop.Id}, membership(receiver={simulation.ContainsContainer(0, drop.Position)},"
+                        + $"source={simulation.ContainsContainer(1, drop.Position)}), "
+                        + $"owner={drop.ContainerAssignment}, "
+                        + $"position=({drop.Position.x:F3},{drop.Position.y:F3}), "
+                        + $"velocity=({drop.Velocity.x:F3},{drop.Velocity.y:F3}), "
+                        + $"sourceLocal=({sourceLocal.x:F3},{sourceLocal.y:F3}), "
+                        + $"frameMove={frameMovement:F3}, sourceDrift={sourceRelativeDrift:F3}, "
+                        + $"collisionsLastSecond={simulation.HighSpeedDropCollisionsLastSecond}, "
+                        + "removed=false.");
+                    previousPositions[drop.Id] = drop.Position;
+                    previousDrops[drop.Id] = drop;
+                }
+
+                removedDropIds.Clear();
+                foreach (var previousDrop in previousDrops)
+                {
+                    if (liveIds.Contains(previousDrop.Key))
+                    {
+                        continue;
+                    }
+
+                    WriteLine(
+                        $"Frame {frame:D4} t={(frame + 1) * UpdateDeltaTime:F3}s: "
+                        + $"id={previousDrop.Key}, membership(receiver=false,source=false), "
+                        + $"owner={previousDrop.Value.ContainerAssignment}, "
+                        + $"position=({previousDrop.Value.Position.x:F3},{previousDrop.Value.Position.y:F3}), "
+                        + $"velocity=({previousDrop.Value.Velocity.x:F3},{previousDrop.Value.Velocity.y:F3}), "
+                        + "sourceLocal=removed frameMove=0.000 sourceDrift=removed "
+                        + "removed=true.");
+                    removedDropIds.Add(previousDrop.Key);
+                }
+
+                foreach (var removedDropId in removedDropIds)
+                {
+                    previousDrops.Remove(removedDropId);
+                    previousPositions.Remove(removedDropId);
+                }
+
+                if (ownerUnits != simulation.Count)
+                {
+                    liquidUnitMismatchFrames++;
+                }
+            }
+
+            WriteLine(
+                $"Fast collision observations: detected={collisionEvents}, "
+                + $"lastSecond={simulation.HighSpeedDropCollisionsLastSecond}, "
+                + $"maximumCollisionsInOneSecond={maximumCollisionsInOneSecond}, "
+                + $"maximumCollisionSpeed={maximumCollisionSpeed:F3}px/s, "
+                + $"maximumFrameMovement={maximumFrameMovement:F3}px, "
+                + $"maximumSourceRelativeDrift={maximumSourceRelativeDrift:F3}px, "
+                + $"maximumDropSpeed={maximumDropSpeed:F3}px/s, "
+                + $"observedDropIds={observedDrops.Count}, finalParticles={simulation.CaptureDropSnapshots().Length}, "
+                + $"finalUnits={simulation.Count}, ownerMismatchFrames={ownershipMismatchFrames}, "
+                + $"unitMismatchFrames={liquidUnitMismatchFrames}.");
+            if (collisionEvents == 0
+                || maximumCollisionsInOneSecond == 0
+                || ownershipMismatchFrames > 0
+                || liquidUnitMismatchFrames > 0
+                || maximumFrameMovement > FastDropMaximumFrameMovement
+                || maximumSourceRelativeDrift > FastDropMaximumSourceRelativeDrift
+                || maximumDropSpeed > FastDropMaximumSpeed
+                || maximumCollisionSpeed > FastDropMaximumCollisionSpeed)
+            {
+                throw new InvalidOperationException(
+                    "Fast-drop collision detection, movement bounds, or container accounting failed.");
+            }
+
+            WriteLine("PASS: fast-drop collision diagnostic completed; inspect observed movement metrics above.");
         }
         catch (Exception exception)
         {

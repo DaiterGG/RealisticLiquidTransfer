@@ -53,6 +53,22 @@ internal sealed class LiquidTransferMinigame : Minigame
         "realliquidtransfer.fillaudiospeedatfull";
     private const string FillAudioLowPassCutoffAtFullPref =
         "realliquidtransfer.fillaudiolowpasscutoffatfull";
+    private const string FastDropCollisionChancePref =
+        "realliquidtransfer.fastdropcollisionchance";
+    private const string MaximumConcurrentSplashSoundsPref =
+        "realliquidtransfer.maximumconcurrentsplashsounds";
+    private const string FastDropCollisionSpeedThresholdPref =
+        "realliquidtransfer.fastdropcollisionspeedthreshold";
+    private const int MinimumConcurrentSplashSounds = 1;
+    private const int MaximumConcurrentSplashSounds = 16;
+    private const float MinimumFastDropCollisionSpeed = 0f;
+    private const float MaximumFastDropCollisionSpeed = 3000f;
+    private const float DefaultFastDropCollisionSpeed = 400f;
+    private const float DefaultFastDropCollisionChance = 0.35f;
+    private const int DefaultConcurrentSplashSounds = 3;
+    private const int SplashAudioClipCount = 8;
+    private const string SplashAudioAddressPrefix = "Liquid.Splash";
+    private const int MaximumSplashAudioSources = MaximumConcurrentSplashSounds;
     private const float RotationMovementInfluence = 1f;
     private const float TranslationHorizontalInfluence = 1f;
     private const float TranslationVerticalInfluence = 1f;
@@ -106,13 +122,11 @@ internal sealed class LiquidTransferMinigame : Minigame
     private Image rightFunnelSide;
     private Image[] funnelDebugLines;
     private Text controlsText;
+    private UnityEngine.UI.Text fastDropCollisionStatusLabel;
+    private AudioSource[] splashAudioSources;
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
     private Slider funnelGapSlider;
     private Text funnelGapLabel;
-    private UnityEngine.UI.Slider fullVolumeVelocityDebugSlider;
-    private UnityEngine.UI.Slider minimumFillAudioSpeedDebugSlider;
-    private UnityEngine.UI.Slider maximumFillAudioSpeedDebugSlider;
-    private Text fillAudioRateDebugLabel;
 #endif
     private RectTransform screenRoot;
     private RectTransform overlayRoot;
@@ -126,6 +140,7 @@ internal sealed class LiquidTransferMinigame : Minigame
     private AudioSource fillAudioSource;
     private AudioLowPassFilter fillAudioLowPassFilter;
     private AudioClip fillAudioClip;
+    private bool warnedMissingSplashAudio;
     private readonly List<FillRateSample> fillRateSamples =
         new List<FillRateSample>();
     private readonly float[] fillRateWindowAmounts = new float[2];
@@ -151,6 +166,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private float fillAudioVolumeMultiplier = 1f;
     private float fillAudioSpeedAtFull = DefaultFillAudioSpeedAtFull;
     private float fillAudioLowPassCutoffAtFull = DefaultFillAudioLowPassCutoffAtFull;
+    private float fastDropCollisionChance = DefaultFastDropCollisionChance;
+    private float fastDropCollisionSpeedThreshold = DefaultFastDropCollisionSpeed;
+    private int maximumConcurrentSplashSounds = DefaultConcurrentSplashSounds;
     private bool containerImpactContact;
     private bool funnelImpactContact;
     private RectTransform heldContainer;
@@ -341,6 +359,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         impactAudioSource.spatialBlend = 0f;
         impactAudioSource.volume = 1f;
         impactAudioSource.dopplerLevel = 0f;
+        splashAudioSources = new AudioSource[MaximumSplashAudioSources];
         var fillAudioObject = new GameObject("LiquidFillAudioSource");
         fillAudioObject.transform.SetParent(screenRoot, false);
         fillAudioSource = fillAudioObject.AddComponent<AudioSource>();
@@ -426,10 +445,26 @@ internal sealed class LiquidTransferMinigame : Minigame
                 DefaultFillAudioLowPassCutoffAtFull),
             MinimumFillAudioLowPassCutoff,
             MaximumFillAudioLowPassCutoff);
+        fastDropCollisionChance = Mathf.Clamp01(
+            PlayerPrefs.GetFloat(
+                FastDropCollisionChancePref,
+                DefaultFastDropCollisionChance));
+        maximumConcurrentSplashSounds = Mathf.Clamp(
+            PlayerPrefs.GetInt(
+                MaximumConcurrentSplashSoundsPref,
+                DefaultConcurrentSplashSounds),
+            MinimumConcurrentSplashSounds,
+            MaximumConcurrentSplashSounds);
+        fastDropCollisionSpeedThreshold = Mathf.Clamp(
+            PlayerPrefs.GetFloat(
+                FastDropCollisionSpeedThresholdPref,
+                DefaultFastDropCollisionSpeed),
+            MinimumFastDropCollisionSpeed,
+            MaximumFastDropCollisionSpeed);
         overlayRoot = CreateOverlayRoot(game.minigameScreen);
         controlsText = CreateControlsText(overlayRoot);
 #if LIQUID_TRANSFER_DEBUG_LAUNCH
-        CreateContainerImpactDebugSliders();
+        CreateDropCollisionDebugSliders();
 #endif
         if (drainOnly)
         {
@@ -548,6 +583,8 @@ internal sealed class LiquidTransferMinigame : Minigame
             LiquidSimulation.DefaultPackingTenths / 100f,
             funnelWallPoints: funnelWallPoints);
 
+        liquidSimulation.SetHighSpeedCollisionThreshold(fastDropCollisionSpeedThreshold);
+        liquidSimulation.HighSpeedDropCollisionDetected += OnHighSpeedDropCollision;
         if (leftFunnelSide)
         {
             leftFunnelSide.transform.SetAsLastSibling();
@@ -739,6 +776,9 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
 
         liquidSimulation.Tick(Time.unscaledDeltaTime, false, pointerPosition);
+#if LIQUID_TRANSFER_DEBUG_LAUNCH
+        UpdateFastDropCollisionDebugLabel();
+#endif
         liquidSimulation.GetContainerLiquidAmounts(currentContainerLiquidAmounts);
         liquidSimulation.GetContainerInflowTotals(currentContainerInflowTotals);
         UpdateFillAudio(Time.unscaledTime, currentContainerInflowTotals);
@@ -779,14 +819,6 @@ internal sealed class LiquidTransferMinigame : Minigame
             fillRateWindowAmounts[containerIndex] =
                 Mathf.Max(0f, fillRateWindowAmounts[containerIndex]);
         }
-#if LIQUID_TRANSFER_DEBUG_LAUNCH
-        if (fillAudioRateDebugLabel)
-        {
-            fillAudioRateDebugLabel.text =
-                $"Inflow (last 1s): receiver {fillRateWindowAmounts[0]:F1} | "
-                + $"source {fillRateWindowAmounts[1]:F1} mL/s";
-        }
-#endif
         if (!fillAudioSource || !fillAudioClip)
         {
             return;
@@ -815,6 +847,86 @@ internal sealed class LiquidTransferMinigame : Minigame
             fillAudioSource.Stop();
             fillAudioSource.pitch = 1f;
             fillAudioLowPassFilter.cutoffFrequency = DefaultFillAudioLowPassCutoff;
+        }
+    }
+
+    private void OnHighSpeedDropCollision(float speed)
+    {
+        if (fastDropCollisionChance <= 0f
+            || (fastDropCollisionChance < 1f
+                && UnityEngine.Random.value >= fastDropCollisionChance))
+        {
+            return;
+        }
+
+        AudioSource availableSource = null;
+        for (var index = 0; index < maximumConcurrentSplashSounds; index++)
+        {
+            var source = splashAudioSources[index];
+            if (source && source.isPlaying)
+            {
+                continue;
+            }
+
+            if (!source)
+            {
+                var sourceObject = new GameObject($"LiquidSplashAudioSource{index + 1}");
+                sourceObject.transform.SetParent(screenRoot, false);
+                source = sourceObject.AddComponent<AudioSource>();
+                source.playOnAwake = false;
+                source.loop = false;
+                source.spatialBlend = 0f;
+                source.dopplerLevel = 0f;
+                splashAudioSources[index] = source;
+            }
+
+            availableSource = source;
+            break;
+        }
+
+        if (!availableSource)
+        {
+            return;
+        }
+
+        var clipIndex = UnityEngine.Random.Range(1, SplashAudioClipCount + 1);
+        var addressName = SplashAudioAddressPrefix + clipIndex;
+        if (!LiquidShaderAssets.TryGetAudioClip(addressName, out var clip))
+        {
+            if (!warnedMissingSplashAudio)
+            {
+                warnedMissingSplashAudio = true;
+                Debug.LogWarning(
+                    $"[RealisticLiquidTransfer] Splash audio '{addressName}' is missing from the asset bundle.");
+            }
+
+            return;
+        }
+
+        var maximumAudibleSpeed = fastDropCollisionSpeedThreshold > 0f
+            ? fastDropCollisionSpeedThreshold * 2f
+            : MaximumFastDropCollisionSpeed;
+        var volume = Mathf.Clamp01(speed / maximumAudibleSpeed);
+        availableSource.clip = clip;
+        availableSource.volume = volume;
+        availableSource.Play();
+    }
+
+    private void StopExcessSplashSounds()
+    {
+        if (splashAudioSources == null)
+        {
+            return;
+        }
+
+        for (var index = maximumConcurrentSplashSounds;
+            index < splashAudioSources.Length;
+            index++)
+        {
+            if (splashAudioSources[index])
+            {
+                splashAudioSources[index].Stop();
+            }
         }
     }
 
@@ -1080,10 +1192,10 @@ internal sealed class LiquidTransferMinigame : Minigame
         }
     }
 
-    private void CreateContainerImpactDebugSliders()
+    private void CreateDropCollisionDebugSliders()
     {
         var panel = new GameObject(
-                "ContainerImpactDebugPanel",
+                "DropCollisionDebugPanel",
                 typeof(RectTransform),
                 typeof(CanvasRenderer),
                 typeof(UnityEngine.UI.Image))
@@ -1094,12 +1206,12 @@ internal sealed class LiquidTransferMinigame : Minigame
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
         panelRect.anchoredPosition = new Vector2(24f, -24f);
-        panelRect.sizeDelta = new Vector2(360f, 500f);
+        panelRect.sizeDelta = new Vector2(360f, 200f);
         panel.color = new Color(0f, 0f, 0f, 0.75f);
         panel.raycastTarget = true;
 
         var header = new GameObject(
-                "ContainerImpactDebugHeader",
+                "DropCollisionDebugHeader",
                 typeof(RectTransform),
                 typeof(CanvasRenderer),
                 typeof(UnityEngine.UI.Text))
@@ -1115,200 +1227,91 @@ internal sealed class LiquidTransferMinigame : Minigame
         header.fontSize = 14;
         header.fontStyle = FontStyle.Bold;
         header.alignment = TextAnchor.MiddleCenter;
-        header.text = "Audio tuning (debug)";
+        header.text = "Fast-drop collision sounds (debug)";
         header.color = Color.white;
         header.raycastTarget = false;
 
-        CreateContainerImpactDebugSlider(
+        CreateDropCollisionDebugSlider(
             panelRect,
-            "StrongThreshold",
+            "FastDropCollisionChance",
             0,
-            MinimumContainerImpactThreshold,
-            MaximumContainerImpactThreshold,
-            containerImpactThreshold,
-            value => $"Strong threshold: {value:F0} px/s",
-            value =>
-            {
-                containerImpactThreshold = value;
-                PlayerPrefs.SetFloat(ContainerImpactThresholdPref, value);
-                if (fullVolumeVelocityDebugSlider)
-                {
-                    var minimumFullVolumeVelocity = value + 1f;
-                    fullVolumeVelocityDebugSlider.minValue = minimumFullVolumeVelocity;
-                    if (fullVolumeVelocityDebugSlider.value < minimumFullVolumeVelocity)
-                    {
-                        fullVolumeVelocityDebugSlider.value = minimumFullVolumeVelocity;
-                    }
-                }
-            });
-        CreateContainerImpactDebugSlider(
-            panelRect,
-            "WeakVolumeMultiplier",
-            1,
-            0f,
-            2f,
-            containerImpactWeakVolumeMultiplier,
-            value => $"Weak volume scale: {value:0.00}x",
-            value =>
-            {
-                containerImpactWeakVolumeMultiplier = value;
-                PlayerPrefs.SetFloat(ContainerImpactWeakVolumeMultiplierPref, value);
-            });
-        CreateContainerImpactDebugSlider(
-            panelRect,
-            "StrongVolumeMultiplier",
-            2,
-            0f,
-            2f,
-            containerImpactStrongVolumeMultiplier,
-            value => $"Strong volume scale: {value:0.00}x",
-            value =>
-            {
-                containerImpactStrongVolumeMultiplier = value;
-                PlayerPrefs.SetFloat(ContainerImpactStrongVolumeMultiplierPref, value);
-            });
-        CreateContainerImpactDebugSlider(
-            panelRect,
-            "StrongMinimumVolume",
-            3,
             0f,
             1f,
-            containerImpactStrongMinimumVolume,
-            value => $"Strong impact floor: {value:P0}",
+            fastDropCollisionChance,
+            value => $"Sound chance: {value:P0}",
             value =>
             {
-                containerImpactStrongMinimumVolume = value;
-                PlayerPrefs.SetFloat(ContainerImpactStrongMinimumVolumePref, value);
+                fastDropCollisionChance = value;
+                PlayerPrefs.SetFloat(FastDropCollisionChancePref, value);
             });
-        fullVolumeVelocityDebugSlider = CreateContainerImpactDebugSlider(
+        CreateDropCollisionDebugSlider(
             panelRect,
-            "FullVolumeVelocity",
-            4,
-            containerImpactThreshold + 1f,
-            ContainerImpactAudioCatalog.MaximumFullVolumeVelocity,
-            containerImpactFullVolumeVelocity,
-            value => $"Full-volume speed: {value:F0} px/s",
+            "MaximumConcurrentSplashSounds",
+            1,
+            MinimumConcurrentSplashSounds,
+            MaximumConcurrentSplashSounds,
+            maximumConcurrentSplashSounds,
+            value => $"Maximum simultaneous sounds: {value:F0}",
             value =>
             {
-                containerImpactFullVolumeVelocity = value;
-                PlayerPrefs.SetFloat(ContainerImpactFullVolumeVelocityPref, value);
-            });
-        CreateContainerImpactDebugSlider(
+                maximumConcurrentSplashSounds = Mathf.RoundToInt(value);
+                PlayerPrefs.SetInt(
+                    MaximumConcurrentSplashSoundsPref,
+                    maximumConcurrentSplashSounds);
+                StopExcessSplashSounds();
+            },
+            wholeNumbers: true);
+        CreateDropCollisionDebugSlider(
             panelRect,
-            "MasterVolumeMultiplier",
-            5,
-            0f,
-            2f,
-            containerImpactMasterVolumeMultiplier,
-            value => $"Master volume scale: {value:0.00}x",
+            "FastDropCollisionSpeedThreshold",
+            2,
+            MinimumFastDropCollisionSpeed,
+            MaximumFastDropCollisionSpeed,
+            fastDropCollisionSpeedThreshold,
+            value => $"Speed threshold: {value:F0} px/s",
             value =>
             {
-                containerImpactMasterVolumeMultiplier = value;
-                PlayerPrefs.SetFloat(ContainerImpactMasterVolumeMultiplierPref, value);
-            });
-        minimumFillAudioSpeedDebugSlider = CreateContainerImpactDebugSlider(
-            panelRect,
-            "MinimumFillSpeed",
-            6,
-            MinimumFillAudioSpeed,
-            maximumFillAudioSpeed - 1f,
-            minimumFillAudioSpeed,
-            value => $"Min fill speed (0%): {value:F0} mL/s",
-            value =>
-            {
-                minimumFillAudioSpeed = value;
-                PlayerPrefs.SetFloat(MinimumFillAudioSpeedPref, value);
-                if (maximumFillAudioSpeedDebugSlider)
+                fastDropCollisionSpeedThreshold = value;
+                PlayerPrefs.SetFloat(FastDropCollisionSpeedThresholdPref, value);
+                if (liquidSimulation != null)
                 {
-                    maximumFillAudioSpeedDebugSlider.minValue = value + 1f;
-                    if (maximumFillAudioSpeedDebugSlider.value < value + 1f)
-                    {
-                        maximumFillAudioSpeedDebugSlider.value = value + 1f;
-                    }
+                    liquidSimulation.SetHighSpeedCollisionThreshold(value);
                 }
             });
-        maximumFillAudioSpeedDebugSlider = CreateContainerImpactDebugSlider(
-            panelRect,
-            "MaximumFillSpeed",
-            7,
-            minimumFillAudioSpeed + 1f,
-            MaximumFillAudioSpeed,
-            maximumFillAudioSpeed,
-            value => $"Max fill speed (100%): {value:F0} mL/s",
-            value =>
-            {
-                maximumFillAudioSpeed = value;
-                PlayerPrefs.SetFloat(MaximumFillAudioSpeedPref, value);
-                if (minimumFillAudioSpeedDebugSlider)
-                {
-                    minimumFillAudioSpeedDebugSlider.maxValue = value - 1f;
-                    if (minimumFillAudioSpeedDebugSlider.value > value - 1f)
-                    {
-                        minimumFillAudioSpeedDebugSlider.value = value - 1f;
-                    }
-                }
-            });
-        CreateContainerImpactDebugSlider(
-            panelRect,
-            "FillAudioVolumeMultiplier",
-            8,
-            0f,
-            2f,
-            fillAudioVolumeMultiplier,
-            value => $"Fill sound volume multiplier: {value:0.00}x",
-            value =>
-            {
-                fillAudioVolumeMultiplier = value;
-                PlayerPrefs.SetFloat(FillAudioVolumeMultiplierPref, value);
-            });
-        CreateContainerImpactDebugSlider(
-            panelRect,
-            "FillAudioSpeedAtFull",
-            9,
-            MinimumFillAudioSpeedAtFull,
-            MaximumFillAudioSpeedAtFull,
-            fillAudioSpeedAtFull,
-            value => $"Fill speed at 100%: {value:0.00}x",
-            value =>
-            {
-                fillAudioSpeedAtFull = value;
-                PlayerPrefs.SetFloat(FillAudioSpeedAtFullPref, value);
-            });
-        CreateContainerImpactDebugSlider(
-            panelRect,
-            "FillAudioLowPassCutoffAtFull",
-            10,
-            MinimumFillAudioLowPassCutoff,
-            MaximumFillAudioLowPassCutoff,
-            fillAudioLowPassCutoffAtFull,
-            value => $"Fill low-pass at 100%: {value:F0} Hz",
-            value =>
-            {
-                fillAudioLowPassCutoffAtFull = value;
-                PlayerPrefs.SetFloat(FillAudioLowPassCutoffAtFullPref, value);
-            });
-        var fillAudioRateLabel = new GameObject(
-                "FillAudioRateDebugLabel",
+
+        var status = new GameObject(
+                "FastDropCollisionStatus",
                 typeof(RectTransform),
                 typeof(CanvasRenderer),
                 typeof(UnityEngine.UI.Text))
             .GetComponent<UnityEngine.UI.Text>();
-        fillAudioRateDebugLabel = fillAudioRateLabel;
-        var fillAudioRateRect = fillAudioRateLabel.rectTransform;
-        fillAudioRateRect.SetParent(panelRect, false);
-        fillAudioRateRect.anchorMin = new Vector2(0f, 1f);
-        fillAudioRateRect.anchorMax = new Vector2(1f, 1f);
-        fillAudioRateRect.pivot = new Vector2(0.5f, 1f);
-        fillAudioRateRect.anchoredPosition = new Vector2(0f, -476f);
-        fillAudioRateRect.sizeDelta = new Vector2(-20f, 18f);
-        fillAudioRateLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        fillAudioRateLabel.fontSize = 12;
-        fillAudioRateLabel.alignment = TextAnchor.MiddleCenter;
-        fillAudioRateLabel.color = Color.white;
-        fillAudioRateLabel.raycastTarget = false;
+        fastDropCollisionStatusLabel = status;
+        var statusRect = status.rectTransform;
+        statusRect.SetParent(panelRect, false);
+        statusRect.anchorMin = new Vector2(0f, 1f);
+        statusRect.anchorMax = new Vector2(1f, 1f);
+        statusRect.pivot = new Vector2(0.5f, 1f);
+        statusRect.anchoredPosition = new Vector2(0f, -174f);
+        statusRect.sizeDelta = new Vector2(-20f, 18f);
+        status.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        status.fontSize = 12;
+        status.alignment = TextAnchor.MiddleCenter;
+        status.color = Color.white;
+        status.raycastTarget = false;
+        UpdateFastDropCollisionDebugLabel();
     }
 
-    private static UnityEngine.UI.Slider CreateContainerImpactDebugSlider(
+    private void UpdateFastDropCollisionDebugLabel()
+    {
+        if (fastDropCollisionStatusLabel && liquidSimulation != null)
+        {
+            fastDropCollisionStatusLabel.text =
+                $"High-speed collisions (last 1s): "
+                + $"{liquidSimulation.HighSpeedDropCollisionsLastSecond}";
+        }
+    }
+
+    private static UnityEngine.UI.Slider CreateDropCollisionDebugSlider(
         RectTransform panel,
         string objectName,
         int row,
@@ -1316,7 +1319,8 @@ internal sealed class LiquidTransferMinigame : Minigame
         float maximum,
         float initialValue,
         System.Func<float, string> formatLabel,
-        System.Action<float> onValueChanged)
+        System.Action<float> onValueChanged,
+        bool wholeNumbers = false)
     {
         var label = new GameObject(
                 $"{objectName}Label",
@@ -1401,6 +1405,7 @@ internal sealed class LiquidTransferMinigame : Minigame
         slider.handleRect = handle.rectTransform;
         slider.targetGraphic = handle;
         slider.direction = UnityEngine.UI.Slider.Direction.LeftToRight;
+        slider.wholeNumbers = wholeNumbers;
         slider.minValue = minimum;
         slider.maxValue = maximum;
         slider.value = Mathf.Clamp(initialValue, minimum, maximum);
