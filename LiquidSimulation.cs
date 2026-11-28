@@ -1085,7 +1085,7 @@ internal sealed class LiquidSimulation
     {
         Array.Clear(containerInflowTotals, 0, containerInflowTotals.Length);
         SetSurfaceShaderEnabled(true);
-        SetColorTransitionSharpness(0f);
+        SetColorTransitionSharpness(2f);
         SetSimulationFrozen(frozen);
         SetDropCollisionPasses(DefaultDropCollisionPasses);
         SetCollisionCorrectionPercent(DefaultCollisionCorrectionPercent);
