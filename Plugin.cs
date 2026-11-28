@@ -8,6 +8,7 @@ using System.Diagnostics;
 namespace RealisticLiquidTransfer;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
+[BepInDependency("CasualtiesMP", BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.liquidtransfer.mod";
@@ -30,6 +31,9 @@ public sealed class Plugin : BaseUnityPlugin
         LogSource = Logger;
 #endif
         DebugLog.Initialize(Logger);
+#if LIQUID_TRANSFER_DEBUG_LOGGING
+        TogetherCompatibility.LogSetupStatus();
+#endif
         ModSprites.Load();
         DebugLog.Write("Container sprites loaded.");
         try

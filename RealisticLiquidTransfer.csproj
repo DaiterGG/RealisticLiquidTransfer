@@ -7,6 +7,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
     <GamePath Condition="'$(GamePath)' == ''">D:\SteamLibrary\steamapps\common\Casualties Unknown</GamePath>
+    <TogetherAssemblyPath Condition="'$(TogetherAssemblyPath)' == ''">$(GamePath)\BepInEx\plugins\Together\CasualtiesMP.dll</TogetherAssemblyPath>
     <EnableDebugLogging Condition="'$(EnableDebugLogging)' == ''">false</EnableDebugLogging>
     <EnableDebugLaunch Condition="'$(EnableDebugLaunch)' == ''">false</EnableDebugLaunch>
     <EnableProfiling Condition="'$(EnableProfiling)' == ''">false</EnableProfiling>
@@ -19,6 +20,9 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(EnableProfiling)' == 'true'">
     <DefineConstants>$(DefineConstants);LIQUID_TRANSFER_PROFILING</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="Exists('$(TogetherAssemblyPath)')">
+    <DefineConstants>$(DefineConstants);RLT_TOGETHER_API</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Plugin.cs" />
@@ -41,6 +45,7 @@
     <Compile Include="MultiplayerTransferBridge.cs" />
     <Compile Include="Patches.cs" />
     <Compile Include="DebugLaunchSetup.cs" />
+    <Compile Include="TogetherCompatibility.cs" />
   </ItemGroup>
   <Target Name="GenerateContainerBoundaries" BeforeTargets="CoreCompile">
     <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\tools\SpriteBoundaryGenerator\SpriteBoundaryGenerator.csproj&quot; --configuration Release -- &quot;$(MSBuildProjectDirectory)\resources\sprites\containers&quot; &quot;$(MSBuildProjectDirectory)\Generated\ContainerBoundaries.g.cs&quot;" />
@@ -114,6 +119,10 @@
     </Reference>
     <Reference Include="Unity.TextMeshPro">
       <HintPath>$(GamePath)\CasualtiesUnknown_Data\Managed\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="CasualtiesMP" Condition="Exists('$(TogetherAssemblyPath)')">
+      <HintPath>$(TogetherAssemblyPath)</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
