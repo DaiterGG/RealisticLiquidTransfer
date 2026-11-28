@@ -11,6 +11,7 @@ param(
         'syringe-center-bottle-intake',
         'water-bottle-into-minibarrel',
         'water-bottle-source-into-empty-minibarrel',
+        'upright-water-bottle-receiver-into-filled-minibarrel',
         'empty-water-bottle-into-filled-minibarrel')]
     [string]$Scenario,
     [string]$UnityEditorPath = $env:UNITY_EDITOR

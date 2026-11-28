@@ -43,6 +43,8 @@ public static class LiquidSimulationDiagnosticsRunner
     private const string WaterBottleIntoMiniBarrelScenario = "water-bottle-into-minibarrel";
     private const string WaterBottleSourceIntoEmptyMiniBarrelScenario =
         "water-bottle-source-into-empty-minibarrel";
+    private const string UprightWaterBottleReceiverIntoFilledMiniBarrelScenario =
+        "upright-water-bottle-receiver-into-filled-minibarrel";
     private const string EmptyWaterBottleIntoFilledMiniBarrelScenario =
         "empty-water-bottle-into-filled-minibarrel";
     private static StreamWriter log;
@@ -62,6 +64,7 @@ public static class LiquidSimulationDiagnosticsRunner
 
             if (scenario == WaterBottleIntoMiniBarrelScenario
                 || scenario == WaterBottleSourceIntoEmptyMiniBarrelScenario
+                || scenario == UprightWaterBottleReceiverIntoFilledMiniBarrelScenario
                 || scenario == EmptyWaterBottleIntoFilledMiniBarrelScenario)
             {
                 RunWaterBottleIntoMiniBarrelScenario(scenario);
@@ -1686,6 +1689,8 @@ public static class LiquidSimulationDiagnosticsRunner
             var barrelSpriteSize = LoadVisibleSpriteSize(
                 Path.Combine(repositoryRoot, "resources", "sprites", "containers", "minibarreltop.png"));
             var bottleIsSource = scenarioName == WaterBottleSourceIntoEmptyMiniBarrelScenario;
+            var bottlePassesUpright = bottleIsSource
+                || scenarioName == UprightWaterBottleReceiverIntoFilledMiniBarrelScenario;
             var bottle = CreateContainer(
                 root,
                 bottleIsSource ? "FullWaterBottle" : "EmptyWaterBottle",
@@ -1711,7 +1716,7 @@ public static class LiquidSimulationDiagnosticsRunner
                 ? calculatedBarrelScale
                 : throw new InvalidOperationException("Could not calculate the minibarrel scale.");
             bottle.localScale = Vector3.one * bottleScale;
-            var bottleRotation = bottleIsSource ? 0f : 180f;
+            var bottleRotation = bottlePassesUpright ? 0f : 180f;
             bottle.localRotation = Quaternion.Euler(0f, 0f, bottleRotation);
             barrel.localScale = Vector3.one * barrelScale;
             barrel.anchoredPosition = Vector2.zero;
@@ -1724,7 +1729,7 @@ public static class LiquidSimulationDiagnosticsRunner
                 bottleMinimumY = Mathf.Min(bottleMinimumY, point.y);
             }
 
-            var bottleEntryLocalPosition = bottleIsSource
+            var bottleEntryLocalPosition = bottlePassesUpright
                 ? new Vector2(0f, bottleMinimumY)
                 : bottleBoundary.OpeningPosition;
             var bottleEntryPosition = (Vector2)root.InverseTransformPoint(
@@ -1744,7 +1749,7 @@ public static class LiquidSimulationDiagnosticsRunner
 
             var barrelBottom = (Vector2)root.InverseTransformPoint(
                 barrel.TransformPoint(new Vector2(0f, barrelMinimumY)));
-            var endEntryY = bottleIsSource
+            var endEntryY = bottlePassesUpright
                 ? barrel.anchoredPosition.y + bottleEntryOffsetY
                 : barrelBottom.y + LiquidSimulation.DefaultDropRadius * 2f;
             if (endEntryY >= startEntry.y)
@@ -2005,14 +2010,18 @@ public static class LiquidSimulationDiagnosticsRunner
                 throw new InvalidOperationException(bottleIsSource
                     ? $"The upright source bottle was emptied during passage; "
                         + $"barrel received {finalBarrelAmount:F1}ml."
-                    : "No liquid entered the lowered water bottle.");
+                    : bottlePassesUpright
+                        ? "No liquid entered the upright receiver bottle."
+                        : "No liquid entered the lowered water bottle.");
             }
 
             WriteLine(
                 $"PASS: {scenarioName} diagnostic completed; "
                 + (bottleIsSource
                     ? "upright passage retained the source liquid."
-                    : "liquid loss is logged for observation."));
+                    : bottlePassesUpright
+                        ? "upright receiver passage completed."
+                        : "liquid loss is logged for observation."));
         }
         catch (Exception exception)
         {
