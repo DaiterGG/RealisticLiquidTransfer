@@ -8,12 +8,14 @@ local lastSource
 local simulation
 local densityCanvas
 local colorCanvas
+local opacityCanvas
 local densityCanvasWidth
 local densityCanvasHeight
 local selectedKind = 1
 local reloadTimer = 0
 local reloadInterval = 0.25
 local paused = false
+local shaderEnabled = true
 local status = "Loading shader..."
 local draggingControl
 local fieldPixelsPerUnit = 0.5
@@ -28,7 +30,7 @@ local function tankBounds()
         left = 32,
         top = 84,
         right = width - 32,
-        bottom = height - 130,
+        bottom = height - 158,
     }
 end
 
@@ -41,18 +43,23 @@ local function ensureLiquidCanvases(bounds)
 
     local newDensityCanvas = love.graphics.newCanvas(width, height, { format = "rgba16f" })
     local newColorCanvas = love.graphics.newCanvas(width, height, { format = "rgba16f" })
+    local newOpacityCanvas = love.graphics.newCanvas(width, height, { format = "rgba16f" })
     newDensityCanvas:setFilter("linear", "linear")
     newColorCanvas:setFilter("linear", "linear")
+    newOpacityCanvas:setFilter("linear", "linear")
     newDensityCanvas:setWrap("clamp", "clamp")
     newColorCanvas:setWrap("clamp", "clamp")
+    newOpacityCanvas:setWrap("clamp", "clamp")
 
     if densityCanvas then
         densityCanvas:release()
         colorCanvas:release()
+        opacityCanvas:release()
     end
 
     densityCanvas = newDensityCanvas
     colorCanvas = newColorCanvas
+    opacityCanvas = newOpacityCanvas
     densityCanvasWidth = width
     densityCanvasHeight = height
 end
@@ -69,8 +76,10 @@ local function renderLiquidFields(bounds)
     love.graphics.setShader(fieldShader)
     love.graphics.setColor(1, 1, 1, 1)
 
-    for mode = 0, 1 do
-        local target = mode == 0 and densityCanvas or colorCanvas
+    for mode = 0, 2 do
+        local target = mode == 0 and densityCanvas
+            or mode == 1 and colorCanvas
+            or opacityCanvas
         love.graphics.setCanvas(target)
         love.graphics.clear(0, 0, 0, 0)
         fieldShader:send("fieldMode", mode)
@@ -108,14 +117,15 @@ end
 local function controlLayout()
     local height = love.graphics.getHeight()
     return {
-        panelTop = height - 118,
-        size = { x = 128, y = height - 99, width = 185 },
-        groupStartY = height - 78,
-        groupStep = 23,
-        hue = { labelX = 98, x = 128, width = 118 },
-        saturation = { labelX = 252, x = 278, width = 76 },
-        opacity = { labelX = 362, x = 418, width = 76 },
-        density = { labelX = 502, x = 555, width = 165 },
+        panelTop = height - 146,
+        size = { x = 150, y = height - 124, width = 240 },
+        groupStartY = height - 92,
+        groupStep = 30,
+        hue = { labelX = 110, x = 150, width = 140 },
+        saturation = { labelX = 310, x = 350, width = 100 },
+        value = { labelX = 470, x = 510, width = 100 },
+        opacity = { labelX = 630, x = 700, width = 100 },
+        density = { labelX = 815, x = 880, width = 140 },
     }
 end
 
@@ -144,6 +154,8 @@ local function setControlValue(control, x)
         simulation:setTypeHue(control.group, value)
     elseif control.kind == "saturation" then
         simulation:setTypeSaturation(control.group, value)
+    elseif control.kind == "value" then
+        simulation:setTypeValue(control.group, value)
     elseif control.kind == "opacity" then
         simulation:setTypeOpacity(control.group, 1 - value)
     elseif control.kind == "density" then
@@ -173,11 +185,11 @@ local function drawSlider(slider, value, color)
     love.graphics.circle("line", thumbX, slider.y, 5)
 end
 
-local function drawHueSlider(slider, hue, saturation)
+local function drawHueSlider(slider, hue, saturation, brightness)
     local segmentCount = 35
     local segmentWidth = slider.width / segmentCount
     for segment = 0, segmentCount - 1 do
-        local color = Simulation.colorForHue(segment / segmentCount, saturation)
+        local color = Simulation.colorForHue(segment / segmentCount, saturation, brightness)
         love.graphics.setColor(color[1], color[2], color[3], 1)
         love.graphics.rectangle(
             "fill",
@@ -218,6 +230,11 @@ local function controlAt(x, y)
             return { kind = "saturation", group = group, slider = saturationSlider }
         end
 
+        local valueSlider = { x = layout.value.x, y = rowY, width = layout.value.width }
+        if math.abs(y - rowY) <= 11 and x >= valueSlider.x - 6 and x <= valueSlider.x + valueSlider.width + 6 then
+            return { kind = "value", group = group, slider = valueSlider }
+        end
+
         local opacitySlider = { x = layout.opacity.x, y = rowY, width = layout.opacity.width }
         if math.abs(y - rowY) <= 11 and x >= opacitySlider.x - 6 and x <= opacitySlider.x + opacitySlider.width + 6 then
             return { kind = "opacity", group = group, slider = opacitySlider }
@@ -254,7 +271,7 @@ local function reloadShader()
 end
 
 function love.load()
-    love.graphics.setBackgroundColor(0.025, 0.04, 0.08)
+    love.graphics.setBackgroundColor(0, 0, 0, 1)
     love.math.setRandomSeed(os.time())
     simulation = Simulation.new(tankBounds())
     loadFieldShader()
@@ -286,7 +303,7 @@ function love.draw()
     local counts = simulation:countByType()
     local types = Simulation.types
 
-    love.graphics.setColor(0.015, 0.035, 0.055, 0.96)
+    love.graphics.setColor(0, 0, 0, 1)
     love.graphics.rectangle(
         "fill",
         bounds.left,
@@ -304,10 +321,31 @@ function love.draw()
         bounds.bottom - bounds.top
     )
 
-    renderLiquidFields(bounds)
-    if shader then
+    if shaderEnabled then
+        renderLiquidFields(bounds)
+    else
+        for _, drop in ipairs(simulation.drops) do
+            love.graphics.setColor(
+                drop.color[1],
+                drop.color[2],
+                drop.color[3],
+                drop.opacity
+            )
+            love.graphics.circle("fill", drop.x, drop.y, drop.radius)
+            love.graphics.setColor(1, 1, 1, drop.opacity)
+            love.graphics.circle("line", drop.x, drop.y, drop.radius)
+        end
+    end
+
+    if shaderEnabled and shader then
         shader:send("densityField", densityCanvas)
         shader:send("colorField", colorCanvas)
+        shader:send("opacityField", opacityCanvas)
+        shader:send("tankOrigin", { bounds.left, bounds.top })
+        shader:send(
+            "tankSize",
+            { bounds.right - bounds.left, bounds.bottom - bounds.top }
+        )
         shader:send(
             "fieldTexelSize",
             { 1 / densityCanvasWidth, 1 / densityCanvasHeight }
@@ -333,6 +371,16 @@ function love.draw()
 
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.print("LIQUID SANDBOX  |  " .. #simulation.drops .. " drops", 34, 12)
+    love.graphics.setColor(0.16, 0.18, 0.2, 1)
+    love.graphics.rectangle("fill", 270, 12, 16, 16, 2, 2)
+    love.graphics.setColor(0.78, 0.84, 0.86, 1)
+    love.graphics.rectangle("line", 270, 12, 16, 16, 2, 2)
+    if shaderEnabled then
+        love.graphics.setColor(0.5, 0.95, 0.65, 1)
+        love.graphics.line(273, 20, 277, 24, 284, 15)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Surface shader", 294, 12)
 
     for kind, liquid in ipairs(types) do
         local x = 36 + (kind - 1) * 185
@@ -365,13 +413,13 @@ function love.draw()
     )
 
     local layout = controlLayout()
-    love.graphics.setColor(0.015, 0.035, 0.055, 0.98)
+    love.graphics.setColor(0.035, 0.035, 0.035, 0.98)
     love.graphics.rectangle(
         "fill",
         32,
         layout.panelTop,
         love.graphics.getWidth() - 64,
-        108,
+        136,
         7,
         7
     )
@@ -381,7 +429,7 @@ function love.draw()
         32,
         layout.panelTop,
         love.graphics.getWidth() - 64,
-        108,
+        136,
         7,
         7
     )
@@ -390,26 +438,26 @@ function love.draw()
     love.graphics.print("Drop radius", 43, layout.size.y - 7)
     local radiusValue = (simulation.dropRadius - 4) / 38
     drawSlider(layout.size, radiusValue, { 0.82, 0.91, 0.95 })
-    love.graphics.print(string.format("%.1f px", simulation.dropRadius), 323, layout.size.y - 7)
+    love.graphics.print(string.format("%.1f px", simulation.dropRadius), 400, layout.size.y - 7)
 
     for kind, liquid in ipairs(types) do
         local rowY = layout.groupStartY + (kind - 1) * layout.groupStep
         love.graphics.setColor(liquid.color[1], liquid.color[2], liquid.color[3])
         love.graphics.print(liquid.name, 43, rowY - 7)
         love.graphics.setColor(0.34, 0.4, 0.44, 1)
-        love.graphics.circle("fill", 83, rowY, 7)
+        love.graphics.circle("fill", 96, rowY, 7)
         love.graphics.setColor(
             liquid.color[1],
             liquid.color[2],
             liquid.color[3],
             liquid.opacity
         )
-        love.graphics.circle("fill", 83, rowY, 6)
+        love.graphics.circle("fill", 96, rowY, 6)
 
         love.graphics.setColor(1, 1, 1, 0.85)
         love.graphics.print("Hue", layout.hue.labelX, rowY - 7)
         local hueSlider = { x = layout.hue.x, y = rowY, width = layout.hue.width }
-        drawHueSlider(hueSlider, liquid.hue, liquid.saturation)
+        drawHueSlider(hueSlider, liquid.hue, liquid.saturation, liquid.value)
 
         love.graphics.setColor(1, 1, 1, 0.85)
         love.graphics.print("Sat.", layout.saturation.labelX, rowY - 7)
@@ -419,6 +467,15 @@ function love.draw()
             width = layout.saturation.width,
         }
         drawSlider(saturationSlider, liquid.saturation, liquid.color)
+
+        love.graphics.setColor(1, 1, 1, 0.85)
+        love.graphics.print("Value", layout.value.labelX, rowY - 7)
+        local valueSlider = { x = layout.value.x, y = rowY, width = layout.value.width }
+        drawSlider(
+            valueSlider,
+            liquid.value,
+            Simulation.colorForHue(liquid.hue, liquid.saturation, 1)
+        )
 
         love.graphics.setColor(1, 1, 1, 0.85)
         love.graphics.print("Transp.", layout.opacity.labelX, rowY - 7)
@@ -431,7 +488,7 @@ function love.draw()
         local densityValue = (liquid.density - 0.4) / 1.4
         drawSlider(densitySlider, densityValue, liquid.color)
         love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.print(string.format("%.2fx", liquid.density), 492, rowY - 7)
+        love.graphics.print(string.format("%.2fx", liquid.density), 1025, rowY - 7)
     end
 
     love.graphics.setColor(1, 1, 1, 1)
@@ -460,6 +517,11 @@ function love.keypressed(key)
 end
 
 function love.mousepressed(x, y, button)
+    if button == 1 and x >= 264 and x <= 440 and y >= 8 and y <= 34 then
+        shaderEnabled = not shaderEnabled
+        return
+    end
+
     if button == 1 then
         local control = controlAt(x, y)
         if control then

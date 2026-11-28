@@ -1,5 +1,8 @@
 extern Image densityField;
 extern Image colorField;
+extern Image opacityField;
+extern vec2 tankOrigin;
+extern vec2 tankSize;
 extern vec2 fieldTexelSize;
 extern vec2 transitionOffset;
 extern number colorTransitionSharpness;
@@ -12,8 +15,8 @@ number getDensity(vec2 uv)
 vec4 getLiquidColor(vec2 uv)
 {
     vec4 accumulatedColor = Texel(colorField, uv);
-    number opacityWeight = max(accumulatedColor.a, 0.0001);
-    number densityWeight = max(Texel(densityField, uv).a, 0.0001);
+    number opacityWeight = max(Texel(opacityField, uv).r, 0.0001);
+    number densityWeight = max(Texel(densityField, uv).r, 0.0001);
     return vec4(
         accumulatedColor.rgb / opacityWeight,
         clamp(opacityWeight / densityWeight, 0.0, 1.0));
@@ -83,23 +86,24 @@ vec4 sharpenLiquidColorTransition(vec2 uv, vec4 centerColor)
 
 vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_coords)
 {
-    number density = getDensity(texture_coords);
-    vec4 sampledLiquidColor = getLiquidColor(texture_coords);
+    vec2 uv = clamp((screen_coords - tankOrigin) / tankSize, 0.0, 1.0);
+    number density = getDensity(uv);
+    vec4 sampledLiquidColor = getLiquidColor(uv);
     if (colorTransitionSharpness > 0.0)
     {
-        sampledLiquidColor = sharpenLiquidColorTransition(texture_coords, sampledLiquidColor);
+        sampledLiquidColor = sharpenLiquidColorTransition(uv, sampledLiquidColor);
     }
 
-    number leftDensity = getDensity(texture_coords - vec2(fieldTexelSize.x, 0.0));
-    number rightDensity = getDensity(texture_coords + vec2(fieldTexelSize.x, 0.0));
-    number downDensity = getDensity(texture_coords - vec2(0.0, fieldTexelSize.y));
-    number upDensity = getDensity(texture_coords + vec2(0.0, fieldTexelSize.y));
+    number leftDensity = getDensity(uv - vec2(fieldTexelSize.x, 0.0));
+    number rightDensity = getDensity(uv + vec2(fieldTexelSize.x, 0.0));
+    number downDensity = getDensity(uv - vec2(0.0, fieldTexelSize.y));
+    number upDensity = getDensity(uv + vec2(0.0, fieldTexelSize.y));
     vec2 gradient = vec2(rightDensity - leftDensity, upDensity - downDensity);
     vec3 normal = normalize(vec3(-gradient * 5.0, 0.8));
 
-    vec4 accumulatedDensity = Texel(densityField, texture_coords);
+    vec4 accumulatedDensity = Texel(densityField, uv);
     vec2 encodedVelocity = clamp(
-        accumulatedDensity.gb / max(accumulatedDensity.a, 0.0001),
+        accumulatedDensity.gb / max(accumulatedDensity.r, 0.0001),
         0.0,
         1.0) * 2.0 - 1.0;
     number velocityLength = length(encodedVelocity);

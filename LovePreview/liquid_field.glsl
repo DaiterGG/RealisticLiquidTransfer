@@ -48,7 +48,10 @@ vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 screen_coords)
             contribution);
     }
 
-    return vec4(
-        dropletColor.rgb * dropletColor.a * contribution,
-        dropletColor.a * contribution);
+    if (fieldMode < 1.5)
+    {
+        return vec4(dropletColor.rgb * dropletColor.a * contribution, 0.0);
+    }
+
+    return vec4(dropletColor.a * contribution, 0.0, 0.0, 0.0);
 }

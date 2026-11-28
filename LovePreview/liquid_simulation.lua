@@ -2,9 +2,9 @@ local Simulation = {}
 Simulation.__index = Simulation
 
 Simulation.types = {
-    { name = "Light", density = 0.65, hue = 0.54, saturation = 0.72, opacity = 1.0, color = { 0.28, 0.78, 1.0 } },
-    { name = "Medium", density = 1.0, hue = 0.36, saturation = 0.61, opacity = 1.0, color = { 0.35, 0.9, 0.46 } },
-    { name = "Heavy", density = 1.45, hue = 0.05, saturation = 0.8, opacity = 1.0, color = { 1.0, 0.42, 0.2 } },
+    { name = "Light", density = 0.65, hue = 0.54, saturation = 0.72, value = 1.0, opacity = 1.0, color = { 0.28, 0.78, 1.0 } },
+    { name = "Medium", density = 1.0, hue = 0.36, saturation = 0.61, value = 1.0, opacity = 1.0, color = { 0.35, 0.9, 0.46 } },
+    { name = "Heavy", density = 1.45, hue = 0.05, saturation = 0.8, value = 1.0, opacity = 1.0, color = { 1.0, 0.42, 0.2 } },
 }
 
 local DROP_COUNT = 198
@@ -39,27 +39,28 @@ function Simulation:setDropRadius(radius)
     end
 end
 
-local function hueToColor(hue, saturation)
+local function hueToColor(hue, saturation, value)
+    value = value or 1
     local sector = hue * 6
     local index = math.floor(sector)
     local fraction = sector - index
-    local p = 1 - saturation
-    local q = 1 - saturation * fraction
-    local t = 1 - saturation * (1 - fraction)
+    local p = value * (1 - saturation)
+    local q = value * (1 - saturation * fraction)
+    local t = value * (1 - saturation * (1 - fraction))
     local colors = {
-        { 1, t, p },
-        { q, 1, p },
-        { p, 1, t },
-        { p, q, 1 },
-        { t, p, 1 },
-        { 1, p, q },
+        { value, t, p },
+        { q, value, p },
+        { p, value, t },
+        { p, q, value },
+        { t, p, value },
+        { value, p, q },
     }
     return colors[index % 6 + 1]
 end
 Simulation.colorForHue = hueToColor
 
 local function updateLiquidColor(liquid)
-    local color = hueToColor(liquid.hue, liquid.saturation)
+    local color = hueToColor(liquid.hue, liquid.saturation, liquid.value)
     liquid.color[1], liquid.color[2], liquid.color[3] = color[1], color[2], color[3]
 end
 
@@ -78,6 +79,17 @@ function Simulation:setTypeSaturation(kind, saturation)
     local liquid = Simulation.types[kind]
     if not liquid then
         return false
+    end
+
+    function Simulation:setTypeValue(kind, value)
+        local liquid = Simulation.types[kind]
+        if not liquid then
+            return false
+        end
+
+        liquid.value = clamp(value, 0, 1)
+        updateLiquidColor(liquid)
+        return true
     end
 
     liquid.saturation = clamp(saturation, 0, 1)
