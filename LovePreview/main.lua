@@ -354,7 +354,7 @@ function love.draw()
             "transitionOffset",
             { 3 / densityCanvasWidth, 3 / densityCanvasHeight }
         )
-        shader:send("colorTransitionSharpness", 2)
+        shader:send("colorTransitionSharpness", 0)
 
         love.graphics.setBlendMode("alpha", "alphamultiply")
         love.graphics.setShader(shader)

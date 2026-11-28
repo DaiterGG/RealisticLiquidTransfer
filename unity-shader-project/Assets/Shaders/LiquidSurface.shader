@@ -164,7 +164,14 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float blend = saturate(
                     dot(centerPremultiplied - beforePremultiplied, colorSpan)
                     / strongestContrast);
-                float sharpness = saturate(_ColorTransitionSharpness / 3.0);
+                float configuredSharpness = saturate(_ColorTransitionSharpness / 3.0);
+                float opacityContrast = abs(colorBefore.a - colorAfter.a);
+                float sharpness = max(configuredSharpness, opacityContrast);
+                if (sharpness < 0.0001)
+                {
+                    return centerColor;
+                }
+
                 float transitionWidth = lerp(1.0, 0.08, sharpness);
                 float splineBlend = smoothstep(
                     0.5 - transitionWidth * 0.5,
@@ -187,14 +194,11 @@ Shader "RealisticLiquidTransfer/LiquidSurface"
                 float4 sampledLiquidColor = tex2D(_LiquidColorTex, input.uv);
                 float2 screenDx = ddx(input.uv);
                 float2 screenDy = ddy(input.uv);
-                if (_ColorTransitionSharpness > 0.0)
-                {
-                    sampledLiquidColor = SharpenLiquidColorTransition(
-                        input.uv,
-                        screenDx,
-                        screenDy,
-                        sampledLiquidColor);
-                }
+                sampledLiquidColor = SharpenLiquidColorTransition(
+                    input.uv,
+                    screenDx,
+                    screenDy,
+                    sampledLiquidColor);
 
                 float leftDensity = tex2D(_MainTex, input.uv - float2(_MainTex_TexelSize.x, 0.0)).r;
                 float rightDensity = tex2D(_MainTex, input.uv + float2(_MainTex_TexelSize.x, 0.0)).r;

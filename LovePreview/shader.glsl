@@ -70,7 +70,14 @@ vec4 sharpenLiquidColorTransition(vec2 uv, vec4 centerColor)
         dot(centerPremultiplied - beforePremultiplied, colorSpan) / strongestContrast,
         0.0,
         1.0);
-    number sharpness = clamp(colorTransitionSharpness / 3.0, 0.0, 1.0);
+    number configuredSharpness = clamp(colorTransitionSharpness / 3.0, 0.0, 1.0);
+    number opacityContrast = abs(colorBefore.a - colorAfter.a);
+    number sharpness = max(configuredSharpness, opacityContrast);
+    if (sharpness < 0.0001)
+    {
+        return centerColor;
+    }
+
     number transitionWidth = mix(1.0, 0.08, sharpness);
     number splineBlend = smoothstep(
         0.5 - transitionWidth * 0.5,
@@ -89,10 +96,7 @@ vec4 effect(vec4 vertexColor, Image texture, vec2 texture_coords, vec2 screen_co
     vec2 uv = clamp((screen_coords - tankOrigin) / tankSize, 0.0, 1.0);
     number density = getDensity(uv);
     vec4 sampledLiquidColor = getLiquidColor(uv);
-    if (colorTransitionSharpness > 0.0)
-    {
-        sampledLiquidColor = sharpenLiquidColorTransition(uv, sampledLiquidColor);
-    }
+    sampledLiquidColor = sharpenLiquidColorTransition(uv, sampledLiquidColor);
 
     number leftDensity = getDensity(uv - vec2(fieldTexelSize.x, 0.0));
     number rightDensity = getDensity(uv + vec2(fieldTexelSize.x, 0.0));
