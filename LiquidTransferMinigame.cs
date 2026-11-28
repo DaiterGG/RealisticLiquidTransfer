@@ -19,9 +19,9 @@ internal sealed class LiquidTransferMinigame : Minigame
     private const float MaximumFillAudioSpeed = 1000f;
     private const float DefaultMaximumFillAudioSpeed = 100f;
     private const float FillAudioWindowDuration = 1f;
-    private const float FillAudioFadeStartFillPercent = 0.7f;
-    private const float FillAudioPitchDropStartFillPercent = 0.2f;
-    private const float DefaultFillAudioSpeedAtFull = 0.7f;
+    private const float FillAudioFadeStartFillPercent = 0.95f;
+    private const float FillAudioEffectStartFillPercent = 0f;
+    private const float DefaultFillAudioSpeedAtFull = 0.5f;
     private const float MinimumFillAudioSpeedAtFull = 0.1f;
     private const float MaximumFillAudioSpeedAtFull = 1f;
     private const float DefaultFillAudioLowPassCutoff = 22000f;
@@ -837,7 +837,7 @@ internal sealed class LiquidTransferMinigame : Minigame
             ? currentContainerLiquidAmounts[loudestContainer] / capacity
             : 0f;
         return Mathf.InverseLerp(
-            FillAudioPitchDropStartFillPercent,
+            FillAudioEffectStartFillPercent,
             1f,
             fullness);
     }
